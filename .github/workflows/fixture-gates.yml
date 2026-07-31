@@ -138,12 +138,37 @@ jobs:
 
           try {
             dotnet build --verbosity quiet
-            dotnet stryker --mutate "**/Discount.cs" --reporter progress
-            if ($LASTEXITCODE -eq 0) {
-              Write-Host '::error::Mutation passed with the boundary unasserted - the gate did not catch a surviving mutant.'
+            dotnet stryker --mutate "**/Discount.cs" --reporter progress --reporter json
+
+            # Assert on SURVIVORS, not on the exit code.
+            #
+            # The threshold is a project policy; the claim being proven here is
+            # narrower and more fundamental: an unasserted boundary leaves a
+            # mutant alive. With only 5 mutants in scope, one survivor scores
+            # exactly 80.00%, and Stryker breaks only BELOW the threshold - so
+            # an exit-code check passed while a mutant was demonstrably
+            # surviving. Right gate, wrong assertion.
+            $report = Get-ChildItem -Path StrykerOutput -Recurse -Filter 'mutation-report.json' -File |
+                      Sort-Object LastWriteTime | Select-Object -Last 1
+            if (-not $report) {
+              Write-Host '::error::No Stryker JSON report produced - cannot verify survivors.'
               exit 1
             }
-            Write-Host "Mutation correctly failed (exit $LASTEXITCODE): the unasserted boundary let the mutant survive."
+
+            $json = Get-Content -LiteralPath $report.FullName -Raw | ConvertFrom-Json
+            $survived = @(
+              $json.files.PSObject.Properties |
+                ForEach-Object { $_.Value.mutants } |
+                Where-Object { $_.status -eq 'Survived' }
+            )
+
+            if ($survived.Count -eq 0) {
+              Write-Host '::error::No surviving mutant with the boundary unasserted - the gate cannot see an inadequate test.'
+              exit 1
+            }
+
+            Write-Host "Mutation correctly surfaced $($survived.Count) surviving mutant(s):"
+            $survived | ForEach-Object { Write-Host "  $($_.mutatorName): $($_.replacement)" }
           }
           finally {
             Set-Content -LiteralPath $test -Value $original -NoNewline -Encoding UTF8
