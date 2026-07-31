@@ -69,6 +69,18 @@ function Assert-Gate {
         }
     }
 
+    # "GATE NOT WIRED" also exits 1, which is exactly what -Expect Fail wants -
+    # so a fixture whose analyzer config never installed would satisfy the RED
+    # phase forever while verifying nothing. That is how a cross-platform bug
+    # (dotfiles invisible to Get-ChildItem on Linux) sat behind a green RED
+    # phase. Treat it as a failure in BOTH directions.
+    if ($output -match 'GATE NOT WIRED') {
+        Write-Host ("  FAIL  {0,-22} gate not wired - it refused to run, it did not check anything" -f $Name) -ForegroundColor Red
+        Show-GateOutput
+        $script:failures++
+        return
+    }
+
     if ($actual -eq 2) {
         Write-Host ("  FAIL  {0,-22} exit 2 (SKIPPED) - verified nothing" -f $Name) -ForegroundColor Red
         Show-GateOutput

@@ -79,9 +79,20 @@ function Copy-Tree {
     }
     if ($PSCmdlet.ShouldProcess($Dest, "sync $Label")) {
         New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+        # -Force on the source glob: on Linux a `*` wildcard skips dot-prefixed
+        # files, which PowerShell classes as hidden there. Without it a dotfile
+        # inside any synced tree would be silently dropped on non-Windows.
         Copy-Item (Join-Path $Source '*') $Dest -Recurse -Force
+        Get-ChildItem $Source -Force -File -Recurse |
+            Where-Object { $_.Name.StartsWith('.') } |
+            ForEach-Object {
+                $rel = $_.FullName.Substring($Source.Length).TrimStart('\', '/')
+                $target = Join-Path $Dest $rel
+                New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
+                Copy-Item $_.FullName $target -Force
+            }
     }
-    $count = @(Get-ChildItem $Source -Recurse -File).Count
+    $count = @(Get-ChildItem $Source -Recurse -File -Force).Count
     Add-Result $Label 'SYNCED' "$count files"
 }
 

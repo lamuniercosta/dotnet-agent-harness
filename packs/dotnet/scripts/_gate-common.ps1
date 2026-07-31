@@ -287,7 +287,13 @@ function Get-EditorConfigFiles {
     param([string]$RepoRoot)
 
     return @(
-        Get-ChildItem -Path $RepoRoot -Include '.editorconfig' -File -Depth 3 -Recurse -ErrorAction SilentlyContinue |
+        # -Force is required, not cosmetic. On Linux and macOS PowerShell treats
+        # a dot-prefixed file as hidden, and Get-ChildItem omits hidden files
+        # unless -Force is passed - so .editorconfig was invisible on every
+        # non-Windows machine. The gates then reported GATE NOT WIRED and
+        # refused to run, which is the correct failure for a missing config but
+        # the wrong answer for a config that is right there.
+        Get-ChildItem -Path $RepoRoot -Include '.editorconfig' -File -Force -Depth 3 -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -notmatch '[\\/](bin|obj|node_modules)[\\/]' }
     )
 }
