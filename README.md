@@ -21,7 +21,7 @@ scripts actually catch defects.
 | **Skills** | 25 | `SKILL.md` files — process, pipeline stages, and .NET reference |
 | **Agents** | 5 | Subagents that keep long tool output out of the main context |
 | **Rules** | 10 + 8 | Authored always-on rules, plus vendored glob-scoped .NET guidance |
-| **Hooks** | 3 | Destructive-command guard, format-on-edit, gate reminder |
+| **Hooks** | 4 | Destructive-command guard, secret scan, format-on-edit, gate reminder |
 
 **Only 5 files differ between the two platforms** — the adapters. Everything else is one
 shared copy, because Cursor reads `.claude/skills/` and `.claude/agents/` natively.
@@ -188,7 +188,7 @@ skills/              25 SKILL.md — shared verbatim by both platforms
 .claude/agents/       5 agents — read natively by Cursor and Claude Code alike
 rules/pipeline/      10 authored always-on rules
 rules/vendor/         8 third-party .NET rules, isolated and attributed (see NOTICE)
-hooks/                3 hook scripts + a self-test
+hooks/                4 hook scripts + 2 self-tests
 adapters/             the only per-platform files: hook wiring, MCP, CLAUDE.md
 packs/dotnet/         gate scripts + the templates they install
 speckit/              extensions.yml — the entire coupling to Spec Kit
@@ -218,10 +218,11 @@ pwsh ./scripts/apply-fix.ps1      && pwsh ./scripts/Assert-Gates.ps1 -Expect Pas
 
 This tests that the gates **catch** things, not merely that they run.
 
-Three self-tests guard the pieces that could fail silently:
+Four self-tests guard the pieces that could fail silently:
 
 ```bash
 pwsh ./hooks/Test-Guard.ps1                          # 23 checks
+pwsh ./hooks/Test-SecretScan.ps1                     # 20 checks
 pwsh ./packs/dotnet/scripts/Test-HarnessConfig.ps1   # 14 checks
 pwsh ./packs/dotnet/scripts/Test-ThresholdDocs.ps1   # docs vs harness.yml
 ```
@@ -244,6 +245,9 @@ consumers never enable.
 
 ## What is deliberately absent
 
+- **Secret scanning is local + CI, no vendor.** `secret-scan.ps1` warns before content
+  reaches the model; gitleaks catches anything that reaches history. Replaces three
+  hooks lost when SonarQube was dropped.
 - **No hosted code-review service.** No Bugbot, no PR bot. The pre-PR review is
   `/ship-review`, running this harness's own agents locally.
 - **No issue-tracker integration** beyond the `gh` CLI.

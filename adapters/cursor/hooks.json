@@ -10,6 +10,24 @@
   ],
   "version": 1,
   "hooks": {
+    "beforeSubmitPrompt": [
+      {
+        "$comment": "Warns when a prompt carries a credential shape. A secret that reaches a model provider has left the machine; no later commit hook can recall it.",
+        "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"scripts/hooks/secret-scan.ps1\"",
+        "matcher": "UserPromptSubmit",
+        "timeout": 15,
+        "failClosed": false
+      }
+    ],
+    "beforeReadFile": [
+      {
+        "$comment": "Same scan on files about to be read into context. Skips binaries and anything over 512KB.",
+        "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"scripts/hooks/secret-scan.ps1\"",
+        "matcher": "Read|TabRead",
+        "timeout": 15,
+        "failClosed": false
+      }
+    ],
     "preToolUse": [
       {
         "$comment": "Blocks destructive, hard-to-undo actions. The only hook here that prevents anything.",

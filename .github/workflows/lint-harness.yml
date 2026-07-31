@@ -125,6 +125,12 @@ jobs:
         shell: pwsh
         run: ./hooks/Test-Guard.ps1
 
+      # Both directions. A scanner that matches nothing looks exactly like a
+      # clean codebase, and one that matches everything gets switched off.
+      - name: Secret scanner fires, and stays quiet on look-alikes
+        shell: pwsh
+        run: ./hooks/Test-SecretScan.ps1
+
       - name: harness.yml parser rejects malformed config
         shell: pwsh
         run: ./packs/dotnet/scripts/Test-HarnessConfig.ps1
@@ -148,3 +154,27 @@ jobs:
             exit 1
           }
           Write-Host '-WhatIf wrote nothing, as promised.'
+
+  secrets:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # The commit-time half of the story. secret-scan.ps1 warns before content
+    # reaches the model; this catches anything that made it into history, which
+    # is a different failure and needs a different check.
+    #
+    # The fixture deliberately contains violations but NO credentials, and the
+    # scanner's own test file contains credential-SHAPED strings that are not
+    # real - both are allowlisted in .gitleaks.toml with that reasoning.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan history for committed secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: false
+          GITLEAKS_ENABLE_SUMMARY: true

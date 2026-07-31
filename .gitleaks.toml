@@ -1,0 +1,33 @@
+# gitleaks configuration for dotnet-agent-harness.
+#
+# Two paths in this repo contain credential-SHAPED strings on purpose, and both
+# would otherwise be reported forever:
+#
+#   hooks/Test-SecretScan.ps1  - the secret scanner's own test suite. It must
+#                                contain realistic credential shapes, or it
+#                                would assert nothing. Every value is a public
+#                                documentation example (AKIAIOSFODNN7EXAMPLE)
+#                                or invented.
+#   fixtures/BadCode/          - the gate fixture. It contains deliberate code
+#                                violations but no credentials; allowlisted so a
+#                                future fixture addition cannot fail this job
+#                                for a planted, non-secret string.
+#
+# Allowlisting the scanner's tests is not a loophole: an exception that lets the
+# test suite keep proving the scanner works is worth more than a green job with
+# no scanner behind it.
+
+[extend]
+useDefault = true
+
+[[allowlist]]
+description = "Secret-scanner self-test - credential shapes are the fixture"
+paths = ['''hooks/Test-SecretScan\.ps1''']
+
+[[allowlist]]
+description = "Gate fixture - deliberate code violations, no credentials"
+paths = ['''fixtures/BadCode/.*''']
+
+[[allowlist]]
+description = "The scanner's own detection patterns, not secrets"
+paths = ['''hooks/secret-scan\.ps1''']
