@@ -376,3 +376,12 @@ Write-Output 'Next:'
 Write-Output '  dotnet tool restore                       # provisions jb + stryker'
 Write-Output '  specify init --here --integration claude   # or --integration cursor-agent'
 Write-Output '  /task <issue>                             # start the pipeline'
+
+# Explicit, and load-bearing.
+#
+# Config resolution probes with `git rev-parse --verify --quiet`, which exits 1
+# by design when a ref does not exist. PowerShell keeps that in $LASTEXITCODE,
+# and a script with no explicit exit inherits it - so a completely successful
+# install reported failure to its caller. It printed every success line first,
+# which made it look like a CI flake rather than an exit-code bug.
+exit 0
