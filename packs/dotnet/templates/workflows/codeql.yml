@@ -1,0 +1,61 @@
+name: CodeQL
+
+# The post-PR half of this harness's security story. The pre-PR half runs
+# locally with no account: AnalysisMode=All (CA2100 / CA3xxx / CA5xxx) plus
+# ./scripts/run-vulnerable-packages.ps1. CodeQL adds the cross-procedural
+# dataflow analysis those cannot do.
+#
+# Free for public repositories. On a private repo this needs GitHub Advanced
+# Security - if you do not have it, delete this workflow. The local gates are
+# unaffected and remain the blocking ones.
+#
+# Copy to .github/workflows/ in your repo. install.ps1 deliberately does not
+# place workflows for you: CI is the repo's own business, and silently adding a
+# job that consumes Actions minutes would be a surprise.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    # Advisories land continuously, so sweep code that has not changed recently.
+    - cron: '0 6 * * 1'
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze C#
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: csharp
+          queries: security-extended
+
+      # CodeQL needs a real compilation to build its database. --no-incremental
+      # stops a cached build from producing an empty database, which would
+      # report zero findings - a pass that was never earned.
+      - name: Build
+        run: dotnet build --no-incremental --verbosity quiet
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: '/language:csharp'

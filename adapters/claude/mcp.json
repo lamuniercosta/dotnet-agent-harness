@@ -1,0 +1,21 @@
+{
+  "$comment": [
+    "Documentation MCP servers. Neither needs a paid account:",
+    "microsoft-learn is open, context7 works anonymously (CONTEXT7_API_KEY only",
+    "raises rate limits). Routing between them is the `documentation-sources` rule:",
+    "Microsoft Learn owns every Microsoft/Azure topic, context7 covers the rest.",
+    "",
+    "Cursor reads the same shape from .cursor/mcp.json - see adapters/cursor/mcp.json."
+  ],
+  "mcpServers": {
+    "microsoft-learn": {
+      "url": "https://learn.microsoft.com/api/mcp"
+    },
+    "context7": {
+      "url": "https://mcp.context7.com/mcp",
+      "headers": {
+        "CONTEXT7_API_KEY": "${env:CONTEXT7_API_KEY}"
+      }
+    }
+  }
+}

@@ -1,0 +1,78 @@
+<Project>
+
+  <!--
+    Analyzer wiring for the static-analysis gates in scripts/.
+    Without this file the gates are vacuous: CA1502 never fires, so
+    run-cyclomatic-complexity.ps1 would report a pass it did not earn.
+    (The gate scripts refuse to run rather than let that happen.)
+
+    Place at the repository root. If the repo already has a
+    Directory.Build.props, merge these items into it instead.
+  -->
+
+  <PropertyGroup>
+    <!--
+      Roslyn analyzers on, at the latest rule set.
+
+      AnalysisMode=All is load-bearing, not a preference. Under the Default mode
+      the security rule families (CA2100 SQL injection, CA3xxx XSS/XXE/insecure
+      deserialization, CA5xxx crypto and transport) are OFF. Those families are
+      the local half of what a hosted static-analysis service would give you;
+      without them this harness would have no pre-PR security signal at all.
+
+      Rendered from harness.yml (gates.analyzers.mode) by install.ps1.
+    -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>All</AnalysisMode>
+
+    <!-- Analyzer findings surface as warnings; severities are tuned in .editorconfig. -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!--
+      Deliberately NOT set here: <Nullable> and <ImplicitUsings>. They change
+      compilation semantics rather than analysis, and turning them on across an
+      existing codebase causes a warning flood or ambiguous-reference errors.
+      This file exists only to make the gates work. Set those per-project.
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Required for CA1502 to read its threshold. Without this the rule falls
+      back to its built-in default of 25 rather than the configured value.
+    -->
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)CodeMetricsConfig.txt" />
+
+    <!-- Drives BannedApiAnalyzers (RS0030). Bans DateTime.Now and friends. -->
+    <AdditionalFiles Include="$(MSBuildThisFileDirectory)BannedSymbols.txt" Condition="Exists('$(MSBuildThisFileDirectory)BannedSymbols.txt')" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="9.0.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+
+    <!--
+      Async/threading correctness: sync-over-async, missing ConfigureAwait,
+      async void. These are the defects that survive review and surface as
+      deadlocks under load, so they are worth a dedicated analyzer.
+    -->
+    <PackageReference Include="Microsoft.VisualStudio.Threading.Analyzers" Version="17.11.20">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+
+    <!--
+      Enforces BannedSymbols.txt. This is how "no DateTime.Now in production
+      code" becomes a build failure rather than a code-review opinion.
+    -->
+    <PackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="3.3.4">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

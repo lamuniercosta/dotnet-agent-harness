@@ -1,0 +1,86 @@
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+indent_style = space
+indent_size = 4
+trim_trailing_whitespace = true
+
+[*.{json,yml,yaml,props,csproj,sln}]
+indent_size = 2
+
+[*.cs]
+# Naming and style — keep close to dotnet defaults, enforce the ones that matter
+dotnet_style_require_accessibility_modifiers = always:warning
+csharp_style_namespace_declarations = file_scoped:warning
+csharp_style_var_when_type_is_apparent = true:suggestion
+csharp_prefer_braces = true:warning
+dotnet_diagnostic.CA1502.severity = warning   # cyclomatic complexity
+dotnet_diagnostic.CA1506.severity = warning   # class coupling
+dotnet_diagnostic.CA2007.severity = none      # ConfigureAwait not needed in app code
+
+
+# ── Cyclomatic complexity gate (run-cyclomatic-complexity.ps1) ───────────────
+# CA1502 is disabled by default; this line is what turns the gate on.
+# The threshold itself lives in CodeMetricsConfig.txt.
+dotnet_diagnostic.CA1502.severity = warning
+
+# ── Roslyn analyzer gate (run-roslyn-analyzers.ps1) ──────────────────────────
+# Unused parameters, private members, and redundant code — cheap to fix,
+# and each one is a signal that something was left half-done.
+dotnet_diagnostic.CA1801.severity = warning   # unused parameter
+dotnet_diagnostic.CA1811.severity = warning   # uncalled private code
+dotnet_diagnostic.CA1822.severity = warning   # member can be static
+dotnet_diagnostic.CA1823.severity = warning   # unused private field
+dotnet_diagnostic.IDE0051.severity = warning  # unused private member
+dotnet_diagnostic.IDE0052.severity = warning  # unread private member
+dotnet_diagnostic.IDE0017.severity = warning  # object initialization can be simplified
+dotnet_diagnostic.IDE0305.severity = warning  # collection initialization can be simplified
+
+# ── StyleCop categories, off ─────────────────────────────────────────────────
+# Formatting is owned by `dotnet format`, not by review or these gates.
+dotnet_diagnostic.SA0001.severity = none
+dotnet_diagnostic.SA1600.severity = none
+dotnet_diagnostic.SA1633.severity = none
+
+# ── JetBrains InspectCode gate (run-jetbrains-inspectcode.ps1) ───────────────
+# The gate fails on WARNING and above. ReSharper ships ~3176 inspections; most
+# useful correctness ones are already `warning` by default and need nothing
+# here. The rules below default to `note` (suggestion) or `none`, so the gate
+# silently skips them - these are the ones worth promoting to catch earlier.
+#
+# Syntax: resharper_<id_in_lower_snake_case>_highlighting = error|warning|suggestion|hint|none
+# Verify any addition actually took effect - a misspelled id fails silently.
+
+# --- VERIFIED: confirmed promoted from note/none to warning by a live probe ---
+resharper_async_void_method_highlighting = warning
+resharper_async_method_without_await_highlighting = warning
+resharper_async_void_method_without_await_highlighting = warning
+resharper_method_supports_cancellation_highlighting = warning
+resharper_nullable_warning_suppression_is_used_highlighting = warning
+resharper_switch_expression_handles_some_known_enum_values_with_exception_in_default_highlighting = warning
+
+# --- UNVERIFIED: id-to-key conversion is mechanical but was not confirmed,
+# because no probe managed to trigger these rules. A wrong key is IGNORED
+# SILENTLY - it does not error - so treat these as aspirational until seen
+# firing. To verify one: write code that trips it, run the gate with
+# -MinSeverity SUGGESTION, and check the rule reports as [warning] not [note].
+resharper_async_void_throw_exception_highlighting = error
+resharper_method_has_async_overload_with_cancellation_highlighting = warning
+resharper_method_has_async_overload_highlighting = warning
+resharper_not_disposed_resource_is_returned_highlighting = warning
+resharper_use_await_using_highlighting = warning
+resharper_specify_string_comparison_highlighting = warning
+resharper_compare_non_constrained_generic_with_null_highlighting = warning
+resharper_check_for_reference_equality_instead_1_highlighting = warning
+
+# Library code only - '.ConfigureAwait(false)' is noise in app/host projects.
+# Enable per-project rather than globally.
+# resharper_use_configure_await_false_highlighting = warning
+
+# Sealed-class audit - correct but noisy on an existing codebase. Enable when
+# you are ready to act on it.
+# resharper_class_can_be_sealed_global_highlighting = warning
+# resharper_class_can_be_sealed_local_highlighting = warning

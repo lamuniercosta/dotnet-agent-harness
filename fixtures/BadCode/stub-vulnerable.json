@@ -1,0 +1,53 @@
+{
+  "$comment": [
+    "Canned `dotnet list package --vulnerable --include-transitive --format json`",
+    "output, fed to run-vulnerable-packages.ps1 by the fixture CI job.",
+    "",
+    "This is a stub ON PURPOSE. Proving the gate against a real CVE would mean",
+    "committing a known-vulnerable package to a public repository - permanent",
+    "Dependabot alerts and a populated Security tab on a repo meant to",
+    "demonstrate good practice.",
+    "",
+    "What this covers: the parsing, severity classification, and exit code -",
+    "the logic that could plausibly regress.",
+    "What it does NOT cover: the dotnet CLI invocation itself. See the fixture",
+    "README; the limitation is stated rather than papered over."
+  ],
+  "version": 1,
+  "parameters": "--vulnerable --include-transitive",
+  "projects": [
+    {
+      "path": "/repo/src/Sample/Sample.csproj",
+      "frameworks": [
+        {
+          "framework": "net8.0",
+          "topLevelPackages": [
+            {
+              "id": "Fake.Vulnerable.Package",
+              "requestedVersion": "1.0.0",
+              "resolvedVersion": "1.0.0",
+              "vulnerabilities": [
+                {
+                  "severity": "High",
+                  "advisoryurl": "https://github.com/advisories/GHSA-0000-0000-0000"
+                }
+              ]
+            }
+          ],
+          "transitivePackages": [
+            {
+              "id": "Fake.Transitive.Dependency",
+              "resolvedVersion": "2.1.0",
+              "vulnerabilities": [
+                {
+                  "severity": "Critical",
+                  "advisoryurl": "https://github.com/advisories/GHSA-1111-1111-1111"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

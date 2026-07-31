@@ -1,0 +1,39 @@
+{
+  "$comment": [
+    "Cursor hook wiring for dotnet-agent-harness.",
+    "The scripts themselves are shared with Claude Code and live in scripts/hooks/;",
+    "only this wiring is Cursor-specific. See adapters/claude/settings.json for the",
+    "same three hooks in Claude Code's schema.",
+    "",
+    "failClosed is false everywhere: a hook that wedges the session when pwsh is",
+    "missing would get switched off, and a guard nobody runs guards nothing."
+  ],
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "$comment": "Blocks destructive, hard-to-undo actions. The only hook here that prevents anything.",
+        "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"scripts/hooks/guard.ps1\"",
+        "matcher": "Bash|Shell|run_terminal_cmd|Edit|Write|MultiEdit|create_file|edit_file|search_replace",
+        "timeout": 15,
+        "failClosed": false
+      }
+    ],
+    "postToolUse": [
+      {
+        "$comment": "Keeps the tree formatted so verify's format phase does not fail on stale whitespace.",
+        "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"scripts/hooks/format-on-edit.ps1\"",
+        "matcher": "Edit|Write|MultiEdit|create_file|edit_file|search_replace",
+        "timeout": 60,
+        "failClosed": false
+      },
+      {
+        "$comment": "Reminds that the analyzer gates are pending. Throttled to once per 10 minutes per repo.",
+        "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"scripts/hooks/gate-nudge.ps1\"",
+        "matcher": "Edit|Write|MultiEdit|create_file|edit_file|search_replace",
+        "timeout": 15,
+        "failClosed": false
+      }
+    ]
+  }
+}

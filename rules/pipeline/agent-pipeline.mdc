@@ -1,0 +1,70 @@
+---
+description: Agent development pipeline stage order and handoff rules
+alwaysApply: true
+---
+
+# Agent Development Pipeline
+
+## Stage Order
+
+0. **Task intake** — `/task <issue>` (the entry step): read the GitHub issue with `gh` and create the `{feature|bug|hotfix}/{issue}-{slug}` branch off the remote's default branch
+1. **Alignment (MANDATORY)** — `/grill-with-docs`: question the development, settle vocabulary in `CONTEXT.md` + ADRs, and write `specs/<feature>/brief.md`. Runs before any spec or code — never skipped
+2. **Formal spec** — `/speckit-specify`, `/speckit-clarify`, `/speckit-checklist`, `/speckit-plan`, `/speckit-tasks`, `/speckit-analyze`
+3. **Human gate 1** — approve spec, plan, tasks
+4. **Gherkin** *(OPTIONAL — opt-in)* — `/gherkin` → `acceptance/*.feature`. Skipped unless the repo has adopted acceptance tests (see the policy below)
+5. **Human gate 2** *(only if the Gherkin stage ran)* — spot-check Gherkin before implementation
+6. **Implement** — `/implement` (TDD optional; unit + integration tests must pass)
+7. **Refactor** — `/refactor` (complexity ≤ `gates.complexity.refactor`, property tests)
+8. **Architect** — `/architect` (Stryker mutation ≥ `gates.mutation.threshold`; Gherkin mutation only if acceptance tests exist)
+9. **Human gate 3** — spot-check code before PR
+10. **Ship** — `/ship-review`, then `./scripts/rebase-task-branch.ps1 -Push`, then open the PR
+
+Thresholds come from `harness.yml`. Never hardcode one in a prompt or a script.
+
+## Acceptance-tests policy
+
+Acceptance tests (Gherkin + Reqnroll) are **opt-in**. Skip Stage 4, Human gate 2, and the Gherkin-mutation check unless the user asks for them or `specs/<feature>/acceptance/*.feature` already exists. **Unit and integration tests remain required** — the opt-in applies only to the acceptance layer.
+
+## Handoff Rules
+
+- Every task starts with `/task`; `/grill-with-docs` is **mandatory** immediately after and before `/speckit-specify` — never skip straight to spec or code
+- Do not skip human gates unless the user explicitly approves (gate 2 applies only when acceptance scenarios exist)
+- Do not block progress on missing `.feature` files; unit + integration coverage is the required bar
+- When present, Gherkin lives in `specs/<feature>/acceptance/` — the source of truth for acceptance scenarios
+- After `/implement`, run the refactor gates before marking a feature complete
+- A surviving mutant is a missing test. Route it back to `/implement` — **never lower the threshold to go green**
+- Never open a PR without rebasing onto the latest default branch first
+- **A gate that could not run has not passed.** Report it as SKIP with remediation, never fold it into a green verdict
+
+## Orchestration
+
+Use `/pipeline` to determine the current stage. Extension hooks in `.specify/extensions.yml` chain analyze → refactor → architect.
+
+## Agents
+
+Delegate the four noisiest stages so their output does not consume the main context. All five ship in `.claude/agents/`, which **Cursor and Claude Code both read natively** — no plugin, no subscription, nothing metered.
+
+| Stage | Agent |
+|---|---|
+| Running any gate | `gate-runner` (read-only) |
+| Writing or extending tests | `test-writer` (the only writable agent) |
+| Interpreting Stryker survivors | `mutation-analyst` (read-only) |
+| Reviewing a diff | `code-reviewer` · `security-reviewer` (read-only) |
+
+## Supporting Skills (non-gated)
+
+Start non-trivial tasks by consulting **`/using-agent-skills`** — the router that maps the task to the right pipeline stage and supporting skills, and encodes the core operating behaviours (surface assumptions, manage confusion, push back, simplicity, scope discipline, verify).
+
+- `/using-agent-skills` — meta-router; consult first, re-consult when the task type changes
+- `/grilling`, `/domain-modeling`, `/codebase-design` — reference skills invoked by the mandatory `/grill-with-docs` alignment stage
+- `/convention-learner` — detect and match repo conventions before generating code
+- `/scaffold` — generate a complete feature slice matching the repo's existing architecture
+- `/modern-csharp`, `/resilience`, `/opentelemetry` — implementation reference during Stage 6
+- `/testing`, `/test-engineer` — test strategy, coverage-gap analysis, Prove-It tests
+- `/verify` — ad-hoc pre-PR readiness runner wrapping the gate scripts
+- `/diagnosing-bugs` — hard bugs, flakes, performance regressions
+- `/code-review` — three-axis (Risk + Standards + Spec) diff review
+- `/ship-review` — pre-PR fan-out after `/verify`, feeding human gate 3
+- `/k6-load-testing` — performance/SLA load tests in `tests/load/`
+- `/improve-codebase-architecture` — feed it Stryker survivors and complexity hot spots
+- `/handoff` — near a context limit or the end of a session

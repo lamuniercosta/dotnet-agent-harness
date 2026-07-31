@@ -1,0 +1,22 @@
+---
+description: C# coding conventions
+alwaysApply: true
+---
+
+# Coding Conventions
+
+## Comments
+
+Do not add descriptive comments (inline `//`, XML `///`, or block comments) unless the user explicitly requests them or a best practice requires them.
+
+**Exception:** test methods may use `// arrange`, `// act`, and `// assert` section comments.
+
+## Interface placement
+
+Define interfaces in the same file as their primary implementation, matching existing patterns such as `IQueueClient`/`QueueClient` and `IWorkbookClient`/`WorkbookClient`.
+
+Keep interfaces in separate files only when architecture requires it (e.g. shared abstractions in `Business/Abstractions/`).
+
+## Naming
+
+Name types, members, and span identifiers by **functionality**, not by third-party library or vendor (e.g. prefer `MessageTracePropagator` and `Queue.Send` over `ServiceBusTracePropagator` and `ServiceBus.Send`). SDK types from external packages and configuration keys mandated by a vendor may keep vendor names when required for interoperability.

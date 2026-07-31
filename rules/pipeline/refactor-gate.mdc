@@ -1,0 +1,40 @@
+---
+description: Refactor gate — cyclomatic complexity at the refactor threshold, property tests, deduplication
+alwaysApply: true
+---
+
+# Refactor Gate
+
+Runs during `/refactor` after implementation. Do not mark a feature complete until all checks pass.
+
+## When to run
+
+After `/implement` completes and before `/architect`.
+
+## Scripts
+
+From repository root:
+
+```powershell
+./scripts/run-cyclomatic-complexity.ps1 -Threshold 6
+./scripts/run-roslyn-analyzers.ps1
+./scripts/run-jetbrains-inspectcode.ps1
+./scripts/run-property-tests.ps1
+dotnet test
+```
+
+## Threshold
+
+Methods on changed files MUST be at or under `gates.complexity.refactor` in `harness.yml` (default **6**) — deliberately stricter than the implementation ceiling `gates.complexity.implement` (default 15).
+
+Two thresholds, not one, because the bar tightens once the code works: 15 is what you are allowed to write while solving the problem, 6 is what you are allowed to keep.
+
+## Property tests
+
+Add FsCheck property tests for pure/domain logic in changed code. Tag with `[Trait("Category", "Property")]`.
+
+## Failure handling
+
+- CA1502 violations: extract helpers, early returns — no suppressions unless generated code
+- DuplicatedCode (InspectCode): refactor before proceeding
+- Property test failures: fix implementation or shrink generator inputs

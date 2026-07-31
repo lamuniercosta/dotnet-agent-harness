@@ -1,0 +1,91 @@
+# dotnet-agent-harness — the entire configuration surface.
+#
+# Copy to `harness.yml` at your repo root. Everything here is optional: omit a
+# key and it is auto-discovered or falls back to the default shown.
+#
+# Thresholds live HERE and nowhere else. `install.ps1` renders them into
+# CodeMetricsConfig.txt, stryker-config.json, the .editorconfig gate severities,
+# and the constitution's Verification Gates article. Editing those files directly
+# means the next install overwrites you — change this file instead.
+#
+# Format note: this is parsed by a deliberately strict YAML *subset* reader
+# (2-space indent, `key: value` scalars, nested maps, `#` comments). No lists,
+# anchors, or multi-line strings. Unknown keys are an error, not a silent no-op,
+# so a typo fails loudly instead of quietly reverting a threshold to default.
+
+# Which version of the harness produced this file. Written by install.ps1 and
+# updated on every run - don't edit it by hand. Its job is to answer "what am I
+# on?" after an install changes behaviour, and to let the installer report
+# 0.1.0 -> 0.2.0 rather than overwriting silently.
+harnessVersion: 0.1.0
+
+# Which language pack's gates to run. Only `dotnet` ships today.
+pack: dotnet
+
+# Branch that changed-file detection diffs against.
+# Omit to use the remote's default branch (origin/HEAD).
+baseBranch: main
+
+# Issue tracker for `/task` intake. `github` uses the gh CLI; `none` means
+# branches are named from a description you pass directly.
+tracker: github
+
+# Path to the solution. Omit to glob for a single *.sln / *.slnx.
+solution: null
+
+gates:
+  complexity:
+    # CA1502 cyclomatic complexity ceiling.
+    # Two values because the bar tightens after the code works:
+    # `implement` applies while building, `refactor` at the refactor gate.
+    implement: 15
+    refactor: 6
+
+  mutation:
+    # Stryker mutation score floor, as a percentage, on changed code.
+    # A surviving mutant means the test is inadequate — fix the test, not this number.
+    threshold: 80
+
+  analyzers:
+    # `All` enables the full CA rule set including the security families
+    # (CA2100, CA3xxx, CA5xxx) that are off by default. This is what replaces
+    # a hosted static-analysis service for the pre-PR signal.
+    mode: All
+
+    # false by default, on purpose. This harness is adopt-first: turning every
+    # analyzer warning into a build error on an existing codebase breaks the
+    # build on day one over findings that predate the install, and the usual
+    # response is to rip the harness out.
+    #
+    # The gates are what enforce quality here - they fail on findings in CHANGED
+    # files, which is the bar that matters. Set this to true on a greenfield
+    # project, or once the existing warnings are cleared.
+    warningsAsErrors: false
+
+  vulnerablePackages:
+    fail: true
+    includeTransitive: true
+
+  inspectCode:
+    enabled: true
+
+  propertyTests:
+    enabled: true
+
+agents:
+  # Agents declare a tier (fast / balanced / deep), never a model id, so a model
+  # rename is a one-line fix here rather than an edit across every agent file.
+  #
+  # Defaults are `inherit` (Claude Code) and `auto` (Cursor) so a fresh install
+  # runs inside Cursor Pro's unlimited Auto mode and Claude Pro's limits without
+  # drawing on metered frontier-model usage. Pin only if you want to pay for it.
+  tiers:
+    fast:
+      claude: inherit
+      cursor: auto
+    balanced:
+      claude: inherit
+      cursor: auto
+    deep:
+      claude: inherit
+      cursor: auto

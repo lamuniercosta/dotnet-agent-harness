@@ -1,0 +1,66 @@
+---
+description: GitHub issue intake, branch naming, commit, and rebase-before-PR conventions
+alwaysApply: true
+---
+
+# GitHub Workflow
+
+When the user references an issue number, or asks to start a task, create a branch, or prep a PR, follow these conventions. Full guidance: `/task`.
+
+## Task intake
+
+Read the issue directly with the `gh` CLI — no tokens, config files, or environment variables of your own:
+
+```powershell
+gh issue view 142 --json number,title,body,labels
+```
+
+The tracker is **optional**. With nothing to read from, pass a description straight through and everything below still applies.
+
+## Branch naming
+
+Create branches from the **latest remote default branch** using:
+
+```powershell
+./scripts/new-task-branch.ps1 -Issue 142
+./scripts/new-task-branch.ps1 -Issue 142 -Type bug
+./scripts/new-task-branch.ps1 -Description "Add upload retry" -Type feature
+```
+
+- Feature → `feature/{issue}-{slug}`
+- Bug → `bug/{issue}-{slug}`
+- Hotfix → `hotfix/{issue}-{slug}`
+
+Type is inferred from the issue's labels (`bug`/`defect` → `bug`), defaulting to `feature`. **Hotfix is always an explicit human call** and is never inferred. Never branch from a stale local default branch — the script fetches first.
+
+## After branching (mandatory)
+
+Immediately run `/grill-with-docs` — question the development, settle vocabulary in `CONTEXT.md` and ADRs, and write `specs/<feature>/brief.md`. Do this **before** `/speckit-specify` or any code; it is never skipped, though it scales down for a small change.
+
+## Commit messages
+
+Reference the issue in the subject so GitHub links the work:
+
+```
+Add dark mode toggle (#142)
+```
+
+The reference is a **suffix, not a prefix**. A subject beginning with `#` is treated as a comment by git's editor-based commit path and gets silently stripped; GitHub auto-links `#142` anywhere in the message.
+
+Only commit when explicitly asked — the standard git safety rules still apply.
+
+## Before a PR
+
+Always rebase onto the latest default branch first, so recently merged work is included:
+
+```powershell
+./scripts/rebase-task-branch.ps1 -Push
+```
+
+Resolve any conflicts (`git rebase --continue` / `--abort`), then push with `--force-with-lease`. Do **not** open a PR until the branch is cleanly rebased.
+
+Never open or push a PR automatically — that is a human decision at gate 3.
+
+## What is deliberately not here
+
+No hosted code-review service, no issue-tracker integration beyond `gh`, and no metered PR bot. The review that gates a PR is `/ship-review`, which runs this harness's own agents locally. CodeQL is the only CI-side analysis, and it is free for public repositories and optional everywhere else.

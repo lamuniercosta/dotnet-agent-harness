@@ -1,0 +1,28 @@
+# Harness config resolved per-consumer — the example is tracked, the real one is not
+/harness.yml
+
+# .NET
+bin/
+obj/
+[Bb]uild/
+artifacts/
+*.user
+*.suo
+.vs/
+
+# Test + analysis output
+StrykerOutput/
+TestResults/
+coverage/
+*.trx
+inspectcode-report.xml
+
+# Spec Kit is a runtime dependency, not vendored — see NOTICE
+.specify/
+
+# Tooling
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

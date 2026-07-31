@@ -1,0 +1,54 @@
+---
+description: JetBrains/Rider inspection gate for C# changes (InspectCode)
+alwaysApply: true
+---
+
+# JetBrains Inspections
+
+Rider/ReSharper inspections are not Roslyn warnings. `dotnet build` and IDE linters will not catch them. Use `run-roslyn-analyzers.ps1` for Roslyn CA/IDE warnings.
+
+## When to run
+
+After creating or materially editing any `.cs` file, and before marking a Spec Kit task complete or finishing implementation work, run:
+
+```powershell
+./scripts/run-jetbrains-inspectcode.ps1
+```
+
+From the repository root. Use `-BaseRef <base>` when the base branch is not the repo default.
+
+## Failure handling
+
+- If the script exits non-zero, fix every reported issue at **WARNING** severity or higher before proceeding.
+- Do not rely on `ReadLints` for JetBrains-only inspections (e.g. `ExplicitCallerInfoArgument`).
+- When an explicit value is intentional (e.g. a fixed telemetry span name in a test), use a targeted ReSharper suppression comment instead of ignoring the finding.
+
+## Explicit file scope
+
+To inspect specific files:
+
+```powershell
+./scripts/run-jetbrains-inspectcode.ps1 -Files "path/to/File.cs"
+```
+
+## Full solution scan
+
+```powershell
+./scripts/run-jetbrains-inspectcode.ps1 -All
+```
+
+## Promoting an inspection to warning
+
+The gate reports at `WARNING` and above, so inspections ReSharper ships as suggestions never fail it. Promote valuable ones in `.editorconfig` using `resharper_<id_in_snake_case>_highlighting = warning` (e.g. `AsyncVoidMethod` → `resharper_async_void_method_highlighting`).
+
+Dump the full catalogue — 3,000+ rules with their IDs, default severities, and categories — to pick candidates:
+
+```powershell
+dotnet jb inspectcode --dumpIssuesTypes --output=artifacts/issue-types.xml
+```
+
+The output is SARIF; rules live under `runs[0].tool.driver.rules`, with `defaultConfiguration.level` (`note` = suggestion) and a category in `relationships[].target.id`. `CSHARP.CodeSmell` and `CSHARP.BestPractice` hold the correctness-relevant rules; the redundancy, style, and formatting categories are noise.
+
+**A misspelled key fails silently** — it is not reported as an unknown property, the inspection just stays a suggestion. After adding one, prove it with a throwaway file that triggers it and confirm the rule appears at `[warning]`. An inspection that does not fire is ambiguous: it can mean the key is wrong *or* that the trigger was wrong.
+
+Skip anything the Roslyn gate already owns (e.g. `MemberCanBeMadeStatic.*` duplicates CA1822) and run `-All` afterwards to measure how much existing code the promotion trips.

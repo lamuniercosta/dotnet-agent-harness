@@ -1,0 +1,89 @@
+# NOTICE
+
+`dotnet-agent-harness` is MIT licensed (see `LICENSE`). It bundles and depends on
+third-party work, credited below.
+
+## Bundled — `rules/vendor/`
+
+**`Aaronontheweb/dotnet-cursor-rules`** — MIT
+<https://github.com/Aaronontheweb/dotnet-cursor-rules>
+
+The eight `aaron-*.md` files under `rules/vendor/` are adapted from that project.
+They cover C# coding style, xUnit testing, .NET build systems, SDK/solution
+management, NuGet dependency management, code signing, and dotnet tool
+consumption/publishing.
+
+These files are kept in `rules/vendor/` — separate from the authored rules in
+`rules/pipeline/` — so the boundary between vendored and original content stays
+visible.
+
+**Adapted, not vendored verbatim, and not pinned to an upstream revision.** The
+files reached this project through an intermediate copy, and the exact upstream
+commit was not recorded; they have also been modified here — a `paths:` key was
+added alongside `globs:` so Claude Code loads them by glob the way Cursor does
+(see `rules/vendor/README.md`).
+
+A future re-sync therefore means a manual diff against current upstream, not a
+fast-forward. The MIT licence requires attribution and the licence text, both of
+which this file carries; a commit hash is not part of that obligation, and an
+invented one would be worse than none.
+
+## Bundled — `skills/`
+
+Each adapted skill also carries its attribution inline, in the file itself.
+
+**`codewithmukesh/dotnet-claude-kit`** — MIT
+<https://github.com/codewithmukesh/dotnet-claude-kit>
+
+Seven skills are adapted from that project: `verify`, `testing`, `scaffold`,
+`modern-csharp`, `resilience`, `opentelemetry`, and `convention-learner`.
+
+In every case the upstream Roslyn MCP calls have been replaced with standard
+`dotnet` tooling plus this harness's gate scripts, so no skill here depends on an
+MCP server or on that plugin being installed. Stack-specific examples were
+generalised, since this harness does not assume a database or API style.
+
+**`addyosmani/agent-skills`** — MIT
+<https://github.com/addyosmani/agent-skills>
+
+`ship-review`'s parallel fan-out structure is inspired by that project's `/ship`
+skill, re-mapped to this harness's pipeline stages and its own agents.
+`using-agent-skills` and `test-engineer` are likewise adapted from their
+counterparts there.
+
+**`davila7/claude-code-templates`** — MIT
+<https://github.com/davila7/claude-code-templates>
+
+`k6-load-testing` is adapted from the community skill of the same name.
+
+## Runtime dependency — not bundled
+
+**GitHub Spec Kit** — MIT
+<https://github.com/github/spec-kit>
+
+The harness chains into Spec Kit rather than vendoring it. `speckit/extensions.yml`
+registers this harness's pipeline stages as Spec Kit extension hooks. Spec Kit is
+installed separately:
+
+```bash
+uv tool install specify-cli --from git+https://github.com/github/spec-kit.git@v0.8.14
+```
+
+Pinned version: `0.8.14`.
+
+## Tooling invoked by the gates — not bundled
+
+These are resolved as local `dotnet` tools or NuGet packages by the consuming
+repository; the harness only wires and invokes them.
+
+| Tool | License | Role |
+|---|---|---|
+| `Microsoft.CodeAnalysis.NetAnalyzers` | MIT | Roslyn analyzer + CA1502 complexity gate |
+| `Microsoft.VisualStudio.Threading.Analyzers` | MIT | Async/threading diagnostics |
+| `Microsoft.CodeAnalysis.BannedApiAnalyzers` | MIT | `BannedSymbols.txt` enforcement |
+| `dotnet-stryker` | Apache-2.0 | Mutation testing gate |
+| `JetBrains.ReSharper.GlobalTools` | Free to use (JetBrains EULA) | InspectCode duplication/inspection gate |
+| `FsCheck` | BSD-3-Clause | Property-test gate |
+
+Verify each tool's current license terms before redistributing anything that
+embeds them. The harness itself embeds none of them.

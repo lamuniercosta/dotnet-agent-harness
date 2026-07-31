@@ -1,0 +1,93 @@
+name: Fixture gates
+
+# The proof that this harness enforces anything.
+#
+# Installs the harness into fixtures/BadCode and asserts every gate exits
+# NON-ZERO on the deliberately broken code, then applies the fix and asserts
+# every gate exits ZERO.
+#
+# Both directions matter. Asserting only red would let a gate that always fails
+# pass CI; asserting only green would let a gate that never fires pass. A gate
+# must catch bad code AND stay quiet on good code - one that cries wolf gets
+# switched off, which is a slower way of not having it.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fixture-gates-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    name: Gates catch, then clear
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install the harness into the fixture
+        shell: pwsh
+        run: ./install.ps1 ./fixtures/BadCode -Platform both
+
+      - name: Restore tools (jb, stryker)
+        working-directory: fixtures/BadCode
+        run: dotnet tool restore
+
+      # Written explicitly rather than trusting the checked-out state, so the
+      # job is deterministic even if someone commits the fixture mid-fix.
+      - name: Put the fixture in its broken state
+        shell: pwsh
+        working-directory: fixtures/BadCode
+        run: ./scripts/restore-broken.ps1
+
+      - name: Build the broken fixture
+        working-directory: fixtures/BadCode
+        # continue-on-error: the fixture is MEANT to produce findings, and
+        # RS0030 (DateTime.Now) is configured as an error, so a clean build is
+        # not expected here. The gates are the assertion, not the build.
+        continue-on-error: true
+        run: dotnet build --verbosity quiet
+
+      # ---- RED ----------------------------------------------------------
+      - name: Gates must FAIL on the broken fixture
+        shell: pwsh
+        working-directory: fixtures/BadCode
+        run: ./scripts/Assert-Gates.ps1 -Expect Fail
+
+      # ---- GREEN --------------------------------------------------------
+      - name: Apply the fix
+        shell: pwsh
+        working-directory: fixtures/BadCode
+        run: ./scripts/apply-fix.ps1
+
+      - name: Rebuild after the fix
+        working-directory: fixtures/BadCode
+        run: dotnet build --verbosity quiet
+
+      - name: Gates must PASS on the fixed fixture
+        shell: pwsh
+        working-directory: fixtures/BadCode
+        run: ./scripts/Assert-Gates.ps1 -Expect Pass
+
+      - name: Tests must pass after the fix
+        working-directory: fixtures/BadCode
+        run: dotnet test --no-build --verbosity quiet
+
+      # Stryker is slow, so it runs last and only on the fixed fixture, where a
+      # surviving mutant would mean the boundary assertion added by apply-fix
+      # did not actually kill it.
+      - name: Mutation score must clear the threshold
+        working-directory: fixtures/BadCode
+        run: dotnet stryker --reporter progress --reporter json

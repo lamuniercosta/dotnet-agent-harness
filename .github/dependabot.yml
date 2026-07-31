@@ -1,0 +1,18 @@
+# The fixture deliberately contains violating code, but NOT a vulnerable
+# package: the supply-chain gate is proven against a canned advisory document
+# (fixtures/BadCode/stub-vulnerable.json) rather than a real CVE.
+#
+# Committing a known-vulnerable package to a public repo would mean permanent
+# Dependabot alerts and a populated Security tab on a repo whose purpose is to
+# demonstrate good practice. See fixtures/BadCode/README.md for the trade-off
+# and what it does not cover.
+#
+# The fixture is excluded anyway, so a future contributor bumping its pinned
+# test packages does not generate noise on code that exists to be broken.
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /fixtures/BadCode
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 0

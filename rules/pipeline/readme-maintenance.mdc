@@ -1,0 +1,29 @@
+---
+description: Keep README.md current with feature and bug work that changes the product
+alwaysApply: true
+---
+
+# README Maintenance
+
+`README.md` documents the **product**: what the service exposes, how it behaves, and how to configure and run it. Review it whenever feature or bug work changes something a consumer of this service would need to know, and update it before ship-review / human gate 3.
+
+## Out of scope
+
+Do not document the development workflow in `README.md`. Changes to gate scripts, analyzer packages or severities, `.editorconfig`, Cursor rules and skills, MCP servers, or anything else that only affects how code gets written are not product documentation — record them in the relevant rule under `.cursor/rules/` instead. The same goes for spec, pipeline, and process changes.
+
+## What to check
+
+Update the relevant section(s) whenever a change touches:
+
+- **API surface** — new/changed endpoints, request/response shapes, DTO fields, status codes (e.g. the Status endpoint response contract).
+- **Behavior** — processing, retry, recovery, sanitization, validation, or error-handling semantics.
+- **Configuration** — new/renamed settings, environment variables, `appsettings*.json` / `local.settings.json` keys.
+- **Telemetry** — span names, metric names, or attribute values (e.g. `error_type` categories).
+- **Data model** — entity fields (note whether a field is internal vs. returned to callers).
+- **Risks & Limitations / Future Improvements** — mark items **Resolved / Implemented / Mitigated** when the task addresses them, matching the existing style; add new limitations the task introduces.
+
+## Rules
+
+- Verify doc claims against the actual code you changed — do not describe intended behavior that wasn't implemented.
+- If a feature genuinely has no user-facing, config, telemetry, or contract impact, say so rather than inventing an edit.
+- Keep the change scoped: edit only the sections the task affects.

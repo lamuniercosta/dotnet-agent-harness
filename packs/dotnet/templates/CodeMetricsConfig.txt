@@ -1,0 +1,9 @@
+# Thresholds for Roslyn code-metrics analyzers.
+# Read by CA1502 via the AdditionalFiles entry in Directory.Build.props.
+# Without that registration this file is ignored and CA1502 falls back to 25.
+#
+# Implementation gate: 15 (this value).
+# Refactor gate is stricter and is passed on the command line instead:
+#   ./scripts/run-cyclomatic-complexity.ps1 -Threshold 6
+
+CA1502: 15

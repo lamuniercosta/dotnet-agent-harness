@@ -1,0 +1,47 @@
+---
+description: Cyclomatic complexity gate for C# changes (CA1502)
+alwaysApply: true
+---
+
+# Cyclomatic Complexity
+
+CA1502 cyclomatic complexity is enforced via `Microsoft.CodeAnalysis.NetAnalyzers` and `CodeMetricsConfig.txt`.
+`dotnet build` alone does not surface violations in changed files unless you run the gate script.
+
+## When to run
+
+After creating or materially editing any `.cs` file, and before marking a Spec Kit task complete or finishing implementation work, run:
+
+```powershell
+./scripts/run-cyclomatic-complexity.ps1
+```
+
+From the repository root. Use `-BaseRef <base>` when the base branch is not the repo default.
+
+## Threshold
+
+Methods MUST be at or under `gates.complexity.implement` in `harness.yml` (default **15**).
+
+`install.ps1` renders that value into `CodeMetricsConfig.txt` as `CA1502: <n>`, which is what the analyzer actually reads. Edit `harness.yml`, not the generated file — the next install overwrites it.
+
+The refactor gate later tightens this to `gates.complexity.refactor` (default 6). Writing close to the tighter bar now avoids paying for the same method twice.
+
+## Failure handling
+
+- If the script exits non-zero, refactor the reported method(s) into smaller units before proceeding.
+- Prefer extracting private helpers, early returns, and guard clauses over suppressions.
+- Suppressions (`#pragma warning disable CA1502`) are permitted only for generated code or when complexity is unavoidable; include a brief justification.
+
+## Explicit file scope
+
+To check specific files:
+
+```powershell
+./scripts/run-cyclomatic-complexity.ps1 -Files "path/to/File.cs"
+```
+
+## Full solution scan
+
+```powershell
+./scripts/run-cyclomatic-complexity.ps1 -All
+```

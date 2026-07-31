@@ -1,0 +1,5 @@
+P:System.DateTime.Now;Machine-local and untestable. Use TimeProvider.GetUtcNow() or DateTime.UtcNow.
+P:System.DateTime.Today;Machine-local and untestable. Use TimeProvider.GetUtcNow().Date.
+P:System.DateTimeOffset.Now;Machine-local and untestable. Use TimeProvider.GetUtcNow() or DateTimeOffset.UtcNow.
+M:System.Threading.Tasks.Task.Wait;Sync-over-async deadlocks under a synchronization context. Await the task.
+M:System.Threading.Tasks.Task.WaitAll(System.Threading.Tasks.Task[]);Sync-over-async. Use await Task.WhenAll(...).

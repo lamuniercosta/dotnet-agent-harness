@@ -1,0 +1,38 @@
+# Style for the harness's own files. This is NOT the .editorconfig installed
+# into consumers - that one lives at packs/dotnet/templates/.editorconfig and
+# carries the analyzer gate severities.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{ps1,psm1,psd1}]
+indent_size = 4
+
+[*.{md,mdc}]
+indent_size = 2
+# Two trailing spaces are a markdown line break; stripping them changes rendering.
+trim_trailing_whitespace = false
+
+[*.{yml,yaml,json}]
+indent_size = 2
+
+[*.{cs,csproj,props,targets}]
+indent_size = 4
+
+[*.sh]
+indent_size = 2
+# Shell scripts run through Git Bash on Windows and bash in CI; CRLF breaks the
+# shebang and produces a confusing "bad interpreter" error.
+end_of_line = lf
+
+# Vendored third-party content - kept byte-for-byte so a future diff against
+# upstream stays meaningful.
+[rules/vendor/**]
+trim_trailing_whitespace = false
+insert_final_newline = false

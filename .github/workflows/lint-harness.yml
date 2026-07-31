@@ -1,0 +1,150 @@
+name: Lint harness
+
+# Structural checks on the harness itself - cheap, fast, and catching the
+# failure classes that have actually bitten this repo:
+#   - third-party agent invocations creeping back in (Bugbot, plugin agents)
+#   - a skill or rule referencing a script that does not exist
+#   - the harness.yml example drifting from the parser's schema
+#   - the guard hook regressing to a bypassable state
+#   - constitution placeholders shipping unsubstituted
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Structure and self-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---- no third-party reviewer dependencies -------------------------
+      # The harness must run identically on both platforms and cost nothing
+      # beyond the editor subscription. A Cursor built-in subagent or a plugin
+      # agent breaks both properties at once.
+      #
+      # Matches the INVOCATION form (`plugin:agent`) and Cursor's built-ins -
+      # not the bare product name, which appears legitimately in MIT
+      # attributions and in prose explaining why they are absent.
+      - name: No third-party agent invocations
+        run: |
+          if grep -rnE 'subagent_type|dotnet-claude-kit:|subagent_type: *bugbot' \
+               skills/ rules/ .claude/agents/ 2>/dev/null; then
+            echo "::error::Third-party agent invocation found. Agents must ship in .claude/agents/."
+            exit 1
+          fi
+          echo "No third-party agent invocations."
+
+      # ---- every skill has valid frontmatter ----------------------------
+      - name: Skills have name and description
+        run: |
+          fail=0
+          for f in skills/*/SKILL.md; do
+            head -1 "$f" | grep -q '^---$' || { echo "::error file=$f::missing frontmatter"; fail=1; continue; }
+            grep -qE '^name: '        "$f" || { echo "::error file=$f::missing name:"; fail=1; }
+            grep -qE '^description: ' "$f" || { echo "::error file=$f::missing description:"; fail=1; }
+            dir=$(basename "$(dirname "$f")")
+            declared=$(grep -m1 '^name: ' "$f" | sed 's/^name: *//')
+            [ "$dir" = "$declared" ] || { echo "::error file=$f::name '$declared' != directory '$dir'"; fail=1; }
+          done
+          [ "$fail" -eq 0 ] && echo "All $(ls -d skills/*/ | wc -l) skills valid."
+          exit $fail
+
+      # ---- referenced gate scripts exist --------------------------------
+      - name: Referenced scripts exist
+        run: |
+          fail=0
+          for s in $(grep -rhoE '\./scripts/run-[a-z-]+\.ps1' skills/ rules/ .claude/agents/ \
+                     | sed 's|\./scripts/||' | sort -u); do
+            if [ ! -f "packs/dotnet/scripts/$s" ]; then
+              echo "::error::Referenced script not in the pack: $s"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "All referenced gate scripts exist."
+          exit $fail
+
+      # ---- CLAUDE.md imports resolve ------------------------------------
+      # Claude imports rules from .cursor/rules because they live there in one
+      # copy. A broken path fails silently at runtime - the rule simply never
+      # loads - so it is checked here instead.
+      - name: CLAUDE.md imports resolve
+        run: |
+          fail=0
+          for imp in $(grep -oE '^@\.cursor/rules/[a-z-]+\.mdc' adapters/claude/CLAUDE.md | sed 's/^@\.cursor\/rules\///'); do
+            if [ ! -f "rules/pipeline/$imp" ]; then
+              echo "::error::CLAUDE.md imports a rule that does not exist: $imp"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "All CLAUDE.md imports resolve."
+          exit $fail
+
+      # ---- vendored paths: derived from globs: ---------------------------
+      - name: Vendored rule paths are in sync
+        shell: pwsh
+        run: ./packs/dotnet/scripts/Sync-VendorRulePaths.ps1 -Check
+
+      # ---- constitution renders with no leftovers -----------------------
+      # The real bug this catches: the constitution once shipped mandating
+      # MongoDB and Hot Chocolate regardless of the stack actually scaffolded,
+      # because only {{PROJECT_NAME}} was substituted.
+      - name: Constitution template substitutes cleanly
+        run: |
+          out=$(mktemp)
+          sed -e 's/{{PROJECT_NAME}}/TestApi/g' -e 's/{{TFM_LABEL}}/.NET 10/g' \
+              packs/dotnet/templates/constitution.md \
+            | sed '/{{STACK_CONSTRAINTS}}/d' > "$out"
+          if grep -n '{{' "$out"; then
+            echo "::error::Unsubstituted placeholders remain after rendering."
+            exit 1
+          fi
+          if grep -niE 'mongo|hot chocolate|redis|pt-BR' "$out"; then
+            echo "::error::Stack-specific text is hardcoded in the template."
+            exit 1
+          fi
+          echo "Constitution renders clean and stack-neutral."
+
+  self-tests:
+    name: PowerShell self-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard hook blocks what it claims to block
+        shell: pwsh
+        run: ./hooks/Test-Guard.ps1
+
+      - name: harness.yml parser rejects malformed config
+        shell: pwsh
+        run: ./packs/dotnet/scripts/Test-HarnessConfig.ps1
+
+      # Prose may quote a threshold, but only next to its key and only if the
+      # number is right. Docs quoting a stale threshold is how a team ends up
+      # believing the bar is 6 while the gate enforces 10.
+      - name: Quoted thresholds agree with harness.yml.example
+        shell: pwsh
+        run: ./packs/dotnet/scripts/Test-ThresholdDocs.ps1
+
+      - name: install.ps1 -WhatIf writes nothing
+        shell: pwsh
+        run: |
+          $target = Join-Path ([System.IO.Path]::GetTempPath()) 'whatif-check'
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          ./install.ps1 $target -WhatIf | Out-Null
+          $written = @(Get-ChildItem $target -Recurse -File -Force)
+          if ($written.Count -gt 0) {
+            Write-Host "::error::-WhatIf wrote $($written.Count) file(s)"
+            exit 1
+          }
+          Write-Host '-WhatIf wrote nothing, as promised.'

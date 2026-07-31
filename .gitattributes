@@ -1,0 +1,40 @@
+# Line endings are declared here rather than left to each clone's core.autocrlf.
+#
+# This repo is authored on Windows and its CI runs on ubuntu. A shell script that
+# arrives with CRLF fails with "bad interpreter: /usr/bin/env bash^M" - which
+# reads as a missing interpreter rather than a line-ending problem, and costs an
+# hour the first time you meet it.
+#
+# Everything is LF in the repository. PowerShell, shell, and markdown all handle
+# LF on Windows, so there is no reason to store anything else.
+
+* text=auto eol=lf
+
+# Executable scripts: LF is not a preference, it is required.
+*.sh    text eol=lf
+*.ps1   text eol=lf
+*.psm1  text eol=lf
+*.psd1  text eol=lf
+
+# Config and content
+*.md    text eol=lf
+*.mdc   text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+*.cs    text eol=lf
+*.csproj text eol=lf
+*.props text eol=lf
+*.txt   text eol=lf
+*.ini   text eol=lf
+
+# Visual Studio writes solution files with CRLF and rewrites them if changed.
+*.sln   text eol=crlf
+
+# Vendored third-party content - kept byte-for-byte so a future diff against
+# upstream stays meaningful.
+rules/vendor/** -text
+
+# Collapse generated and vendored content in PR diffs.
+rules/vendor/** linguist-vendored
+fixtures/**    linguist-generated

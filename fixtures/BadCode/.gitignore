@@ -1,0 +1,23 @@
+# Artifacts written by `install.ps1` when CI installs the harness into this
+# fixture. They are generated on every run and must not be committed - a stale
+# committed copy would silently test an old version of the harness, which is
+# exactly the kind of false green the fixture exists to prevent.
+.claude/
+.cursor/
+.config/
+.mcp.json
+CLAUDE.md
+harness.yml
+Directory.Build.props
+CodeMetricsConfig.txt
+BannedSymbols.txt
+stryker-config.json
+.editorconfig
+artifacts/
+
+# Gate scripts are installed too; only the fixture's own scripts are tracked.
+scripts/_*.ps1
+scripts/run-*.ps1
+scripts/new-task-branch.ps1
+scripts/rebase-task-branch.ps1
+scripts/hooks/

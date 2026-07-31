@@ -1,0 +1,50 @@
+# Spec Kit extension hooks — the entire coupling between this harness and Spec Kit.
+#
+# Spec Kit (github/spec-kit, MIT) is a pinned runtime DEPENDENCY, not vendored.
+# It owns specify → clarify → checklist → plan → tasks → analyze. This harness
+# owns alignment (before) and the gates (after). These four hooks are the seam.
+#
+# Install:
+#   uv tool install specify-cli --from git+https://github.com/github/spec-kit.git@v0.8.14
+#   specify init --here --integration claude        # or --integration cursor-agent
+#   cp speckit/extensions.yml .specify/extensions.yml
+#
+# Spec Kit supports both target platforms natively, which is why this harness
+# does not reimplement the spec machinery for either one.
+
+hooks:
+  # Alignment is MANDATORY and runs before any spec exists. Registered as a
+  # pre-hook rather than trusted to habit: skipping it is the single most
+  # expensive failure in the pipeline, because a spec written from an
+  # unquestioned ticket produces confidently wrong work.
+  before_specify:
+    - extension: harness-pipeline
+      command: grill-with-docs
+      optional: false
+      description: Question the development; settle vocabulary in CONTEXT.md + ADRs; write brief.md
+
+  # Cross-artifact consistency before the first human gate, so a reviewer is not
+  # the one to notice that tasks.md contradicts plan.md.
+  after_tasks:
+    - extension: harness-pipeline
+      command: speckit-analyze
+      optional: false
+      description: Cross-artifact consistency check before human gate 1
+
+  # Complexity, duplication, and property tests once the code works.
+  after_implement:
+    - extension: harness-pipeline
+      command: refactor
+      optional: false
+      description: Complexity <= gates.complexity.refactor, deduplication, property tests
+
+  # Mutation is last because it is the most expensive and the most conclusive.
+  after_refactor:
+    - extension: harness-pipeline
+      command: architect
+      optional: false
+      description: Stryker mutation >= gates.mutation.threshold, full suite
+
+# Every hook is `optional: false` on purpose. An optional gate is a suggestion,
+# and a suggestion is what this harness exists to replace. Skipping one is a
+# human decision made explicitly, not a default the tooling chooses.

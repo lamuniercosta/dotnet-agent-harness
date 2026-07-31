@@ -1,0 +1,41 @@
+---
+description: Roslyn analyzer gate for C# changes (CA/IDE warnings at build)
+alwaysApply: true
+---
+
+# Roslyn Analyzers
+
+Roslyn diagnostics (CA*, IDE*, VSTHRD*, RS*) are not JetBrains inspections. `run-jetbrains-inspectcode.ps1` will not catch them.
+
+Three analyzer packages feed this gate, all referenced in `Directory.Build.props`: `Microsoft.CodeAnalysis.NetAnalyzers` (CA/IDE), `Microsoft.VisualStudio.Threading.Analyzers` (VSTHRD — sync-over-async, blocking calls), and `Microsoft.CodeAnalysis.BannedApiAnalyzers` (RS0030 — symbols listed in `BannedSymbols.txt`).
+
+## When to run
+
+After creating or materially editing any `.cs` file, and before marking a Spec Kit task complete or finishing implementation work, run:
+
+```powershell
+./scripts/run-roslyn-analyzers.ps1
+```
+
+From the repository root. Use `-BaseRef <base>` when the base branch is not the repo default.
+
+Run alongside InspectCode and cyclomatic complexity — all three are required.
+
+## Failure handling
+
+- If the script exits non-zero, fix every reported CA/IDE warning before proceeding.
+- CA1502 is excluded from this script; use `run-cyclomatic-complexity.ps1` for complexity.
+- Severities are configured in `.editorconfig` under the Roslyn analyzer gate section.
+- To ban an API outright (e.g. `DateTime.Now`), add it to `BannedSymbols.txt` as `P:|M:|T:|F:<DocumentationCommentId>;<reason>` rather than writing a new rule.
+
+## Explicit file scope
+
+```powershell
+./scripts/run-roslyn-analyzers.ps1 -Files "path/to/File.cs"
+```
+
+## Full solution scan
+
+```powershell
+./scripts/run-roslyn-analyzers.ps1 -All
+```

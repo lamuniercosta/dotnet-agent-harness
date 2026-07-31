@@ -1,0 +1,53 @@
+---
+description: Which documentation source to consult for API questions (Microsoft Learn vs Context7)
+alwaysApply: true
+---
+
+# Documentation Sources
+
+Two MCP servers provide current, authoritative API documentation. Prefer them over recalled knowledge or web search whenever a question turns on a specific API's surface or semantics.
+
+## Routing
+
+| Topic | Server |
+|---|---|
+| .NET / C#, ASP.NET Core, Azure Functions, Service Bus, Blob Storage, Entra, Key Vault, Application Insights, Azure CLI / Bicep, MSBuild, Roslyn analyzer rules (`CA*`/`IDE*`) | `microsoft-learn` |
+| Third-party libraries — MongoDB C# driver, Polly, xUnit, FsCheck, Reqnroll, NSubstitute, Testcontainers, WireMock.NET, Stryker.NET, k6 | `context7` |
+
+Microsoft Learn wins on every Microsoft or Azure topic. Do not route those to Context7 even when it has a matching library.
+
+## Microsoft Learn
+
+1. `microsoft_docs_search` for the question.
+2. `microsoft_docs_fetch` on a returned URL when a search chunk isn't enough.
+3. `microsoft_code_sample_search` when working code matters more than prose.
+
+## Context7
+
+Call `resolve-library-id`, then `query-docs`. Skip the resolve step for these pinned ids:
+
+| Library | Id |
+|---|---|
+| MongoDB C# driver | `/websites/mongodb_drivers_csharp_current` |
+| Polly | `/websites/pollydocs` |
+| Testcontainers for .NET | `/testcontainers/testcontainers-dotnet` |
+| Reqnroll | `/websites/reqnroll_net` |
+| Stryker.NET | `/stryker-mutator/stryker-net` |
+| FsCheck | `/fscheck/fscheck` |
+
+Resolve anything unlisted once, then add it to this table.
+
+## When to consult
+
+- Before writing code against an API not already used elsewhere in this repo (`/implement`).
+- When a build error, analyzer warning, or test failure suggests an API doesn't behave as assumed (`/diagnosing-bugs`).
+- When settling an assumption during `/grill-with-docs` — an assumption backed by a doc URL is settled; one backed by recall is not.
+- On the Risk axis of `/code-review`, for documented platform semantics (Service Bus delivery guarantees, Functions retry and host behaviour, Mongo driver defaults). A cited doc line is evidence for a CONFIRMED verdict.
+
+## When not to
+
+Refactoring code that already works, debugging business logic, general language or design questions, and anything the repo itself answers. A docs round-trip there buys nothing.
+
+## Citing
+
+When a doc answer drives a decision, a code choice, or a review finding, cite it — the Learn URL, or the Context7 library id plus topic. Uncited claims about API behaviour remain assumptions and must be labelled as such.
