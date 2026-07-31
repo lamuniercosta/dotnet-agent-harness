@@ -55,11 +55,23 @@ function Assert-Gate {
         return
     }
 
-    & pwsh -NoProfile -File $path @GateArgs *> $null
+    # Captured rather than discarded: on failure the gate's own output is the
+    # only thing that explains WHY, and a CI log that says "expected 0, got 1"
+    # with no findings is undiagnosable. Printed only when something is wrong,
+    # so a passing run stays a clean four-line table.
+    $output = & pwsh -NoProfile -File $path @GateArgs 2>&1
     $actual = $LASTEXITCODE
+
+    function Show-GateOutput {
+        Write-Host '        --- gate output ---' -ForegroundColor DarkGray
+        $output | Select-Object -Last 25 | ForEach-Object {
+            Write-Host "        $_" -ForegroundColor DarkGray
+        }
+    }
 
     if ($actual -eq 2) {
         Write-Host ("  FAIL  {0,-22} exit 2 (SKIPPED) - verified nothing" -f $Name) -ForegroundColor Red
+        Show-GateOutput
         $script:failures++
         return
     }
@@ -69,6 +81,7 @@ function Assert-Gate {
     }
     else {
         Write-Host ("  FAIL  {0,-22} exit {1}, expected {2}" -f $Name, $actual, $expectedExit) -ForegroundColor Red
+        Show-GateOutput
         $script:failures++
     }
 }
