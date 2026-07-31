@@ -1,33 +1,36 @@
 # gitleaks configuration for dotnet-agent-harness.
 #
-# Two paths in this repo contain credential-SHAPED strings on purpose, and both
-# would otherwise be reported forever:
+# A single [allowlist] map, not repeated [[allowlist]] tables - gitleaks 8.x
+# rejects the array form with "'Allowlist' expected a map, got 'slice'".
 #
-#   hooks/Test-SecretScan.ps1  - the secret scanner's own test suite. It must
-#                                contain realistic credential shapes, or it
-#                                would assert nothing. Every value is a public
-#                                documentation example (AKIAIOSFODNN7EXAMPLE)
-#                                or invented.
-#   fixtures/BadCode/          - the gate fixture. It contains deliberate code
-#                                violations but no credentials; allowlisted so a
-#                                future fixture addition cannot fail this job
-#                                for a planted, non-secret string.
+# Three paths contain credential-SHAPED strings on purpose:
 #
-# Allowlisting the scanner's tests is not a loophole: an exception that lets the
-# test suite keep proving the scanner works is worth more than a green job with
-# no scanner behind it.
+#   hooks/Test-SecretScan.ps1  the secret scanner's own test suite. It must
+#                              contain realistic shapes or it asserts nothing.
+#                              Every value is assembled at runtime from string
+#                              fragments, so no credential-shaped literal
+#                              exists in the file - GitHub push protection
+#                              rejected the first version, correctly, and that
+#                              is why.
+#
+#   hooks/secret-scan.ps1      the detection patterns themselves.
+#
+#   fixtures/BadCode/          the gate fixture: deliberate code violations,
+#                              no credentials. Allowlisted so a future fixture
+#                              addition cannot fail this job over a planted,
+#                              non-secret string.
+#
+# Allowlisting the scanner's own tests is not a loophole. An exception that
+# lets the test suite keep proving the scanner works is worth more than a green
+# job with no scanner behind it.
 
 [extend]
 useDefault = true
 
-[[allowlist]]
-description = "Secret-scanner self-test - credential shapes are the fixture"
-paths = ['''hooks/Test-SecretScan\.ps1''']
-
-[[allowlist]]
-description = "Gate fixture - deliberate code violations, no credentials"
-paths = ['''fixtures/BadCode/.*''']
-
-[[allowlist]]
-description = "The scanner's own detection patterns, not secrets"
-paths = ['''hooks/secret-scan\.ps1''']
+[allowlist]
+description = "Test fixtures and detection patterns - shapes by design, not secrets"
+paths = [
+    '''hooks/Test-SecretScan\.ps1''',
+    '''hooks/secret-scan\.ps1''',
+    '''fixtures/BadCode/.*''',
+]
