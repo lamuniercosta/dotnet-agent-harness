@@ -66,6 +66,26 @@ jobs:
         working-directory: fixtures/BadCode
         run: ./scripts/Assert-Gates.ps1 -Expect Fail
 
+      # Mutation is scoped to the two files the fixture actually tests.
+      #
+      # The other classes exist to trip ANALYZER gates and deliberately have no
+      # tests, so an unscoped run scores ~8% on 54 uncovered mutants - a real
+      # result, but it measures the fixture's design rather than whether the
+      # mutation gate works.
+      #
+      # Broken state: DiscountTests asserts nothing at the threshold, so the
+      # `>=` -> `>` mutant survives and Stryker must exit non-zero.
+      - name: Mutation must FAIL on the broken fixture
+        shell: pwsh
+        working-directory: fixtures/BadCode
+        run: |
+          dotnet stryker --mutate "**/Discount.cs" --mutate "**/Percentage.cs" --reporter progress
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host '::error::Mutation passed on the broken fixture - a surviving mutant was not caught.'
+            exit 1
+          }
+          Write-Host "Mutation correctly failed (exit $LASTEXITCODE): the unasserted boundary survived."
+
       # ---- GREEN --------------------------------------------------------
       - name: Apply the fix
         shell: pwsh
@@ -85,9 +105,9 @@ jobs:
         working-directory: fixtures/BadCode
         run: dotnet test --no-build --verbosity quiet
 
-      # Stryker is slow, so it runs last and only on the fixed fixture, where a
-      # surviving mutant would mean the boundary assertion added by apply-fix
-      # did not actually kill it.
-      - name: Mutation score must clear the threshold
+      # Same scope as the red run. A survivor here would mean the boundary
+      # assertion apply-fix added does not actually kill the mutant - which is
+      # the difference between a test that looks right and one that works.
+      - name: Mutation must PASS on the fixed fixture
         working-directory: fixtures/BadCode
-        run: dotnet stryker --reporter progress --reporter json
+        run: dotnet stryker --mutate "**/Discount.cs" --mutate "**/Percentage.cs" --reporter progress --reporter json
