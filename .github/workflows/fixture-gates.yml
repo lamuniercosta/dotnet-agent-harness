@@ -31,7 +31,16 @@ jobs:
     timeout-minutes: 25
 
     steps:
+      # Full history: the mutation step runs Stryker with since.target = the
+      # base branch, which it resolves through git. The default depth-1 checkout
+      # fetches only the current ref, so the target does not exist and Stryker
+      # aborts with "No branch or tag or commit found with given target main".
+      # That never showed up because this workflow had only ever run on pushes
+      # to main, where the target and the checked-out ref are the same commit -
+      # the pull_request trigger below had never actually been exercised.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-dotnet@v4
         with:
