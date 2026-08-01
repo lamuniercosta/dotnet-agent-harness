@@ -13,6 +13,7 @@ CodeMetricsConfig.txt
 BannedSymbols.txt
 stryker-config.json
 .editorconfig
+CONTEXT.md
 artifacts/
 
 # Gate scripts are installed too; only the fixture's own scripts are tracked.
