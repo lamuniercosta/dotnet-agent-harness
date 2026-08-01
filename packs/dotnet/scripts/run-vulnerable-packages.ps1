@@ -95,8 +95,13 @@ try { $json = $raw | Out-String | ConvertFrom-Json } catch { $json = $null }
 
 if ($json -and $json.PSObject.Properties.Name -contains 'projects') {
     foreach ($project in $json.projects) {
-        if (-not $project.frameworks) { continue }
-        foreach ($fw in $project.frameworks) {
+        # A project with no advisories is emitted as {"path": ...} with no
+        # 'frameworks' key at all. Under Set-StrictMode, `$project.frameworks`
+        # throws on the absent property rather than returning $null, so the
+        # membership has to be tested before the value is read.
+        $frameworks = $project.PSObject.Properties['frameworks']
+        if (-not $frameworks) { continue }
+        foreach ($fw in $frameworks.Value) {
             foreach ($listName in @('topLevelPackages', 'transitivePackages')) {
                 $packages = $fw.PSObject.Properties[$listName]
                 if (-not $packages) { continue }

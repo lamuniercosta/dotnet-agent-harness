@@ -17,6 +17,17 @@
   "parameters": "--vulnerable --include-transitive",
   "projects": [
     {
+      "$comment": [
+        "A project with no advisories. The real CLI emits it with no 'frameworks'",
+        "key at all, which throws under Set-StrictMode unless the gate tests for",
+        "the property before reading it. Listed FIRST so the loop meets it before",
+        "any finding: without this entry the gate crashed on every solution whose",
+        "projects were not all vulnerable, and reported that crash as exit 1 -",
+        "indistinguishable from a real finding."
+      ],
+      "path": "/repo/src/Clean/Clean.csproj"
+    },
+    {
       "path": "/repo/src/Sample/Sample.csproj",
       "frameworks": [
         {
