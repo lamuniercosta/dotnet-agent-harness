@@ -316,21 +316,131 @@ if (Test-Path $propsFile) {
 }
 
 # ── 5d. Spec Kit extension ───────────────────────────────────────────────────
-# The 15-line file is the entire coupling between this harness and Spec Kit.
-# Without it the pipeline chaining (analyze -> refactor -> architect) never
-# fires, and nothing would report that: the stages simply would not run.
+# This file is the entire coupling between this harness and Spec Kit. Without it
+# the pipeline chaining (grill-with-docs -> analyze -> refactor) never fires, and
+# nothing would report that: the stages simply would not run. The final stage,
+# /architect, is chained by the refactor skill's own handoff, because Spec Kit
+# emits no `after_refactor` event - see the note in speckit/extensions.yml.
 #
 # .specify/ only exists after `specify init`, so when it is absent this reports
 # the exact command rather than creating a directory Spec Kit will overwrite.
 $specifyDir = Join-Path $TargetRepo '.specify'
 $extensionsSrc = Join-Path $harnessRoot 'speckit/extensions.yml'
 
+# This file is shared territory. `specify init` writes it, and every registered
+# Spec Kit extension records its hooks in it - the bundled `git` extension alone
+# registers six. Overwriting it unconditionally would silently disable them, so
+# the file is only written when there is demonstrably nothing to lose:
+#
+#   pristine  - `installed` and `hooks` both empty, as `specify init` leaves it
+#   ours      - every hook entry carries `extension: harness-pipeline`
+#   otherwise - reported for manual merge, left untouched
+#
+# Detection is textual, using the same minimal-YAML approach as the rest of the
+# harness. It is deliberately biased towards reporting MANUAL: an unusual but
+# valid formulation reads as foreign and is left alone, which is the safe way to
+# be wrong about someone else's file.
+
+# Returns the body lines of a top-level `key:` block, or $null if absent.
+function Get-YamlTopLevelBlock {
+    param([string[]]$Lines, [string]$Key)
+
+    for ($i = 0; $i -lt $Lines.Count; $i++) {
+        if ($Lines[$i] -notmatch "^$Key\s*:") { continue }
+
+        $block = @($Lines[$i])
+        for ($j = $i + 1; $j -lt $Lines.Count; $j++) {
+            # A non-indented, non-blank line ends the block.
+            if ($Lines[$j] -match '^\S') { break }
+            $block += $Lines[$j]
+        }
+        # Trailing blank lines belong to the gap, not the block.
+        while ($block.Count -gt 1 -and $block[-1] -match '^\s*$') {
+            $block = @($block[0..($block.Count - 2)])
+        }
+        # Returned bare, so a one-line block unrolls to a string. Every caller
+        # wraps the result in @() to restore the array - wrapping HERE as well
+        # would nest it one level deep, and `-match` against an array silently
+        # becomes a filter that never populates $Matches.
+        return $block
+    }
+    return $null
+}
+
+# True when `key:` is present-but-empty (`[]`, `{}`) or absent entirely.
+function Test-YamlKeyEmpty {
+    param([string[]]$Lines, [string]$Key)
+
+    $block = @(Get-YamlTopLevelBlock -Lines $Lines -Key $Key)
+    if ($block.Count -eq 0 -or $null -eq $block[0]) { return $true }
+
+    if ($block[0] -match "^$Key\s*:\s*(.*)$") {
+        $inline = $Matches[1].Trim()
+        if ($inline -eq '[]' -or $inline -eq '{}') { return $true }
+        if ($inline) { return $false }
+    }
+    # No inline value: empty only if nothing but blanks and comments follow.
+    # A one-line block has no body at all, so it is empty by definition - and
+    # indexing 1..0 would silently walk backwards rather than yield nothing.
+    if ($block.Count -le 1) { return $true }
+    foreach ($line in $block[1..($block.Count - 1)]) {
+        if ($line -notmatch '^\s*$' -and $line -notmatch '^\s*#') { return $false }
+    }
+    return $true
+}
+
 if (Test-Path $specifyDir) {
     $extensionsDest = Join-Path $specifyDir 'extensions.yml'
-    if ($PSCmdlet.ShouldProcess($extensionsDest, 'install Spec Kit extension')) {
-        Copy-Item $extensionsSrc $extensionsDest -Force
+
+    if (-not (Test-Path $extensionsDest)) {
+        if ($PSCmdlet.ShouldProcess($extensionsDest, 'install Spec Kit extension')) {
+            Copy-Item $extensionsSrc $extensionsDest -Force
+        }
+        Add-Result '.specify/extensions.yml' 'ADDED' 'pipeline chaining into Spec Kit'
     }
-    Add-Result '.specify/extensions.yml' 'SYNCED' 'pipeline chaining into Spec Kit'
+    else {
+        $existing = @(Get-Content -LiteralPath $extensionsDest)
+
+        $declared = @($existing |
+            ForEach-Object { if ($_ -match '^\s*-?\s*extension\s*:\s*(\S+)') { $Matches[1] } })
+        $isOurs = $declared.Count -gt 0 -and
+                  @($declared | Where-Object { $_ -ne 'harness-pipeline' }).Count -eq 0
+
+        $isPristine = (Test-YamlKeyEmpty -Lines $existing -Key 'installed') -and
+                      (Test-YamlKeyEmpty -Lines $existing -Key 'hooks')
+
+        if ($isOurs -or $isPristine) {
+            # Carry the repo's own `installed` and `settings` across. They are
+            # Spec Kit's to manage, not ours: `installed` is the extension
+            # lifecycle list, and `settings.auto_execute_hooks` is a switch the
+            # user may have deliberately turned off.
+            $rendered = @(Get-Content -LiteralPath $extensionsSrc)
+            foreach ($key in @('installed', 'settings')) {
+                $theirs = @(Get-YamlTopLevelBlock -Lines $existing -Key $key)
+                $ours = @(Get-YamlTopLevelBlock -Lines $rendered -Key $key)
+                if ($theirs.Count -eq 0 -or $ours.Count -eq 0) { continue }
+                if ($null -eq $theirs[0] -or $null -eq $ours[0]) { continue }
+
+                $at = [Array]::IndexOf($rendered, $ours[0])
+                if ($at -lt 0) { continue }
+                $before = if ($at -gt 0) { $rendered[0..($at - 1)] } else { @() }
+                $afterAt = $at + $ours.Count
+                $after = if ($afterAt -lt $rendered.Count) { $rendered[$afterAt..($rendered.Count - 1)] } else { @() }
+                $rendered = @($before) + @($theirs) + @($after)
+            }
+
+            if ($PSCmdlet.ShouldProcess($extensionsDest, 'install Spec Kit extension')) {
+                Set-Content -LiteralPath $extensionsDest -Value $rendered -Encoding UTF8
+            }
+            $why = if ($isOurs) { 'refreshed' } else { 'was pristine' }
+            Add-Result '.specify/extensions.yml' 'SYNCED' "pipeline chaining into Spec Kit ($why)"
+        }
+        else {
+            $foreign = @($declared | Where-Object { $_ -ne 'harness-pipeline' } | Select-Object -Unique) -join ', '
+            $whose = if ($foreign) { "hooks from: $foreign" } else { 'hooks or extensions this harness does not own' }
+            Add-Result '.specify/extensions.yml' 'MANUAL' "left alone - it carries $whose; merge speckit/extensions.yml by hand"
+        }
+    }
 }
 else {
     Add-Result '.specify/extensions.yml' 'PENDING' 'run `specify init` first, then re-run install.ps1'

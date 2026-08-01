@@ -2,15 +2,37 @@
 #
 # Spec Kit (github/spec-kit, MIT) is a pinned runtime DEPENDENCY, not vendored.
 # It owns specify → clarify → checklist → plan → tasks → analyze. This harness
-# owns alignment (before) and the gates (after). These four hooks are the seam.
+# owns alignment (before) and the gates (after). These three hooks are the seam.
 #
 # Install:
 #   uv tool install specify-cli --from git+https://github.com/github/spec-kit.git@v0.8.14
 #   specify init --here --integration claude        # or --integration cursor-agent
-#   cp speckit/extensions.yml .specify/extensions.yml
+#   pwsh ./install.ps1 <repo>                        # writes this file, see below
 #
 # Spec Kit supports both target platforms natively, which is why this harness
 # does not reimplement the spec machinery for either one.
+#
+# install.ps1 will only write this file over one that is pristine (as `specify
+# init` leaves it) or previously written by this harness. A file carrying any
+# other extension's hooks is reported for manual merge instead of overwritten -
+# a registered extension's hooks live here too, and clobbering them disables it.
+#
+# WHY THERE IS NO after_refactor HOOK
+#
+# A hook only fires if a Spec Kit core command reads it, and there are nine such
+# commands: analyze, checklist, clarify, constitution, implement, plan, specify,
+# tasks, taskstoissues. `refactor` is a harness stage, not one of them, so no
+# `after_refactor` event is ever emitted and a hook registered against it is
+# silently dead. /architect is chained by the refactor skill's own handoff
+# block instead. Do not re-add it here.
+
+# Spec Kit's own schema. It defaults both of these when absent, but writing them
+# keeps this file the same shape `specify init` produces. `installed` is the
+# extension lifecycle list - this harness registers no extension, so it stays
+# empty, and an existing non-empty one is never overwritten.
+installed: []
+settings:
+  auto_execute_hooks: true
 
 hooks:
   # Alignment is MANDATORY and runs before any spec exists. Registered as a
@@ -31,19 +53,14 @@ hooks:
       optional: false
       description: Cross-artifact consistency check before human gate 1
 
-  # Complexity, duplication, and property tests once the code works.
+  # Complexity, duplication, and property tests once the code works. The last
+  # stage, /architect (mutation), follows from the refactor skill's own handoff
+  # rather than a hook - see the note at the top of this file.
   after_implement:
     - extension: harness-pipeline
       command: refactor
       optional: false
       description: Complexity <= gates.complexity.refactor, deduplication, property tests
-
-  # Mutation is last because it is the most expensive and the most conclusive.
-  after_refactor:
-    - extension: harness-pipeline
-      command: architect
-      optional: false
-      description: Stryker mutation >= gates.mutation.threshold, full suite
 
 # Every hook is `optional: false` on purpose. An optional gate is a suggestion,
 # and a suggestion is what this harness exists to replace. Skipping one is a

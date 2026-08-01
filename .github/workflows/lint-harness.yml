@@ -135,6 +135,13 @@ jobs:
         shell: pwsh
         run: ./packs/dotnet/scripts/Test-HarnessConfig.ps1
 
+      # Both directions again. Overwriting extensions.yml unconditionally
+      # disables any registered Spec Kit extension silently, and refusing to
+      # write it at all means the pipeline chaining never installs.
+      - name: Spec Kit extensions.yml is written, refreshed, or left alone
+        shell: pwsh
+        run: ./packs/dotnet/scripts/Test-SpecKitExtension.ps1
+
       # Prose may quote a threshold, but only next to its key and only if the
       # number is right. Docs quoting a stale threshold is how a team ends up
       # believing the bar is 6 while the gate enforces 10.
