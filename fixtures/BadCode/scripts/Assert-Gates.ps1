@@ -116,15 +116,28 @@ if ($Expect -eq 'Fail') {
 
     if ((Test-Path $stub) -and (Test-Path $gate)) {
         $env:HARNESS_VULN_FIXTURE = $stub
-        & pwsh -NoProfile -File $gate *> $null
+        $gateOutput = & pwsh -NoProfile -File $gate 2>&1 | Out-String
         $actual = $LASTEXITCODE
         Remove-Item Env:\HARNESS_VULN_FIXTURE -ErrorAction SilentlyContinue
 
-        if ($actual -eq 1) {
-            Write-Host ("  ok    {0,-22} exit 1 (parsed the stubbed advisories)" -f 'vulnerable-packages')
+        # Exit code alone proves nothing here. A parse error mid-document also
+        # exits 1, so "exit 1" cannot distinguish "found the advisories" from
+        # "crashed before reading them" - the same trap as GATE NOT WIRED.
+        # The stub describes exactly $expectedFindings advisories; assert the
+        # count the gate actually reported.
+        $expectedFindings = 2
+        $reported = if ($gateOutput -match 'FAIL: (\d+) vulnerable package reference') { [int]$Matches[1] } else { -1 }
+
+        if ($actual -eq 1 -and $reported -eq $expectedFindings) {
+            Write-Host ("  ok    {0,-22} exit 1, parsed {1} stubbed advisories" -f 'vulnerable-packages', $reported)
+        }
+        elseif ($reported -lt 0) {
+            Write-Host ("  FAIL  {0,-22} exit {1} but reported no finding count - the gate did not parse the stub" -f 'vulnerable-packages', $actual) -ForegroundColor Red
+            Write-Host ($gateOutput -split "`r?`n" | Select-Object -First 5 | ForEach-Object { "        $_" }) -ForegroundColor DarkGray
+            $failures++
         }
         else {
-            Write-Host ("  FAIL  {0,-22} exit {1}, expected 1" -f 'vulnerable-packages', $actual) -ForegroundColor Red
+            Write-Host ("  FAIL  {0,-22} exit {1}, parsed {2} advisories, expected {3}" -f 'vulnerable-packages', $actual, $reported, $expectedFindings) -ForegroundColor Red
             $failures++
         }
     }
