@@ -104,7 +104,12 @@ if (Test-Path $harnessFile) {
     # Settings are the repo's; the version stamp is ours. Rewriting only that
     # one line means an upgrade is visible without touching anyone's thresholds.
     $existing = Get-Content -LiteralPath $harnessFile
-    $previous = ($existing | Select-String -Pattern '^harnessVersion:\s*(.+)$').Matches.Groups[1].Value
+    # A harness.yml predating version stamping has no harnessVersion line at all,
+    # so Select-String returns nothing and reading .Matches on it throws under
+    # Set-StrictMode. The branch below already handles the absent line - this just
+    # has to reach it, with $previous left null so the versions compare unequal.
+    $stamp = $existing | Select-String -Pattern '^harnessVersion:\s*(.+)$' | Select-Object -First 1
+    $previous = if ($stamp) { $stamp.Matches.Groups[1].Value } else { $null }
 
     if ($previous -eq $harnessVersion) {
         Add-Result 'harness.yml' 'OK' "already at $harnessVersion - your settings untouched"
