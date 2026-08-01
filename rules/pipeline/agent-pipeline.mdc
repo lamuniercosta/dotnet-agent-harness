@@ -10,13 +10,13 @@ alwaysApply: true
 0. **Task intake** — `/task <issue>` (the entry step): read the GitHub issue with `gh` and create the `{feature|bug|hotfix}/{issue}-{slug}` branch off the remote's default branch
 1. **Alignment (MANDATORY)** — `/grill-with-docs`: question the development, settle vocabulary in `CONTEXT.md` + ADRs, and write `specs/<feature>/brief.md`. Runs before any spec or code — never skipped
 2. **Formal spec** — `/speckit-specify`, `/speckit-clarify`, `/speckit-checklist`, `/speckit-plan`, `/speckit-tasks`, `/speckit-analyze`
-3. **Human gate 1** — approve spec, plan, tasks
+3. **Human gate 1** *(5–10 min)* — approve spec, plan, tasks
 4. **Gherkin** *(OPTIONAL — opt-in)* — `/gherkin` → `acceptance/*.feature`. Skipped unless the repo has adopted acceptance tests (see the policy below)
-5. **Human gate 2** *(only if the Gherkin stage ran)* — spot-check Gherkin before implementation
+5. **Human gate 2** *(5 min, only if the Gherkin stage ran)* — spot-check Gherkin before implementation
 6. **Implement** — `/implement` (TDD optional; unit + integration tests must pass)
 7. **Refactor** — `/refactor` (complexity ≤ `gates.complexity.refactor`, property tests)
 8. **Architect** — `/architect` (Stryker mutation ≥ `gates.mutation.threshold`; Gherkin mutation only if acceptance tests exist)
-9. **Human gate 3** — spot-check code before PR
+9. **Human gate 3** *(10 min)* — spot-check code before PR
 10. **Ship** — `/ship-review`, then `./scripts/rebase-task-branch.ps1 -Push`, then open the PR
 
 Thresholds come from `harness.yml`. Never hardcode one in a prompt or a script.
@@ -35,6 +35,28 @@ Acceptance tests (Gherkin + Reqnroll) are **opt-in**. Skip Stage 4, Human gate 2
 - A surviving mutant is a missing test. Route it back to `/implement` — **never lower the threshold to go green**
 - Never open a PR without rebasing onto the latest default branch first
 - **A gate that could not run has not passed.** Report it as SKIP with remediation, never fold it into a green verdict
+
+## Failure Routing
+
+A failing gate names the stage that owns the fix. Going forward from where you are
+leaves the cause in place; the table says where to go back to.
+
+| Failure | Symptom | Route to |
+|---|---|---|
+| Spec ambiguity | `/speckit-analyze` reports CRITICAL against the constitution | `/speckit-clarify` → `/speckit-plan` |
+| Missing task coverage | Analyze finds a gap between `tasks.md` and `spec.md` | `/speckit-tasks` |
+| Weak Gherkin *(opt-in only)* | Scenario is vague or not testable as written | `/gherkin` |
+| Acceptance gap *(opt-in only)* | Reqnroll scenario fails, or its binding is missing | `/implement` |
+| Unit or integration test gap | `dotnet test` failure | `/implement` |
+| Complexity over the gate | CA1502 above `gates.complexity.refactor` | `/refactor` — extract helpers, early returns, guard clauses |
+| Duplication | InspectCode `DuplicatedCode` | `/refactor` |
+| Property counterexample | FsCheck shrinks to a failing case | `/refactor` — the invariant or the code is wrong |
+| Code mutation survivor | Stryker below `gates.mutation.threshold` | `/implement` or `/refactor` |
+| Gherkin mutation survivor *(opt-in only)* | A mutated `Then` step still passes | `/implement` — strengthen the binding |
+| Coverage gap | Uncovered branch in changed files | `/implement` |
+
+Never route a failure to the threshold. Lowering `gates.*` to clear a gate converts a
+finding into a silence, and the next run reports green having verified less.
 
 ## Orchestration
 
@@ -63,7 +85,7 @@ Start non-trivial tasks by consulting **`/using-agent-skills`** — the router t
 - `/testing`, `/test-engineer` — test strategy, coverage-gap analysis, Prove-It tests
 - `/verify` — ad-hoc pre-PR readiness runner wrapping the gate scripts
 - `/diagnosing-bugs` — hard bugs, flakes, performance regressions
-- `/code-review` — three-axis (Risk + Standards + Spec) diff review
+- `/code-review` — three-axis (Risk + Standards + Spec) diff review. Run it **after Stage 7 (`/refactor`), before Stage 8 (`/architect`)**: the code is structurally settled by then, and mutation is the most expensive stage to spend on code a reviewer would tell you to delete. Non-gated — it reports findings, it does not pass or fail
 - `/ship-review` — pre-PR fan-out after `/verify`, feeding human gate 3
 - `/k6-load-testing` — performance/SLA load tests in `tests/load/`
 - `/improve-codebase-architecture` — feed it Stryker survivors and complexity hot spots
