@@ -139,6 +139,12 @@ try {
         }
         finally {
             Move-Item -Path $backupPath -Destination $s.File.FullName -Force
+            # The restore preserves the ORIGINAL timestamp, which is now older
+            # than the code-behind generated from the mutated file - so an
+            # up-to-date check would skip regeneration and leave the mutation
+            # compiled into the binary. Touch it so the final rebuild below
+            # actually regenerates.
+            (Get-Item -LiteralPath $s.File.FullName).LastWriteTime = Get-Date
         }
     }
 
