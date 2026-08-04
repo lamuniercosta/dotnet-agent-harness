@@ -115,12 +115,20 @@ jobs:
       #
       # Without this step only the green half runs, and a mutation gate that
       # never caught anything would look healthy.
+      #
+      # The boundary is asserted at TWO levels now: the unit test below and the
+      # acceptance scenario in specs/discount.feature. Weakening only the unit
+      # test leaves the acceptance scenario to kill the boundary mutant, so the
+      # feature file is moved away for the duration too - "inadequate" has to
+      # mean inadequate at every level.
       - name: Mutation must FAIL when the test is inadequate
         shell: pwsh
         working-directory: fixtures/BadCode
         run: |
           $test = 'Bad.Tests/DiscountTests.cs'
           $original = Get-Content -LiteralPath $test -Raw
+          $feature = 'specs/discount.feature'
+          Move-Item -LiteralPath $feature -Destination "$feature.bak"
 
           # Drop the boundary assertion; keep the two far-from-threshold cases.
           # Line coverage stays 100%, so only mutation can see the difference.
@@ -181,4 +189,5 @@ jobs:
           }
           finally {
             Set-Content -LiteralPath $test -Value $original -NoNewline -Encoding UTF8
+            Move-Item -LiteralPath "$feature.bak" -Destination $feature
           }
