@@ -157,6 +157,13 @@ jobs:
         shell: pwsh
         run: ./packs/dotnet/scripts/Test-ThresholdDocs.ps1
 
+      # The gate crashed on the last scenario of every feature file and had
+      # never run; these are the cases that broke, asserted against canned
+      # content with no Reqnroll and no build.
+      - name: Gherkin mutation reassembles feature files losslessly
+        shell: pwsh
+        run: ./packs/dotnet/scripts/Test-GherkinMutation.ps1
+
       - name: install.ps1 -WhatIf writes nothing
         shell: pwsh
         run: |
