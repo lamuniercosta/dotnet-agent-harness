@@ -19,6 +19,7 @@ harness is built to prevent.
 | Security analyzers | SQL built by string concatenation from a parameter (CA2100) | `Bad/UserLookup.cs` |
 | InspectCode | a duplicated block across two methods | `Bad/Duplicated.cs` |
 | Mutation (Stryker) | a boundary with no test asserting it — the mutant survives | `Bad/Discount.cs` |
+| Mutation (Gherkin) | **swapped in** — see below | `specs/discount.feature` |
 | Vulnerable packages | **stubbed** — see below | `stub-vulnerable.json` |
 
 ## Why the vulnerable-package gate is stubbed
@@ -36,6 +37,21 @@ script parses it, classifies severity, and exits 1. That covers the part which
 could plausibly break — the parsing and threshold logic. It does **not** cover
 the `dotnet` CLI invocation itself, and this README says so rather than
 implying end-to-end coverage that does not exist.
+
+## Why the Gherkin mutation violation is swapped in
+
+The committed fixture carries **asserting** Reqnroll bindings
+(`Bad.AcceptanceTests/DiscountSteps.cs`) for the two boundary scenarios in
+`specs/discount.feature`, and the gate must report **no survivors** against them.
+
+The surviving-mutant direction is proven from the fixed state, like the property
+and Stryker gates, for the same reason: the broken fixture does not compile, so
+the gate would die at its own build step and prove nothing. `Assert-Gates.ps1`
+temporarily swaps the bindings for a catch-all `[Then("(.*)")]` that matches the
+mutation sentinel and asserts nothing — the shape of binding the gate exists to
+catch — and asserts the gate reports exactly **2 survivors**, by count, not by
+exit code. A crashed run, a build failure, and a real survivor all exit 1; only
+the reported count distinguishes them.
 
 ## Two commits, not two directories
 

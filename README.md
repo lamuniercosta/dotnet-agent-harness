@@ -230,18 +230,13 @@ pwsh ./packs/dotnet/scripts/Test-ThresholdDocs.ps1   # docs vs harness.yml
 The guard's suite includes the escaped-quote payload that defeats a `grep`-based hook —
 a guard that is trusted but bypassable is worse than no guard.
 
-### Two honest limitations
+### One honest limitation
 
 **The vulnerable-package gate is proven against a canned advisory document**, not a real
 CVE. Committing a knowingly-vulnerable package to a public repo would mean permanent
 Dependabot alerts on a repo meant to demonstrate good practice. The stub exercises the
 parsing, severity classification, and exit code — not the `dotnet` CLI invocation itself.
 See [`fixtures/BadCode/README.md`](fixtures/BadCode/README.md).
-
-**Gherkin mutation has no fixture.** Acceptance tests are opt-in and off by default, so
-that gate reports SKIPPED rather than being exercised. Five of the six gates are proven
-end to end; this one is not, and saying so is cheaper than a fixture for a path most
-consumers never enable.
 
 ## What is deliberately absent
 
