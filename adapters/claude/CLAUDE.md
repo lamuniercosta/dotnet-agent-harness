@@ -42,9 +42,12 @@ contradicts the repo, the repo wins — say so rather than following it silently
 
 `harness.yml` at the repo root is the entire configuration surface — thresholds,
 base branch, tracker, agent model tiers. It is the **single source of truth**:
-`CodeMetricsConfig.txt`, `stryker-config.json`, the `.editorconfig` gate
-severities, and the constitution's gates article are all rendered from it by
-`install.ps1`.
+`CodeMetricsConfig.txt`, `stryker-config.json`, and the `.editorconfig` gate
+severities are all rendered from it by `install.ps1` on every run.
+
+`.specify/memory/constitution.md` is rendered **only when absent**. Once it
+exists it is the project's own law and no install touches it again — so if it
+quotes a threshold, that number is yours to keep in step with `harness.yml`.
 
 Never hardcode a threshold, and never edit a generated file — the next install
 overwrites it.

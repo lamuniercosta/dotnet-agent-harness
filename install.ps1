@@ -69,6 +69,38 @@ function Add-Result {
     $script:results += [PSCustomObject]@{ Item = $Item; Status = $Status; Note = $Note }
 }
 
+function Get-MarkdownSection {
+    <#
+    Returns the lines of one `## Heading` section, heading included, up to the
+    next heading at the same level or above. Used to lift the always-on rule
+    imports out of the Claude adapter so that list lives in exactly one place.
+    Returns an empty array when the heading is absent - callers must treat that
+    as a failure rather than as an empty section.
+    #>
+    param([string]$Path, [string]$Heading)
+
+    if (-not (Test-Path $Path)) { return @() }
+
+    $lines = @(Get-Content -LiteralPath $Path)
+    $start = -1
+
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i].Trim() -eq $Heading) { $start = $i; break }
+    }
+    if ($start -lt 0) { return @() }
+
+    $section = @($lines[$start])
+    for ($j = $start + 1; $j -lt $lines.Count; $j++) {
+        if ($lines[$j] -match '^#{1,2} ') { break }
+        $section += $lines[$j]
+    }
+
+    while ($section.Count -gt 1 -and $section[-1] -match '^\s*$') {
+        $section = @($section[0..($section.Count - 2)])
+    }
+    return $section
+}
+
 function Copy-Tree {
     <# Mirrors a directory the harness owns. Refreshed every run. #>
     param([string]$Source, [string]$Dest, [string]$Label)
@@ -211,17 +243,44 @@ if ($Platform -in @('claude', 'both')) {
     }
     Add-Result '.claude/settings.json' 'SYNCED' 'permissions + hook wiring'
 
-    # CLAUDE.md is the repo's own front page - never clobber it. When one exists,
-    # report what to add rather than overwriting someone's instructions.
+    # CLAUDE.md is the repo's own front page - never clobber it. But skipping it
+    # entirely is not harmless either: rules live in .cursor/rules because only
+    # Cursor auto-loads them by glob, and Claude Code reaches them ONLY through
+    # these @imports. A repo that already had a CLAUDE.md therefore loaded no
+    # harness rules at all on Claude Code, silently - the manual note this used to
+    # print was never acted on in either repo that adopted the harness.
+    #
+    # So the import block is appended rather than reported. Their content is
+    # untouched and the addition is reversible, which is the same trade-off
+    # already made for .editorconfig in install-gates.ps1.
     $claudeMd = Join-Path $TargetRepo 'CLAUDE.md'
-    if (Test-Path $claudeMd) {
-        Add-Result 'CLAUDE.md' 'SKIPPED' 'exists - add the @imports from adapters/claude/CLAUDE.md by hand'
-    }
-    else {
+    $adapterClaudeMd = Join-Path $harnessRoot 'adapters/claude/CLAUDE.md'
+
+    if (-not (Test-Path $claudeMd)) {
         if ($PSCmdlet.ShouldProcess($claudeMd, 'install CLAUDE.md')) {
-            Copy-Item (Join-Path $harnessRoot 'adapters/claude/CLAUDE.md') $claudeMd -Force
+            Copy-Item $adapterClaudeMd $claudeMd -Force
         }
         Add-Result 'CLAUDE.md' 'ADDED' 'imports the rules from .cursor/rules'
+    }
+    elseif ((Get-Content -LiteralPath $claudeMd -Raw) -match '(?m)^@\.cursor/rules/') {
+        Add-Result 'CLAUDE.md' 'SKIPPED' 'imports already present - your instructions untouched'
+    }
+    else {
+        # Parsed out of the adapter rather than hardcoded here, so the list of
+        # rules exists in one place. lint-harness already verifies every import in
+        # that file resolves, which now guards the appended copy too.
+        $block = Get-MarkdownSection -Path $adapterClaudeMd -Heading '## Always-on rules'
+        $importCount = @($block | Where-Object { $_ -match '^@\.cursor/rules/' }).Count
+
+        if ($importCount -eq 0) {
+            Add-Result 'CLAUDE.md' 'MANUAL' "could not read the import block from $adapterClaudeMd - add it by hand"
+        }
+        else {
+            if ($PSCmdlet.ShouldProcess($claudeMd, 'append the always-on rule imports')) {
+                Add-Content -LiteralPath $claudeMd -Value (@('') + $block) -Encoding UTF8
+            }
+            Add-Result 'CLAUDE.md' 'APPENDED' "$importCount rule imports - existing content untouched"
+        }
     }
 
     # Claude Code reads MCP config from .mcp.json at the REPO ROOT, not .claude/.
@@ -446,7 +505,81 @@ else {
     Add-Result '.specify/extensions.yml' 'PENDING' 'run `specify init` first, then re-run install.ps1'
 }
 
-# ── 5e. CONTEXT.md — the project's ubiquitous language ───────────────────────
+# ── 5e. Constitution — the project's non-negotiables ─────────────────────────
+# Read by /implement and referenced by the pipeline, so a repo without one has a
+# dangling pointer. Rendered only when ABSENT: a real constitution is the
+# project's own law and outranks anything shipped here.
+#
+# The template is stack-neutral by CI contract (lint-harness rejects hardcoded
+# stack names), so only three substitutions are needed. STACK_CONSTRAINTS is
+# dropped rather than filled - the same treatment the lint gives it - because
+# the stack is the project's to declare, not the installer's to guess.
+function Get-TargetFrameworkLabel {
+    <#
+    Most common TargetFramework across the repo, ties broken by the highest.
+    Returns $null when nothing declares one, so the caller can say so rather
+    than writing a guess into a governance document.
+    #>
+    param([string]$Repo)
+
+    $files = @(Join-Path $Repo 'Directory.Build.props') +
+             @(Get-ChildItem -LiteralPath $Repo -Recurse -File -Filter *.csproj -ErrorAction SilentlyContinue |
+                 Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } |
+                 Select-Object -ExpandProperty FullName)
+
+    $found = @()
+    foreach ($f in $files) {
+        if (-not (Test-Path $f)) { continue }
+        foreach ($m in [regex]::Matches((Get-Content -LiteralPath $f -Raw), '<TargetFrameworks?>([^<]+)</')) {
+            $found += ($m.Groups[1].Value -split ';' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        }
+    }
+    if ($found.Count -eq 0) { return $null }
+
+    $tfm = $found |
+        Group-Object |
+        Sort-Object @{ Expression = 'Count'; Descending = $true }, @{ Expression = 'Name'; Descending = $true } |
+        Select-Object -First 1 -ExpandProperty Name
+
+    if ($tfm -match '^net(\d+)\.(\d+)$') { return ".NET $($Matches[1])" }
+    return $tfm
+}
+
+if (Test-Path $specifyDir) {
+    $constitution = Join-Path $specifyDir 'memory/constitution.md'
+    $constitutionSrc = Join-Path $harnessRoot 'packs/dotnet/templates/constitution.md'
+
+    if (Test-Path $constitution) {
+        Add-Result '.specify/memory/constitution.md' 'SKIPPED' 'exists - your constitution is the project law, not ours'
+    }
+    elseif (-not (Test-Path $constitutionSrc)) {
+        Add-Result '.specify/memory/constitution.md' 'MISSING' "template not found: $constitutionSrc"
+    }
+    else {
+        $solution = Get-ChildItem -LiteralPath $TargetRepo -File -Filter *.sln* -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+        $projectName = if ($solution) { [IO.Path]::GetFileNameWithoutExtension($solution.Name) } else { Split-Path $TargetRepo -Leaf }
+
+        $tfmLabel = Get-TargetFrameworkLabel -Repo $TargetRepo
+        $tfmNote = if ($tfmLabel) { $tfmLabel } else { 'unknown TFM - set it by hand' }
+        if (-not $tfmLabel) { $tfmLabel = 'the target framework' }
+
+        $rendered = @(Get-Content -LiteralPath $constitutionSrc) |
+            Where-Object { $_ -notmatch '\{\{STACK_CONSTRAINTS\}\}' } |
+            ForEach-Object { $_ -replace '\{\{PROJECT_NAME\}\}', $projectName -replace '\{\{TFM_LABEL\}\}', $tfmLabel }
+
+        if ($PSCmdlet.ShouldProcess($constitution, 'render constitution')) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $constitution -Parent) | Out-Null
+            Set-Content -LiteralPath $constitution -Value $rendered -Encoding UTF8
+        }
+        Add-Result '.specify/memory/constitution.md' 'RENDERED' "$projectName, $tfmNote"
+    }
+}
+else {
+    Add-Result '.specify/memory/constitution.md' 'PENDING' 'run `specify init` first, then re-run install.ps1'
+}
+
+# ── 5f. CONTEXT.md — the project's ubiquitous language ───────────────────────
 # Referenced by the constitution, CLAUDE.md, and /grill-with-docs. Without it
 # those are dangling pointers on day one. Seeded once, never overwritten - a
 # real glossary must never be clobbered by a re-install.
@@ -483,6 +616,24 @@ _Avoid_: Job, task, message
     Add-Result 'CONTEXT.md' 'ADDED' 'populated by /grill-with-docs'
 }
 
+# ── 5g. Templates offered but not installed ──────────────────────────────────
+# Shipped, useful, and deliberately not copied: a CI workflow spends the
+# adopter's Actions minutes, and a compose file depends on a stack the harness
+# does not know. Reported so they are discoverable - previously they existed
+# only for a reader who got to the end of the README.
+#
+# AVAILABLE is deliberately outside the SKIPPED/MANUAL/MISSING set below. These
+# need no action, and a footer telling every adopter they have unfinished work
+# is how a real warning gets ignored.
+foreach ($offer in @(
+        @{ Item = 'packs/dotnet/templates/workflows/codeql.yml'; Note = 'optional post-PR dataflow analysis; free on public repos' },
+        @{ Item = 'packs/dotnet/templates/compose/'; Note = 'mongodb, postgres, redis, sqlserver - for Testcontainers-backed integration tests' }
+    )) {
+    if (Test-Path (Join-Path $harnessRoot $offer.Item)) {
+        Add-Result $offer.Item 'AVAILABLE' $offer.Note
+    }
+}
+
 # ── 6. Report ────────────────────────────────────────────────────────────────
 Write-Output ''
 Write-Output "dotnet-agent-harness v$harnessVersion -> $TargetRepo   (platform: $Platform)"
@@ -501,7 +652,15 @@ if ($needsAttention.Count -gt 0) {
 Write-Output 'Next:'
 Write-Output '  dotnet tool restore                       # provisions jb + stryker'
 Write-Output '  specify init --here --integration claude   # or --integration cursor-agent'
+Write-Output '  ./scripts/run-roslyn-analyzers.ps1 -All    # audit the code you already have'
 Write-Output '  /task <issue>                             # start the pipeline'
+Write-Output ''
+# The gates analyse files changed against the base branch. Installing changes no
+# .cs file, so the first no-arg run passes having checked nothing - correct, and
+# misleading at the one moment it matters most. Say so here rather than letting a
+# green light on an unaudited codebase be someone's first impression.
+Write-Output 'The gates check CHANGED files by default, and installing changed none of yours.'
+Write-Output 'Run them once with -All to get a baseline on the code that is already here.'
 
 # Explicit, and load-bearing.
 #
