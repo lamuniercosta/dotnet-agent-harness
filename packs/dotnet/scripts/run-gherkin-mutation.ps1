@@ -1,6 +1,13 @@
 #!/usr/bin/env pwsh
 # Mutates Then clauses in acceptance .feature files and verifies Reqnroll tests fail.
 # Exits 1 when mutation survivors are found (tests still pass after mutation); exits 0 when all killed.
+#
+# "Killed" is only meaningful against a baseline: every scenario is first run
+# UNMUTATED and must pass, because a scenario that fails anyway - or a filter
+# that matched zero tests - makes the mutated run's failure uninformative.
+# Reqnroll compiles .feature files into code-behind at build time, so the
+# mutated run rebuilds before testing; without that rebuild the mutation never
+# executes and every mutant "survives".
 
 [CmdletBinding()]
 param(
@@ -11,13 +18,15 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_gate-common.ps1')
+. (Join-Path $PSScriptRoot '_gherkin-mutation-lib.ps1')
 
 if ($Help) {
     Write-Output @"
 Usage: run-gherkin-mutation.ps1 [OPTIONS]
 
-For each scenario in <SpecsPath>/**/*.feature, temporarily mutates the first
-Then step, runs acceptance tests, and restores the file. Tests MUST fail after mutation.
+For each scenario in <SpecsPath>/**/*.feature: run it unmutated (baseline must
+pass), then temporarily mutate the first Then step, rebuild, and re-run. Tests
+MUST fail after mutation.
 
 OPTIONS:
   -Project <path>     Acceptance test project (default: auto-discovered by name)
@@ -29,56 +38,6 @@ EXAMPLES:
   ./scripts/run-gherkin-mutation.ps1 -Project tests/My.AcceptanceTests/My.AcceptanceTests.csproj
 "@
     exit 0
-}
-
-function Get-ScenarioLineRanges {
-    param([string[]]$Lines)
-
-    $ranges = @()
-    $start = -1
-    $name = ''
-
-    for ($i = 0; $i -lt $Lines.Count; $i++) {
-        $line = $Lines[$i]
-
-        if ($line -match '^\s*Scenario(?:\s+Outline)?:\s*(.+)') {
-            if ($start -ge 0) {
-                $ranges += [PSCustomObject]@{ Name = $name; Start = $start; End = $i - 1 }
-            }
-
-            $name = $Matches[1].Trim()
-            $start = $i
-        }
-    }
-
-    if ($start -ge 0) {
-        $ranges += [PSCustomObject]@{ Name = $name; Start = $start; End = $Lines.Count - 1 }
-    }
-
-    return $ranges
-}
-
-function Get-MutatedLines {
-    param([string[]]$Lines)
-
-    $result = @()
-    $mutatedThen = $false
-
-    foreach ($line in $Lines) {
-        if (-not $mutatedThen -and $line -match '^\s*Then\s+') {
-            $result += '    Then the mutation sentinel expectation must fail'
-            $mutatedThen = $true
-        }
-        else {
-            $result += $line
-        }
-    }
-
-    if (-not $mutatedThen) {
-        $result += '    Then the mutation sentinel expectation must fail'
-    }
-
-    return $result
 }
 
 $repoRoot = Get-RepoRoot
@@ -112,49 +71,87 @@ try {
         Write-Host 'Gherkin mutation: build failed.'
         exit 1
     }
-}
-finally {
-    Pop-Location
-}
 
-$survivors = @()
+    $scenarios = @()
+    foreach ($featureFile in $featureFiles) {
+        $lines = @(Get-Content -Path $featureFile.FullName)
+        foreach ($range in @(Get-ScenarioLineRanges -Lines $lines)) {
+            $scenarios += [PSCustomObject]@{
+                File  = $featureFile
+                Lines = $lines
+                Name  = $range.Name
+                Start = $range.Start
+                End   = $range.End
+            }
+        }
+    }
 
-foreach ($featureFile in $featureFiles) {
-    $originalLines = @(Get-Content -Path $featureFile.FullName)
-    $ranges = Get-ScenarioLineRanges -Lines $originalLines
+    # Baseline first, per scenario. Non-zero from `dotnet test` can mean the
+    # filter matched nothing rather than a failing test, and on some SDKs a
+    # zero-match run exits 0 - so the message is checked on both paths, the
+    # same trap run-property-tests.ps1 documents. Either way the gate cannot
+    # conclude anything: say so and exit 1 rather than reporting a pass it did
+    # not earn.
+    foreach ($s in $scenarios) {
+        $baseline = dotnet test $acceptanceProject --no-build --verbosity quiet --filter "DisplayName~$($s.Name)" 2>&1 | ForEach-Object { $_.ToString() }
+        $noMatch = @($baseline | Where-Object { $_ -match 'No test matches the given testcase filter' })
+        if ($LASTEXITCODE -ne 0 -or $noMatch.Count -gt 0) {
+            Write-Host "Gherkin mutation: GATE COULD NOT RUN - baseline for scenario '$($s.Name)' did not pass unmutated."
+            Write-Host '  A scenario that fails before mutation - or a filter matching no test - makes the mutated run uninformative.'
+            Write-Host '  Fix the scenario or the DisplayName filter first; the gate asserts kills against a green baseline only.'
+            exit 1
+        }
+    }
 
-    foreach ($range in $ranges) {
-        $scenarioLines = $originalLines[$range.Start..$range.End]
-        $mutatedScenario = Get-MutatedLines -Lines $scenarioLines
-        $mutatedFile = @($originalLines[0..($range.Start - 1)] + $mutatedScenario + $originalLines[($range.End + 1)..($originalLines.Count - 1)])
+    $survivors = @()
 
-        $backupPath = "$($featureFile.FullName).mutation.bak"
-        Copy-Item -Path $featureFile.FullName -Destination $backupPath -Force
+    foreach ($s in $scenarios) {
+        $mutatedScenario = Get-MutatedLines -Lines $s.Lines[$s.Start..$s.End]
+        $mutatedFile = Get-MutatedFileLines -Lines $s.Lines -Start $s.Start -End $s.End -MutatedScenario $mutatedScenario
+
+        $backupPath = "$($s.File.FullName).mutation.bak"
+        Copy-Item -Path $s.File.FullName -Destination $backupPath -Force
 
         try {
-            Set-Content -Path $featureFile.FullName -Value $mutatedFile -Encoding UTF8
+            Set-Content -Path $s.File.FullName -Value $mutatedFile -Encoding UTF8
 
-            $relativeFeature = $featureFile.FullName.Replace($repoRoot, '').TrimStart('\', '/')
-            Write-Host "Gherkin mutation: mutating '$($range.Name)' in $relativeFeature..."
+            $relativeFeature = $s.File.FullName.Replace($repoRoot, '').TrimStart('\', '/')
+            Write-Host "Gherkin mutation: mutating '$($s.Name)' in $relativeFeature..."
 
-            Push-Location $repoRoot
-            try {
-                dotnet test $acceptanceProject --no-build --verbosity quiet --filter "DisplayName~$($range.Name)" 2>&1 | Out-Null
-                if ($LASTEXITCODE -eq 0) {
-                    $survivors += [PSCustomObject]@{
-                        Feature  = $relativeFeature
-                        Scenario = $range.Name
-                    }
-                }
+            # The mutation only exists in the .feature file until it is
+            # compiled into new code-behind. Testing without rebuilding was the
+            # original bug: the mutated scenario still passed, because the
+            # binary still held the unmutated scenario.
+            dotnet build $acceptanceProject --verbosity quiet | Out-Null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "Gherkin mutation: GATE COULD NOT RUN - the rebuild after mutating '$($s.Name)' failed."
+                Write-Host '  The sentinel step compiles in a healthy project; a build break here means the mutation machinery, not the tests.'
+                exit 1
             }
-            finally {
-                Pop-Location
+
+            dotnet test $acceptanceProject --no-build --verbosity quiet --filter "DisplayName~$($s.Name)" 2>&1 | Out-Null
+            if ($LASTEXITCODE -eq 0) {
+                $survivors += [PSCustomObject]@{
+                    Feature  = $relativeFeature
+                    Scenario = $s.Name
+                }
             }
         }
         finally {
-            Move-Item -Path $backupPath -Destination $featureFile.FullName -Force
+            Move-Item -Path $backupPath -Destination $s.File.FullName -Force
         }
     }
+
+    # Every mutated run rebuilt the project, so the binary no longer matches
+    # the restored sources. Leave the tree clean for whatever runs next.
+    dotnet build $acceptanceProject --verbosity quiet | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'Gherkin mutation: GATE COULD NOT RUN - the final rebuild after restoring the feature files failed.'
+        exit 1
+    }
+}
+finally {
+    Pop-Location
 }
 
 if ($survivors.Count -gt 0) {

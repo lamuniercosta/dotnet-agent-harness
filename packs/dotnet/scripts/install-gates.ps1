@@ -34,6 +34,7 @@ Copied into <target-repo>:
   scripts/run-jetbrains-inspectcode.ps1
   scripts/run-property-tests.ps1
   scripts/run-gherkin-mutation.ps1
+  scripts/_gherkin-mutation-lib.ps1
   Directory.Build.props        (skipped if present)
   CodeMetricsConfig.txt        (skipped if present)
   .config/dotnet-tools.json    (skipped if present)
@@ -73,6 +74,7 @@ $gateScripts = @(
     'run-jetbrains-inspectcode.ps1',
     'run-property-tests.ps1',
     'run-gherkin-mutation.ps1',
+    '_gherkin-mutation-lib.ps1',
     'run-vulnerable-packages.ps1',
     '_harness-config.ps1'
 )
