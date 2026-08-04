@@ -174,7 +174,11 @@ public static class Percentage
 
     try {
         & dotnet build (Join-Path $Repo 'BadCode.sln') --verbosity quiet *> $null
-        & pwsh -NoProfile -File (Join-Path $Repo 'scripts/run-property-tests.ps1') *> $null
+        # Scoped to Bad.Tests: with Bad.AcceptanceTests in the solution, that
+        # assembly reports "No test matches the given testcase filter" for
+        # Category=Property, and the gate's zero-match detection would read the
+        # run as SKIPPED even though Bad.Tests ran its property tests.
+        & pwsh -NoProfile -File (Join-Path $Repo 'scripts/run-property-tests.ps1') -Project (Join-Path $Repo 'Bad.Tests/Bad.Tests.csproj') *> $null
         $propExit = $LASTEXITCODE
 
         if ($propExit -eq 1) {
@@ -187,6 +191,84 @@ public static class Percentage
     }
     finally {
         Set-Content -LiteralPath $percentage -Value $original -Encoding UTF8 -NoNewline
+        & dotnet build (Join-Path $Repo 'BadCode.sln') --verbosity quiet *> $null
+    }
+}
+
+# The Gherkin mutation gate needs isolating for the same reason: in the broken
+# state the build fails, so the gate dies at its own build step and proves
+# nothing. Both directions are therefore proven from the FIXED state.
+#
+# Assert the FINDING, never the exit code alone: a crash, a build failure, a
+# red baseline, and a real survivor all exit 1, and "passed (no survivors)"
+# after executing zero tests is a pass the gate did not earn.
+if ($Expect -eq 'Pass') {
+    $gherkinGate = Join-Path $Repo 'scripts/run-gherkin-mutation.ps1'
+
+    $checks++
+    $killedOutput = & pwsh -NoProfile -File $gherkinGate 2>&1 | Out-String
+    $killedExit = $LASTEXITCODE
+
+    if ($killedExit -eq 0 -and $killedOutput -match 'passed \(no survivors\)') {
+        Write-Host ("  ok    {0,-22} exit 0, no survivors against asserting bindings" -f 'gherkin-mutation')
+    }
+    else {
+        Write-Host ("  FAIL  {0,-22} exit {1}, expected 0 with 'passed (no survivors)'" -f 'gherkin-mutation', $killedExit) -ForegroundColor Red
+        Write-Host ($killedOutput -split "`r?`n" | Select-Object -Last 10 | ForEach-Object { "        $_" }) -ForegroundColor DarkGray
+        $failures++
+    }
+
+    # The survivor direction: swap the asserting bindings for a catch-all that
+    # matches the mutation sentinel and asserts nothing. Both scenarios then
+    # still pass after mutation - the gate must report exactly 2 survivors.
+    $checks++
+    $steps = Join-Path $Repo 'Bad.AcceptanceTests/DiscountSteps.cs'
+    $originalSteps = Get-Content -LiteralPath $steps -Raw
+
+    @'
+using Reqnroll;
+
+namespace Bad.AcceptanceTests;
+
+// Temporarily swapped in by Assert-Gates to prove the Gherkin mutation gate
+// fires: catch-all bindings match the mutation sentinel and assert nothing,
+// so every mutated scenario still passes and the mutant survives.
+[Binding]
+public sealed class DiscountSteps
+{
+    [Given("(.*)")]
+    public void GivenAnything(string _) { }
+
+    [When("(.*)")]
+    public void WhenAnything(string _) { }
+
+    [Then("(.*)")]
+    public void ThenAnything(string _) { }
+}
+'@ | Set-Content -LiteralPath $steps -Encoding UTF8
+
+    try {
+        $survivorOutput = & pwsh -NoProfile -File $gherkinGate 2>&1 | Out-String
+        $survivorExit = $LASTEXITCODE
+
+        $reported = if ($survivorOutput -match 'FAILED - (\d+) survivor') { [int]$Matches[1] } else { -1 }
+
+        if ($survivorExit -eq 1 -and $reported -eq 2) {
+            Write-Host ("  ok    {0,-22} exit 1, reported {1} survivors against a catch-all binding" -f 'gherkin-mutation', $reported)
+        }
+        elseif ($reported -lt 0) {
+            Write-Host ("  FAIL  {0,-22} exit {1} but reported no survivor count - cannot distinguish a survivor from a crash" -f 'gherkin-mutation', $survivorExit) -ForegroundColor Red
+            Write-Host ($survivorOutput -split "`r?`n" | Select-Object -Last 10 | ForEach-Object { "        $_" }) -ForegroundColor DarkGray
+            $failures++
+        }
+        else {
+            Write-Host ("  FAIL  {0,-22} exit {1}, reported {2} survivors, expected exit 1 with 2" -f 'gherkin-mutation', $survivorExit, $reported) -ForegroundColor Red
+            Write-Host ($survivorOutput -split "`r?`n" | Select-Object -Last 10 | ForEach-Object { "        $_" }) -ForegroundColor DarkGray
+            $failures++
+        }
+    }
+    finally {
+        Set-Content -LiteralPath $steps -Value $originalSteps -Encoding UTF8 -NoNewline
         & dotnet build (Join-Path $Repo 'BadCode.sln') --verbosity quiet *> $null
     }
 }
