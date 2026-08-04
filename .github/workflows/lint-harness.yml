@@ -142,6 +142,14 @@ jobs:
         shell: pwsh
         run: ./packs/dotnet/scripts/Test-SpecKitExtension.ps1
 
+      # CLAUDE.md's @imports are the only route by which Claude Code reaches the
+      # rules in .cursor/rules. Both repos that adopted the harness had their own
+      # CLAUDE.md, so the imports were never added and no rule loaded at all -
+      # silently, because a missing import is indistinguishable from a quiet rule.
+      - name: CLAUDE.md imports and constitution are installed, not just described
+        shell: pwsh
+        run: ./packs/dotnet/scripts/Test-InstallArtifacts.ps1
+
       # Prose may quote a threshold, but only next to its key and only if the
       # number is right. Docs quoting a stale threshold is how a team ends up
       # believing the bar is 6 while the gate enforces 10.
