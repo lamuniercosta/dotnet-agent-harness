@@ -64,7 +64,10 @@ if (-not (Get-HarnessValue 'gates.propertyTests.enabled' -RepoRoot $repoRoot)) {
 # one-element array on return, and `.Count` on the resulting string throws under
 # Set-StrictMode. A repo with exactly one test project - the common shape - would
 # crash before running anything, and the fixture's two projects hid it.
-$targets = if ($Project) {
+#                    vvv wraps the WHOLE conditional, not each branch: a branch
+# emitting a one-element array still unwraps to a string on its way out of the
+# if-expression, which is how this same trap survived being "fixed" once already.
+$targets = @(if ($Project) {
     # A solution is rejected rather than silently reinterpreted. Expanding it to
     # every test project in the repo would run projects outside the named
     # solution, so a scoped request could fail on something it never asked about.
@@ -74,11 +77,11 @@ $targets = if ($Project) {
         Write-Host '  discovered test project - each is run separately either way.'
         exit 1
     }
-    @(Resolve-BuildTarget -RepoRoot $repoRoot -Explicit $Project)
+    Resolve-BuildTarget -RepoRoot $repoRoot -Explicit $Project
 }
 else {
-    @(Get-TestProjects -RepoRoot $repoRoot)
-}
+    Get-TestProjects -RepoRoot $repoRoot
+})
 
 # No fallback to running the solution: that is the interleaved path this design
 # exists to avoid, and it would be re-entered exactly when discovery is already

@@ -51,7 +51,7 @@ Three details that carry more weight than they look:
   their own preconditions and exit 1 with remediation.
 - **Exit `0` = pass, `1` = fail, `2` = SKIPPED.** A gate with nothing to verify — **no
   `.cs` file changed against the base branch**, no property tests, no `.feature` files, or
-  switched off in config — returns 2, and nothing folds a 2 into a green verdict.
+  InspectCode switched off in config — returns 2, and nothing folds a 2 into a green verdict.
   "Skipped" and "clean" are different results, and collapsing them is exactly how a
   quality bar quietly stops existing. Re-run with `-All` when you want verification
   rather than a diff check.

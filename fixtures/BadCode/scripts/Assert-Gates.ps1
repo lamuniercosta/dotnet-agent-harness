@@ -187,6 +187,22 @@ if ($Expect -eq 'Pass') {
             $failures++
         }
 
+        # The SKIPPED direction, through the real script rather than the
+        # classifier. Bad.AcceptanceTests has no Category=Property tests, so a
+        # run scoped to it verifies nothing - which is exit 2, never 0.
+        $checks++
+        $skipOutput = & pwsh -NoProfile -File $gate -Project (Join-Path $Repo 'Bad.AcceptanceTests/Bad.AcceptanceTests.csproj') 2>&1 | Out-String
+        $skipExit = $LASTEXITCODE
+
+        if ($skipExit -eq 2 -and $skipOutput -match 'SKIPPED') {
+            Write-Host ("  ok    {0,-22} exit 2 on a project with no property tests" -f 'property-tests')
+        }
+        else {
+            Write-Host ("  FAIL  {0,-22} exit {1}, expected 2 - verifying nothing is not a pass" -f 'property-tests', $skipExit) -ForegroundColor Red
+            Write-Host ($skipOutput -split "`r?`n" | Select-Object -Last 6 | ForEach-Object { "        $_" }) -ForegroundColor DarkGray
+            $failures++
+        }
+
         $checks++
         @'
 namespace Bad;

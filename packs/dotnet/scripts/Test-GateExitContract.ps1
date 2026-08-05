@@ -251,9 +251,9 @@ try {
     #
     # The multi-assembly version of this - one project no-matching while another
     # crashes - is no longer expressible: the gate runs one project per
-    # invocation and expands a solution into its projects, so interleaved output
-    # never reaches this function. That aggregation is proven end to end by the
-    # fixture, which runs a real two-assembly solution.
+    # invocation and rejects a solution outright, so interleaved output never
+    # reaches this function. The aggregation over several projects is proven end
+    # to end by the fixture, which runs a real two-assembly solution.
     $crashedProject = @(
         'A total of 1 test files matched the specified pattern.'
         'The active test run was aborted. Reason: Test host process crashed'
@@ -284,8 +284,12 @@ try {
 
     # Matched but every one skipped: the tests exist and are tagged, so telling
     # someone to add property tests they already have sends them the wrong way.
+    # Single project, multi-targeted: matched on one framework and skipped there,
+    # no match on the other. Interleaved two-assembly input would not reach this
+    # function any more, so it is not used as a fixture for it.
     $matchedAllSkipped = @(
-        'No test matches the given testcase filter `Category=Property` in /r/Acceptance.dll'
+        'A total of 1 test files matched the specified pattern.'
+        'No test matches the given testcase filter `Category=Property` in /r/Unit/net9.0/Unit.dll'
         'Passed!  - Failed:     0, Passed:     0, Skipped:     2, Total:     2, Duration: 3 ms - Unit.dll (net8.0)'
     )
     $outcome = Get-TestRunOutcome -Output $matchedAllSkipped -ExitCode 0
@@ -307,13 +311,34 @@ try {
         '</Project>'
     )
 
-    $found = Get-TestProjects -RepoRoot $solo
-    $countable = $true
-    try { $null = @($found).Count; $null = $found.Count } catch { $countable = $false }
-
-    Assert-That 'discovery: a single test project is still countable' `
-        ($countable -and @($found).Count -eq 1) `
+    # Asserts the CALLER-SIDE contract: wrap the whole expression in @(). The
+    # function returns plain, because @() around a comma-returned array nests it
+    # instead of flattening - verified both ways round.
+    Assert-That 'discovery: one project wraps to a one-element array' `
+        (@(Get-TestProjects -RepoRoot $solo).Count -eq 1) `
         'a one-element return unwraps to a string, and .Count on it throws under StrictMode'
+
+    Assert-That 'discovery: the wrapped result is paths, not a nested array' `
+        ((@(Get-TestProjects -RepoRoot $solo))[0] -is [string]) `
+        'a nested array here makes Split-Path emit every path at once and dotnet test choke'
+
+    # ── The gate script's own exits, not just the classifier ─────────────────
+    # Everything above asserts Get-TestRunOutcome on canned strings. A regression
+    # that classified correctly and then exited wrong in the aggregation block,
+    # or restored the solution fallback, would stay green. These run the real
+    # script; both paths return before any build, so no SDK is involved.
+    $r = Invoke-Gate -Repo $repo -Script 'run-property-tests.ps1' -GateArgs @('-Project', 'BadCode.sln')
+    Assert-That 'property gate: a solution passed to -Project is rejected' `
+        ($r.Exit -eq 1 -and $r.Output -match 'not a solution') `
+        "exit $($r.Exit) - expanding it would run projects the caller never named"
+
+    # $repo holds Sample.csproj and Sloppy.cs but no test project, so discovery
+    # finds nothing. It must say so rather than falling back to the solution -
+    # that fallback is the interleaved path this design exists to avoid.
+    $r = Invoke-Gate -Repo $repo -Script 'run-property-tests.ps1'
+    Assert-That 'property gate: no discoverable test project fails loudly' `
+        ($r.Exit -eq 1 -and $r.Output -match 'no test projects found') `
+        "exit $($r.Exit) - a silent fallback to the whole solution is how the masking returns"
 }
 finally {
     foreach ($r in $repos) {
