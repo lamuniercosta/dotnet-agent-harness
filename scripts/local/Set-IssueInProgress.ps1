@@ -58,6 +58,48 @@ function Assert-GhOk {
     }
 }
 
+function Test-JsonProperty {
+    <#
+      StrictMode-safe: $null -ne $obj.Missing throws when the note property is
+      absent. Probe PSObject.Properties instead.
+    #>
+    param(
+        [AllowNull()]
+        [object]$Object,
+
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    return ($null -ne $Object) -and ($null -ne $Object.PSObject.Properties[$Name])
+}
+
+function Get-JsonPath {
+    <#
+      Walk a dotted path of note properties. Returns $null if any segment is
+      missing or null-valued — without throwing under Set-StrictMode.
+    #>
+    param(
+        [AllowNull()]
+        [object]$Object,
+
+        [Parameter(Mandatory = $true)]
+        [string[]]$Path
+    )
+
+    $current = $Object
+    foreach ($segment in $Path) {
+        if (-not (Test-JsonProperty -Object $current -Name $segment)) {
+            return $null
+        }
+        $current = $current.$segment
+        if ($null -eq $current) {
+            return $null
+        }
+    }
+    return $current
+}
+
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
     throw 'gh CLI not found. Install it (https://cli.github.com) and run: gh auth login && gh auth refresh -s project'
 }
@@ -90,6 +132,8 @@ $raw = gh api graphql `
     -F "query=@$queryFile" 2>&1 | Out-String
 
 # gh may prefix a human line before the JSON body on stderr-merged failure.
+# Take the trailing {...}; if a human line also contains '{', ConvertFrom-Json
+# fails and we fall through to Assert-GhOk with the raw output.
 $jsonText = $raw
 if ($raw -match '(?s)(\{.*\})\s*$') {
     $jsonText = $Matches[1]
@@ -99,12 +143,19 @@ $payload = $null
 try { $payload = $jsonText | ConvertFrom-Json } catch { $payload = $null }
 
 # Prefer a clear message when the issue number does not exist (gh exits 1 and
-# returns "issue": null, sometimes with a NOT_FOUND GraphQL error).
-if ($null -ne $payload `
-    -and $null -ne $payload.data `
-    -and $null -ne $payload.data.repository `
-    -and $null -eq $payload.data.repository.issue) {
+# returns "issue": null). Must not dereference missing `data` under StrictMode
+# (bad credentials return {"message":"..."} with no data key).
+$repoNode = Get-JsonPath -Object $payload -Path @('data', 'repository')
+if ($null -ne $repoNode -and (Test-JsonProperty -Object $repoNode -Name 'issue') -and $null -eq $repoNode.issue) {
     throw "Issue #$Issue not found in $Repo"
+}
+
+if ((Test-JsonProperty -Object $payload -Name 'message') -and -not (Test-JsonProperty -Object $payload -Name 'data')) {
+    throw "gh authentication/API error: $($payload.message). Try: gh auth login && gh auth refresh -s project"
+}
+
+if ($LASTEXITCODE -ne 0 -and $raw -match 'Bad credentials|HTTP 401') {
+    throw "gh authentication/API error while querying issue #$Issue. Try: gh auth login && gh auth refresh -s project"
 }
 
 Assert-GhOk -Action "querying project items for issue #$Issue (need 'project' scope: gh auth refresh -s project)" -Output $raw
@@ -113,16 +164,20 @@ if ($null -eq $payload) {
     throw "gh returned non-JSON while querying issue #$Issue`: $raw"
 }
 
-if ($null -ne $payload.PSObject.Properties['errors'] -and $payload.errors) {
+if ((Test-JsonProperty -Object $payload -Name 'errors') -and $payload.errors) {
     $msgs = @($payload.errors | ForEach-Object { $_.message }) -join '; '
     throw "GraphQL error: $msgs"
 }
 
-$issueNode = $payload.data.repository.issue
+$issueNode = Get-JsonPath -Object $payload -Path @('data', 'repository', 'issue')
+if ($null -eq $issueNode) {
+    throw "Issue #$Issue not found in $Repo"
+}
 
 $nodes = @()
-if ($null -ne $issueNode.projectItems -and $null -ne $issueNode.projectItems.nodes) {
-    $nodes = @($issueNode.projectItems.nodes)
+$projectItems = Get-JsonPath -Object $issueNode -Path @('projectItems')
+if ($null -ne $projectItems -and (Test-JsonProperty -Object $projectItems -Name 'nodes') -and $null -ne $projectItems.nodes) {
+    $nodes = @($projectItems.nodes)
 }
 
 if ($nodes.Count -eq 0) {
@@ -138,18 +193,40 @@ $skippedNoField = 0
 $skippedNoOption = 0
 
 foreach ($node in $nodes) {
-    $projectTitle = [string]$node.project.title
-    $statusField = $node.project.field
+    $project = Get-JsonPath -Object $node -Path @('project')
+    $projectTitle = if ($null -ne $project -and (Test-JsonProperty -Object $project -Name 'title')) {
+        [string]$project.title
+    } else {
+        '(unknown project)'
+    }
 
-    if ($null -eq $statusField -or [string]::IsNullOrWhiteSpace([string]$statusField.id)) {
-        Write-Warning "Project '$projectTitle': board has no Status field; skipping."
+    # field(name:"Status") with only a SingleSelect fragment yields {} (not null)
+    # when Status is a different field type — probe .id, don't assume it exists.
+    $statusField = $null
+    if ($null -ne $project -and (Test-JsonProperty -Object $project -Name 'field')) {
+        $statusField = $project.field
+    }
+
+    $fieldId = $null
+    if ((Test-JsonProperty -Object $statusField -Name 'id')) {
+        $fieldId = [string]$statusField.id
+    }
+
+    if ([string]::IsNullOrWhiteSpace($fieldId)) {
+        Write-Warning "Project '$projectTitle': board has no single-select Status field; skipping."
         $skippedNoField++
         continue
     }
 
     $current = ''
-    $value = $node.fieldValueByName
-    if ($null -ne $value -and $value.__typename -eq 'ProjectV2ItemFieldSingleSelectValue' -and $null -ne $value.name) {
+    $value = $null
+    if ((Test-JsonProperty -Object $node -Name 'fieldValueByName')) {
+        $value = $node.fieldValueByName
+    }
+    if ((Test-JsonProperty -Object $value -Name '__typename') `
+        -and $value.__typename -eq 'ProjectV2ItemFieldSingleSelectValue' `
+        -and (Test-JsonProperty -Object $value -Name 'name') `
+        -and $null -ne $value.name) {
         $current = [string]$value.name
     }
 
@@ -171,19 +248,25 @@ foreach ($node in $nodes) {
         continue
     }
 
-    $inProgress = @($statusField.options | Where-Object { $_.name -eq 'In Progress' } | Select-Object -First 1)
-    if ($inProgress.Count -eq 0) {
+    $options = @()
+    if ((Test-JsonProperty -Object $statusField -Name 'options') -and $null -ne $statusField.options) {
+        $options = @($statusField.options)
+    }
+
+    $inProgress = @($options | Where-Object { (Test-JsonProperty -Object $_ -Name 'name') -and $_.name -eq 'In Progress' } | Select-Object -First 1)
+    if ($inProgress.Count -eq 0 -or -not (Test-JsonProperty -Object $inProgress[0] -Name 'id')) {
         Write-Warning "Project '$projectTitle': no 'In Progress' Status option; skipping."
         $skippedNoOption++
         continue
     }
 
     $label = if ([string]::IsNullOrEmpty($current)) { '(empty)' } else { $current }
+    $projectId = [string]$project.id
 
     $editOut = gh project item-edit `
         --id $node.id `
-        --project-id $node.project.id `
-        --field-id $statusField.id `
+        --project-id $projectId `
+        --field-id $fieldId `
         --single-select-option-id $inProgress[0].id 2>&1 | Out-String
     Assert-GhOk -Action "setting '$projectTitle' Status to In Progress" -Output $editOut
 
