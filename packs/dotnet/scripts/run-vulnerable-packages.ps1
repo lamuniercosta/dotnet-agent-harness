@@ -94,6 +94,18 @@ $json = $null
 try { $json = $raw | Out-String | ConvertFrom-Json } catch { $json = $null }
 
 if ($json -and $json.PSObject.Properties.Name -contains 'projects') {
+    # A scan that enumerated no projects examined nothing, and "found no
+    # advisories" would be a pass it did not earn. Clean projects DO appear here
+    # - as {"path": ...} entries with no 'frameworks' key, which is exactly the
+    # shape that used to crash the parser - so an empty array means enumeration
+    # failed, not that everything was clean. Same remediation as a failed scan.
+    if (@($json.projects).Count -eq 0) {
+        Write-Host 'GATE COULD NOT RUN: the scan enumerated no projects.' -ForegroundColor Red
+        Write-Host '  Fix: run `dotnet restore` first, and confirm the target contains projects'
+        Write-Host "  and has a NuGet source configured. Target: $target"
+        exit 1
+    }
+
     foreach ($project in $json.projects) {
         # A project with no advisories is emitted as {"path": ...} with no
         # 'frameworks' key at all. Under Set-StrictMode, `$project.frameworks`

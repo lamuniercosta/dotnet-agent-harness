@@ -83,9 +83,14 @@ else {
 }
 $All = $analyzeAll
 
+# SKIPPED (exit 2), not passed (exit 0). Nothing changed means nothing was
+# analysed, and "verified nothing" is not the same result as "clean" - the
+# contract this harness is built on. Reporting 0 here made a fresh install look
+# green on a codebase no gate had ever read.
 if (-not $All -and $targetFiles.Count -eq 0) {
-    Write-Host 'Roslyn analyzers: no new or modified .cs files to check.'
-    exit 0
+    Write-Host "Roslyn analyzers: SKIPPED - no .cs files changed against $baseRef."
+    Write-Host '  Nothing was verified. Run with -All to check the whole solution.'
+    exit 2
 }
 
 Push-Location $repoRoot
