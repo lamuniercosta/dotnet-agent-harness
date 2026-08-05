@@ -158,11 +158,18 @@ function Get-TestProjects {
             Sort-Object
     )
 
-    # Comma operator: `return $found` unwraps a one-element array to a bare
-    # string, and .Count on a string throws under Set-StrictMode - so a repo with
-    # exactly one test project crashed before running anything. Verified that a
-    # caller wrapping this in @() as well is a harmless no-op, not a nesting.
-    return , $found
+    # Returned plain, and callers wrap the WHOLE expression in @().
+    #
+    # The two must be paired that way round. Verified directly:
+    #   @(f) where f returns `, $arr`  -> 1 element, and that element is Object[]
+    #   @(f) where f returns $arr      -> flat, correct at one element and many
+    #
+    # So the comma idiom fixes the unwrap only for a caller that assigns without
+    # wrapping; combined with @() it nests instead. A one-element return unwraps
+    # to a bare string, and .Count on a string throws under Set-StrictMode, which
+    # is why the wrap belongs at the call site and has to enclose the whole
+    # expression - a branch of an if still unwraps on its way out.
+    return $found
 }
 
 function Get-TestRunOutcome {

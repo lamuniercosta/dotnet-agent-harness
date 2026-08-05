@@ -418,11 +418,10 @@ function Get-YamlTopLevelBlock {
             $block = @($block[0..($block.Count - 2)])
         }
         # Returned bare: a one-line block unrolls to a string, which every caller
-        # restores with @(). That is why the callers wrap - not, as this comment
-        # previously claimed, because returning `, $block` would nest the array.
-        # It would not; the comma idiom composes safely with @() at the call site.
-        # Left as-is because the callers already wrap and the behaviour is proven
-        # by Test-InstallArtifacts; `, $block` would be the better idiom in new code.
+        # restores with @(). Wrapping HERE as well would nest it one level deep -
+        # verified: @(f) where f returns `, $arr` yields a single element that is
+        # itself an array, and `-match` against an array silently becomes a filter
+        # that never populates $Matches.
         return $block
     }
     return $null

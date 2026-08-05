@@ -17,9 +17,15 @@ one test assembly found eleven defects the fixture could not.
 
 ### Breaking
 
-A **minor** bump rather than a major one: no gate starts failing code that
-previously passed. What changes is what the gates report about work they never
-did.
+The number stays below 1.0, but read this section before upgrading: **a caller
+that treats any non-zero exit as failure will break.**
+
+No gate reports FAIL on code it previously passed. What changed is that gates
+which verified *nothing* now say so — exit `2` instead of a claimed pass — and
+one scan that examined nothing now exits `1`. Whether that is "major" depends
+entirely on how you consume the exit codes, so it is written out rather than
+argued about: if your pipeline fails on non-zero, this release breaks it until
+you handle `2`.
 
 - **A gate with nothing to verify now exits `2` (SKIPPED), not `0`.** The three
   diff-scoped gates returned `0` when no `.cs` file had changed, so the first
