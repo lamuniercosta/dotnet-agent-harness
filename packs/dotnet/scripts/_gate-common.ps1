@@ -141,8 +141,18 @@ function Get-TestRunOutcome {
       to verify" from "verified something".
 
         Ran            - at least one test executed; judge it on the exit code
-        NothingMatched - zero executed, and the runner said the filter matched nothing
+        NothingMatched - zero executed, the runner said the filter matched nothing,
+                         and the run itself succeeded
+        Inconclusive   - zero executed and a no-match line, but the run FAILED; the
+                         no-match explains one assembly, not the failure
         Unknown        - zero executed and no explanation; the gate cannot conclude
+
+      Inconclusive exists because a no-match line and a failure can appear in the
+      same run. With two test assemblies, one having no matching tests and the
+      other crashing during discovery before it reports any counts, the output
+      carries the no-match message and no summary - identical to a clean skip
+      except for the exit code. Folding that into NothingMatched reports SKIPPED
+      over a failed run.
 
       Counting executed tests, rather than trusting the "no test matches" line, is
       what makes this correct on a solution with more than one test assembly. With
@@ -167,26 +177,38 @@ function Get-TestRunOutcome {
       match misses entirely - turning a healthy run into Unknown, and a healthy
       repo into exit 1.
     #>
-    param([string[]]$Output)
+    param(
+        [string[]]$Output,
+        # Defaults to 0 so a caller reasoning purely about output still gets the
+        # clean-run classification; the gate always passes the real one.
+        [int]$ExitCode = 0
+    )
 
     $executed = 0
+    $skipped = 0
     foreach ($line in $Output) {
         # `Passed!` / `Failed!` are the run-level verdict prefixes and carry no
         # count; requiring the colon skips them.
         foreach ($m in [regex]::Matches($line, '\b(?:Passed|Failed):\s*(\d+)')) {
             $executed += [int]$m.Groups[1].Value
         }
+        foreach ($m in [regex]::Matches($line, '\bSkipped:\s*(\d+)')) {
+            $skipped += [int]$m.Groups[1].Value
+        }
     }
 
     if ($executed -gt 0) {
-        return [PSCustomObject]@{ Outcome = 'Ran'; Executed = $executed }
+        return [PSCustomObject]@{ Outcome = 'Ran'; Executed = $executed; Skipped = $skipped }
     }
 
     if (@($Output | Where-Object { $_ -match 'No test matches the given testcase filter' }).Count -gt 0) {
-        return [PSCustomObject]@{ Outcome = 'NothingMatched'; Executed = 0 }
+        if ($ExitCode -ne 0) {
+            return [PSCustomObject]@{ Outcome = 'Inconclusive'; Executed = 0; Skipped = $skipped }
+        }
+        return [PSCustomObject]@{ Outcome = 'NothingMatched'; Executed = 0; Skipped = $skipped }
     }
 
-    return [PSCustomObject]@{ Outcome = 'Unknown'; Executed = 0 }
+    return [PSCustomObject]@{ Outcome = 'Unknown'; Executed = 0; Skipped = $skipped }
 }
 
 function Resolve-TestProject {

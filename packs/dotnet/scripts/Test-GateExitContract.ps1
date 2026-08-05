@@ -212,6 +212,35 @@ try {
     Assert-That 'property verdict: legacy VSTest summary is still read as a real run' `
         ($outcome.Outcome -eq 'Ran' -and $outcome.Executed -eq 3) `
         "got $($outcome.Outcome)/$($outcome.Executed) - a valid run must not be reported as unreadable"
+
+    # A no-match line accounts for one assembly, not for a failed run. With two
+    # assemblies - one with no matching tests, one crashing before it reports any
+    # counts - the output is indistinguishable from a clean skip except for the
+    # exit code. Folding that into NothingMatched reports SKIPPED over a failure.
+    $noMatchPlusFailure = @(
+        'No test matches the given testcase filter `Category=Property` in /r/Acceptance.dll'
+        'The active test run was aborted. Reason: Test host process crashed'
+    )
+    $outcome = Get-TestRunOutcome -Output $noMatchPlusFailure -ExitCode 1
+    Assert-That 'property verdict: a no-match line does not excuse a failed run' `
+        ($outcome.Outcome -eq 'Inconclusive') `
+        "got $($outcome.Outcome) - a crashed assembly must not be reported as nothing to verify"
+
+    $outcome = Get-TestRunOutcome -Output $noneMatched -ExitCode 0
+    Assert-That 'property verdict: a clean no-match run is still SKIPPED' `
+        ($outcome.Outcome -eq 'NothingMatched') `
+        'gating on the exit code must not turn a genuine skip into a failure'
+
+    # Matched but every one skipped: the tests exist and are tagged, so telling
+    # someone to add property tests they already have sends them the wrong way.
+    $matchedAllSkipped = @(
+        'No test matches the given testcase filter `Category=Property` in /r/Acceptance.dll'
+        'Passed!  - Failed:     0, Passed:     0, Skipped:     2, Total:     2, Duration: 3 ms - Unit.dll (net8.0)'
+    )
+    $outcome = Get-TestRunOutcome -Output $matchedAllSkipped -ExitCode 0
+    Assert-That 'property verdict: all-skipped is distinguishable from none-tagged' `
+        ($outcome.Outcome -eq 'NothingMatched' -and $outcome.Skipped -eq 2) `
+        "got $($outcome.Outcome)/skipped=$($outcome.Skipped) - the remediation differs between the two"
 }
 finally {
     foreach ($r in $repos) {
