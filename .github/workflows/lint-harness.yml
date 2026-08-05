@@ -121,6 +121,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Only Test-GateExitContract needs it: proving a real violation still
+      # exits 1 requires an actual build. The SKIPPED half returns before any
+      # build, and the InspectCode wiring check reads the tool manifest rather
+      # than the restored tool, so no `dotnet tool restore` is needed here.
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
       - name: Guard hook blocks what it claims to block
         shell: pwsh
         run: ./hooks/Test-Guard.ps1
@@ -163,6 +171,13 @@ jobs:
       - name: Gherkin mutation reassembles feature files losslessly
         shell: pwsh
         run: ./packs/dotnet/scripts/Test-GherkinMutation.ps1
+
+      # Both directions. A gate that always skips is indistinguishable from one
+      # that correctly skips, so every SKIPPED assertion is paired with a case
+      # that must still fail.
+      - name: Gates honour the 0/1/2 exit contract
+        shell: pwsh
+        run: ./packs/dotnet/scripts/Test-GateExitContract.ps1
 
       - name: install.ps1 -WhatIf writes nothing
         shell: pwsh

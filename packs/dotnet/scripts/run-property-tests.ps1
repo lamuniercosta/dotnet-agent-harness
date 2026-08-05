@@ -55,10 +55,16 @@ try {
     #
     # This used to exit 0, which meant a repo with zero property tests reported
     # "Property tests: passed" having verified nothing - the precise failure this
-    # harness exists to prevent, sitting inside the harness itself. `dotnet test`
-    # also exits non-zero when a filter matches nothing on some SDKs, so the
-    # "no tests matched" message is checked on both paths.
-    if ($output -match 'No test matches the given testcase filter') {
+    # harness exists to prevent, sitting inside the harness itself.
+    #
+    # It then used to match the "no tests matched" line anywhere in the output,
+    # which broke the moment a solution had a second test assembly: the assembly
+    # without property tests prints that line while another runs them, and the
+    # gate reported SKIPPED over a run that had verified plenty. Decide on the
+    # number of tests actually executed instead - see Get-TestRunOutcome.
+    $outcome = Get-TestRunOutcome -Output $output
+
+    if ($outcome.Outcome -eq 'NothingMatched') {
         Write-Host "Property tests: SKIPPED - no tests tagged Category=$Category."
         Write-Host '  The refactor gate expects property tests for pure/domain logic.'
         Write-Host "  Add FsCheck properties tagged [Trait(`"Category`",`"$Category`")], or set"
@@ -66,12 +72,22 @@ try {
         exit 2
     }
 
-    if ($exitCode -ne 0) {
-        Write-Host 'Property tests: FAILED.'
+    # Zero tests executed and nothing saying why. Reporting that as either a pass
+    # or a skip would be a guess about a run that produced no readable result, so
+    # say so and stop.
+    if ($outcome.Outcome -eq 'Unknown') {
+        Write-Host 'GATE COULD NOT RUN: dotnet test reported no executed tests and no reason.' -ForegroundColor Red
+        Write-Host '  Neither a test-count summary nor a "no test matches" message was found.'
+        Write-Host "  Run it directly to see why: dotnet test $target --filter `"Category=$Category`""
         exit 1
     }
 
-    Write-Host 'Property tests: passed.'
+    if ($exitCode -ne 0) {
+        Write-Host "Property tests: FAILED ($($outcome.Executed) test(s) executed)."
+        exit 1
+    }
+
+    Write-Host "Property tests: passed ($($outcome.Executed) test(s) executed)."
     exit 0
 }
 finally {

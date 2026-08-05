@@ -135,6 +135,46 @@ function Resolve-BuildTarget {
     throw 'No .sln, .slnx, or .csproj found in this repository.'
 }
 
+function Get-TestRunOutcome {
+    <#
+      Classifies a `dotnet test` run from its output, so a gate can tell "nothing
+      to verify" from "verified something".
+
+        Ran            - at least one test executed; judge it on the exit code
+        NothingMatched - zero executed, and the runner said the filter matched nothing
+        Unknown        - zero executed and no explanation; the gate cannot conclude
+
+      Counting executed tests, rather than trusting the "no test matches" line, is
+      what makes this correct on a solution with more than one test assembly. With
+      two test projects, the one without matching tests prints that line while the
+      other runs its tests normally - and matching the line alone reported SKIPPED
+      while property tests had demonstrably passed. Two or more test assemblies is
+      the ordinary shape of a .NET solution, so that read the gate as permanently
+      skipped for most consumers.
+
+      A run that matched nothing prints no summary line at all, which is why zero
+      executed is not by itself enough to conclude either way.
+    #>
+    param([string[]]$Output)
+
+    $executed = 0
+    foreach ($line in $Output) {
+        foreach ($m in [regex]::Matches($line, 'Total:\s*(\d+)')) {
+            $executed += [int]$m.Groups[1].Value
+        }
+    }
+
+    if ($executed -gt 0) {
+        return [PSCustomObject]@{ Outcome = 'Ran'; Executed = $executed }
+    }
+
+    if (@($Output | Where-Object { $_ -match 'No test matches the given testcase filter' }).Count -gt 0) {
+        return [PSCustomObject]@{ Outcome = 'NothingMatched'; Executed = 0 }
+    }
+
+    return [PSCustomObject]@{ Outcome = 'Unknown'; Executed = 0 }
+}
+
 function Resolve-TestProject {
     <#
       Finds a test project by name pattern (e.g. '*AcceptanceTests*').

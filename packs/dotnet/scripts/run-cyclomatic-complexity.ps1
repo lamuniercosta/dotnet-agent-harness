@@ -133,9 +133,12 @@ else {
 }
 $All = $analyzeAll
 
+# SKIPPED (exit 2), not passed (exit 0). See run-roslyn-analyzers.ps1 - the same
+# reasoning applies: nothing changed means nothing was measured.
 if (-not $All -and $targetFiles.Count -eq 0) {
-    Write-Host 'Cyclomatic complexity: no new or modified .cs files to check.'
-    exit 0
+    Write-Host "Cyclomatic complexity: SKIPPED - no .cs files changed against $baseRef."
+    Write-Host '  Nothing was verified. Run with -All to check the whole solution.'
+    exit 2
 }
 
 # CA1502 decides what to EMIT from CodeMetricsConfig.txt - the analyzer never

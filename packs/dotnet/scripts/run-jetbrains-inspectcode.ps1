@@ -141,9 +141,12 @@ else {
 }
 $All = $analyzeAll
 
+# SKIPPED (exit 2), not passed (exit 0). See run-roslyn-analyzers.ps1 - the same
+# reasoning applies: nothing changed means nothing was inspected.
 if (-not $All -and $targetFiles.Count -eq 0) {
-    Write-Host 'InspectCode: no new or modified .cs files to inspect.'
-    exit 0
+    Write-Host "InspectCode: SKIPPED - no .cs files changed against $baseRef."
+    Write-Host '  Nothing was verified. Run with -All to inspect the whole solution.'
+    exit 2
 }
 
 Push-Location $repoRoot
