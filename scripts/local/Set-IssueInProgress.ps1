@@ -42,6 +42,8 @@ if ($Help) {
     exit 0
 }
 
+. (Join-Path $PSScriptRoot '_json-property.ps1')
+
 function Assert-GhOk {
     param(
         [Parameter(Mandatory = $true)]
@@ -56,48 +58,6 @@ function Assert-GhOk {
         $detail = if ([string]::IsNullOrWhiteSpace($Output)) { '(no output)' } else { $Output.Trim() }
         throw "gh failed while $Action (exit $LASTEXITCODE): $detail"
     }
-}
-
-function Test-JsonProperty {
-    <#
-      StrictMode-safe: $null -ne $obj.Missing throws when the note property is
-      absent. Probe PSObject.Properties instead.
-    #>
-    param(
-        [AllowNull()]
-        [object]$Object,
-
-        [Parameter(Mandatory = $true)]
-        [string]$Name
-    )
-
-    return ($null -ne $Object) -and ($null -ne $Object.PSObject.Properties[$Name])
-}
-
-function Get-JsonPath {
-    <#
-      Walk a dotted path of note properties. Returns $null if any segment is
-      missing or null-valued — without throwing under Set-StrictMode.
-    #>
-    param(
-        [AllowNull()]
-        [object]$Object,
-
-        [Parameter(Mandatory = $true)]
-        [string[]]$Path
-    )
-
-    $current = $Object
-    foreach ($segment in $Path) {
-        if (-not (Test-JsonProperty -Object $current -Name $segment)) {
-            return $null
-        }
-        $current = $current.$segment
-        if ($null -eq $current) {
-            return $null
-        }
-    }
-    return $current
 }
 
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
@@ -154,8 +114,9 @@ if ((Test-JsonProperty -Object $payload -Name 'message') -and -not (Test-JsonPro
     throw "gh authentication/API error: $($payload.message). Try: gh auth login && gh auth refresh -s project"
 }
 
-if ($LASTEXITCODE -ne 0 -and $raw -match 'Bad credentials|HTTP 401') {
-    throw "gh authentication/API error while querying issue #$Issue. Try: gh auth login && gh auth refresh -s project"
+# When stderr/stdout merge mangles the JSON, still surface the API message field.
+if ($LASTEXITCODE -ne 0 -and $null -eq $payload -and $raw -match '"message"\s*:\s*"([^"\\]+)"') {
+    throw "gh authentication/API error: $($Matches[1]). Try: gh auth login && gh auth refresh -s project"
 }
 
 Assert-GhOk -Action "querying project items for issue #$Issue (need 'project' scope: gh auth refresh -s project)" -Output $raw

@@ -125,6 +125,12 @@ jobs:
         shell: pwsh
         run: ./hooks/Test-Guard.ps1
 
+      # Repo-local /start-issue helpers. Not under packaged skills/, but the
+      # StrictMode crashes they exist to prevent are cheap to regression-test.
+      - name: JSON property helpers tolerate absent note properties
+        shell: pwsh
+        run: ./scripts/local/Test-JsonProperty.ps1
+
       # Both directions. A scanner that matches nothing looks exactly like a
       # clean codebase, and one that matches everything gets switched off.
       - name: Secret scanner fires, and stays quiet on look-alikes
