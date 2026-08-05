@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # Runs Roslyn analyzer diagnostics (CA*/IDE* at warning+) from dotnet build on changed or specified C# files.
-# Exits 1 when any matching diagnostic is found; exits 0 when clean or no files to check.
+# Exits 1 when any matching diagnostic is found; 0 when clean; 2 (SKIPPED) when no files changed.
 # Exits 1 (without analyzing) when no CA/IDE rule is enabled - see Assert-GateWired.
 # CA1502 is excluded (handled by run-cyclomatic-complexity.ps1).
 #

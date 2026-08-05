@@ -190,6 +190,28 @@ try {
     Assert-That 'property verdict: a summary reporting zero tests is not a pass' `
         ($outcome.Outcome -ne 'Ran') `
         'Total: 0 means nothing executed, whatever the exit code said'
+
+    # Total counts skipped tests. A suite where every property test carries
+    # [Fact(Skip = "...")] would otherwise report "2 tests executed" having run
+    # no test body - the same vacuous pass this gate exists to prevent.
+    $allSkipped = @('Passed!  - Failed:     0, Passed:     0, Skipped:     2, Total:     2, Duration: 3 ms - Unit.dll (net8.0)')
+    $outcome = Get-TestRunOutcome -Output $allSkipped
+    Assert-That 'property verdict: every test skipped is not "executed"' `
+        ($outcome.Outcome -ne 'Ran') `
+        "got $($outcome.Outcome)/$($outcome.Executed) - skipped bodies never ran, so this cannot be a pass"
+
+    # Older VSTest spreads the counts across lines under a "Total tests:" heading.
+    # Matching only "Total:" misses it entirely, turning a healthy run into
+    # Unknown and a healthy repo into exit 1.
+    $legacyFormat = @(
+        'Total tests: 3'
+        '     Passed: 3'
+        ' Test Run Successful.'
+    )
+    $outcome = Get-TestRunOutcome -Output $legacyFormat
+    Assert-That 'property verdict: legacy VSTest summary is still read as a real run' `
+        ($outcome.Outcome -eq 'Ran' -and $outcome.Executed -eq 3) `
+        "got $($outcome.Outcome)/$($outcome.Executed) - a valid run must not be reported as unreadable"
 }
 finally {
     foreach ($r in $repos) {

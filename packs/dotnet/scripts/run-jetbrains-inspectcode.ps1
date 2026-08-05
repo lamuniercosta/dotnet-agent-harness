@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # Runs JetBrains InspectCode (same engine as Rider/ReSharper) on changed or specified C# files.
-# Exits 1 when WARNING+ inspections are found; exits 0 when clean or no files to inspect.
+# Exits 1 when WARNING+ inspections are found; 0 when clean; 2 (SKIPPED) when no files changed.
 # Exits 1 (without inspecting) when the jb tool is not in the manifest - see Assert-GateWired.
 #
 # These are ReSharper inspections, NOT Roslyn CA/IDE warnings - dotnet build will not catch them.
