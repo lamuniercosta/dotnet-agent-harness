@@ -154,12 +154,26 @@ function Get-TestRunOutcome {
 
       A run that matched nothing prints no summary line at all, which is why zero
       executed is not by itself enough to conclude either way.
+
+      Counts Passed + Failed rather than Total, for two reasons:
+
+      Total includes SKIPPED tests, so a suite where every property test carries
+      [Fact(Skip = "...")] would report "2 tests executed" having run no test
+      body at all - the same vacuous pass this function exists to prevent.
+
+      And it reads both summary formats. The current one is a single line
+      ("Failed: 0, Passed: 2, Skipped: 0, Total: 2"); older VSTest output breaks
+      the counts across lines under a "Total tests: N" heading, which a Total-only
+      match misses entirely - turning a healthy run into Unknown, and a healthy
+      repo into exit 1.
     #>
     param([string[]]$Output)
 
     $executed = 0
     foreach ($line in $Output) {
-        foreach ($m in [regex]::Matches($line, 'Total:\s*(\d+)')) {
+        # `Passed!` / `Failed!` are the run-level verdict prefixes and carry no
+        # count; requiring the colon skips them.
+        foreach ($m in [regex]::Matches($line, '\b(?:Passed|Failed):\s*(\d+)')) {
             $executed += [int]$m.Groups[1].Value
         }
     }

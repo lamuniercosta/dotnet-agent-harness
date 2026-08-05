@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # Runs CA1502 cyclomatic complexity analysis on changed or specified C# files.
-# Exits 1 when any method exceeds the threshold in CodeMetricsConfig.txt; exits 0 when clean or no files to check.
+# Exits 1 when any method exceeds the threshold in CodeMetricsConfig.txt; 0 when clean; 2 (SKIPPED) when no files changed.
 # Exits 1 (without analyzing) when CA1502 is not actually enabled - see Assert-GateWired.
 #
 # Usage:
