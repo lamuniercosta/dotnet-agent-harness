@@ -220,6 +220,33 @@ pwsh ./scripts/apply-fix.ps1      && pwsh ./scripts/Assert-Gates.ps1 -Expect Pas
 
 This tests that the gates **catch** things, not merely that they run.
 
+### What a gate actually prints
+
+Real output, not a mock-up. A changed file carrying an unread field:
+
+```text
+Roslyn analyzers: FAILED - 2 diagnostic(s):
+  Orders.cs:5 [WARNING] CA1823: Unused field 'Unused' (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/quality-rules/ca1823)
+  Orders.cs:5 [WARNING] IDE0051: Private member 'Orders.Unused' is unused (https://learn.microsoft.com/dotnet/fundamentals/code-analysis/style-rules/ide0051)
+
+Configure severities in .editorconfig. CA1502 is checked by run-cyclomatic-complexity.ps1.
+```
+
+`file:line`, the rule, and where to change its severity — enough to act on without
+opening anything else. Exit `1`.
+
+The same gate on a clean tree, where nothing has changed against the base branch:
+
+```text
+Roslyn analyzers: SKIPPED - no .cs files changed against master.
+  Nothing was verified. Run with -All to check the whole solution.
+```
+
+Exit `2`, **not** `0`. That run inspected nothing, and a harness that reported it as a
+pass would be lying at the one moment it matters — the first run in a repo that has just
+adopted it. Both blocks are verbatim from real runs; only the trailing absolute project
+path is elided.
+
 Eight self-tests guard the pieces that could fail silently. Each prints its own
 check count — quoted here they only go stale, which has already happened twice:
 
