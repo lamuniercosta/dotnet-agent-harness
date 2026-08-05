@@ -4,10 +4,10 @@ description: >-
   Repo-local wrapper around harness /task for this repository only. Takes a
   GitHub issue number and optional branch type, runs the same intake/branch
   flow as /task, then moves the issue to In Progress on every GitHub Project
-  board item that is not already Done. Warns and continues if the issue is on
-  no project. Use when starting work from a GitHub issue and the issue should
-  appear In Progress on Portfolio (or any other board it already belongs to).
-  Not shipped by install.ps1 — lives under .claude/skills/, not packaged skills/.
+  board item whose Status is empty, Todo, or Backlog. Warns and continues if
+  the issue is on no project. Use when starting work from a GitHub issue in
+  this repo (prefer over /task here so the Portfolio board updates). Not
+  shipped by install.ps1 — lives under .claude/skills/, not packaged skills/.
 ---
 
 # Start issue (repo-local)
@@ -15,6 +15,9 @@ description: >-
 **Customization for `dotnet-agent-harness` only.** Does not replace or fork the
 shared harness `/task` skill. `install.ps1` syncs packaged `skills/` into
 consumers; this directory is **not** in that tree, so it stays local.
+
+In **this** repository, prefer `/start-issue` over `/task` so board Status
+updates. See the root `CLAUDE.md` note.
 
 ## Parameters
 
@@ -29,7 +32,13 @@ Typical: `/start-issue 40` or `/start-issue 40 feature`
 
 ## Prerequisites
 
-- Authenticated `gh` (`gh auth login`), with permission to edit the project's Status field
+- Authenticated `gh` with the **project** scope (default login often lacks it):
+
+```bash
+gh auth login
+gh auth refresh -s project
+```
+
 - PowerShell 7 (`pwsh`) for `scripts/local/Set-IssueInProgress.ps1` and the harness branch scripts
 
 ## Steps
@@ -56,9 +65,11 @@ pwsh ./scripts/local/Set-IssueInProgress.ps1 -Issue <n>
 Behaviour (do not reimplement ad hoc):
 
 - Discover the issue's GitHub Project items at runtime (no hardcoded project IDs)
-- For each item whose Status is **not** `Done`, set Status to **In Progress**
-- If already `In Progress`, leave it and say so
+- Read the Status **field definition** from the project (so empty Status is settable)
+- Set Status to **In Progress** only when current value is empty, `Todo`, or `Backlog`
+- Leave `Done`, `In Progress`, and any other mid-flight status unchanged
 - If the issue is on **no** project: **warn and continue** (exit 0) — do not block `/task` or the grill
+- Fail loudly if `gh` exits non-zero (do not report a board move that did not happen)
 
 ### 3. Grill
 
@@ -69,7 +80,7 @@ Immediately run `/grill-with-docs` with the issue title/body as raw input (same 
 - Never put this skill under packaged `skills/` — that would ship it to every consumer via `install.ps1`
 - Never invent project or Status field IDs; the script discovers them
 - Never fail the whole start flow solely because the issue is missing from a board
-- Do not open or push a PR; do not change Done items back to In Progress
+- Do not open or push a PR; do not change Done or mid-flight statuses back to In Progress
 - Commit subjects still follow harness `/task` (`… (#40)` suffix)
 
 ## Related
