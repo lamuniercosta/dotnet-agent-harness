@@ -343,6 +343,21 @@ try {
         ($scoped.Count -eq 1 -and $scoped[0] -notmatch 'Orphan') `
         "found $($scoped.Count): $($scoped -join ', ') - the solution is the authority on membership"
 
+    # Two solutions: which one defines the tests is unknowable, and answering it
+    # with a repo-wide sweep is how the orphan got back in. "No solution exists"
+    # and "which solution is unclear" are different answers.
+    Set-Content -LiteralPath (Join-Path $solo 'Second.sln') -Encoding UTF8 -Value @(
+        'Microsoft Visual Studio Solution File, Format Version 12.00'
+    )
+    $threw = $false
+    try { $null = Get-TestProjects -RepoRoot $solo } catch { $threw = $true }
+
+    Assert-That 'discovery: an ambiguous solution set is refused, not swept' `
+        $threw `
+        'falling back to a repo-wide sweep here silently runs projects outside any solution'
+
+    Remove-Item -LiteralPath (Join-Path $solo 'Second.sln') -Force
+
     # ── The gate script's own exits, not just the classifier ─────────────────
     # Everything above asserts Get-TestRunOutcome on canned strings. A regression
     # that classified correctly and then exited wrong in the aggregation block,
@@ -368,6 +383,22 @@ try {
     Assert-That 'property gate: no discoverable test project fails loudly' `
         ($r.Exit -eq 1 -and $r.Output -match 'no test projects found') `
         "exit $($r.Exit) - a silent fallback to the whole solution is how the masking returns"
+
+    # Last, because it changes what discovery sees in this repo. Two solutions
+    # make scope unknowable, and the throw from discovery has to arrive as a gate
+    # verdict with remediation rather than a raw PowerShell error.
+    foreach ($s in 'One.sln', 'Two.sln') {
+        Set-Content -LiteralPath (Join-Path $repo $s) -Encoding UTF8 `
+            -Value 'Microsoft Visual Studio Solution File, Format Version 12.00'
+    }
+    $r = Invoke-Gate -Repo $repo -Script 'run-property-tests.ps1'
+
+    # Asserts the remediation reaches the user, not just that something failed.
+    # Config resolution refuses ambiguous solutions before discovery is even
+    # reached, and that refusal used to arrive as a PowerShell stack trace.
+    Assert-That 'property gate: ambiguous scope is a gate verdict, not a crash' `
+        ($r.Exit -eq 1 -and $r.Output -match 'GATE COULD NOT RUN' -and $r.Output -match "Set 'solution:'") `
+        "exit $($r.Exit) - the user needs the remediation, not a stack trace"
 }
 finally {
     foreach ($r in $repos) {
