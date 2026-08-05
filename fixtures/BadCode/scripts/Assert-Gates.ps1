@@ -174,11 +174,19 @@ public static class Percentage
 
     try {
         & dotnet build (Join-Path $Repo 'BadCode.sln') --verbosity quiet *> $null
-        # Scoped to Bad.Tests: with Bad.AcceptanceTests in the solution, that
-        # assembly reports "No test matches the given testcase filter" for
-        # Category=Property, and the gate's zero-match detection would read the
-        # run as SKIPPED even though Bad.Tests ran its property tests.
-        & pwsh -NoProfile -File (Join-Path $Repo 'scripts/run-property-tests.ps1') -Project (Join-Path $Repo 'Bad.Tests/Bad.Tests.csproj') *> $null
+        # Deliberately UNSCOPED, across the whole solution.
+        #
+        # This used to pass -Project Bad.Tests to work around #24: with
+        # Bad.AcceptanceTests in the solution, that assembly reports "No test
+        # matches the given testcase filter" for Category=Property, and the
+        # gate's zero-match detection read the whole run as SKIPPED even though
+        # Bad.Tests had run its property tests.
+        #
+        # Scoping it hid the bug from CI. Two test assemblies is the ordinary
+        # shape of a .NET solution and the condition that reproduced #24, so the
+        # fixture runs the gate the way a consumer does - otherwise the fix is
+        # proven only against canned strings.
+        & pwsh -NoProfile -File (Join-Path $Repo 'scripts/run-property-tests.ps1') *> $null
         $propExit = $LASTEXITCODE
 
         if ($propExit -eq 1) {
