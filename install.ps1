@@ -657,9 +657,9 @@ Write-Output '  ./scripts/run-roslyn-analyzers.ps1 -All    # audit the code you 
 Write-Output '  /task <issue>                             # start the pipeline'
 Write-Output ''
 # The gates analyse files changed against the base branch. Installing changes no
-# .cs file, so the first no-arg run passes having checked nothing - correct, and
-# misleading at the one moment it matters most. Say so here rather than letting a
-# green light on an unaudited codebase be someone's first impression.
+# .cs file, so the first no-arg run has nothing to look at and reports SKIPPED
+# (exit 2) rather than a pass it did not earn. That is the right answer and still
+# not the one someone wants on day one, so point them at the baseline run.
 Write-Output 'The gates check CHANGED files by default, and installing changed none of yours.'
 Write-Output 'Run them once with -All to get a baseline on the code that is already here.'
 

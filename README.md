@@ -220,13 +220,17 @@ pwsh ./scripts/apply-fix.ps1      && pwsh ./scripts/Assert-Gates.ps1 -Expect Pas
 
 This tests that the gates **catch** things, not merely that they run.
 
-Four self-tests guard the pieces that could fail silently:
+Eight self-tests guard the pieces that could fail silently:
 
 ```bash
-pwsh ./hooks/Test-Guard.ps1                          # 23 checks
-pwsh ./hooks/Test-SecretScan.ps1                     # 20 checks
-pwsh ./packs/dotnet/scripts/Test-HarnessConfig.ps1   # 14 checks
-pwsh ./packs/dotnet/scripts/Test-ThresholdDocs.ps1   # docs vs harness.yml
+pwsh ./hooks/Test-Guard.ps1                            # 23 checks
+pwsh ./hooks/Test-SecretScan.ps1                       # 20 checks
+pwsh ./packs/dotnet/scripts/Test-HarnessConfig.ps1     # 14 checks
+pwsh ./packs/dotnet/scripts/Test-ThresholdDocs.ps1     # docs vs harness.yml
+pwsh ./packs/dotnet/scripts/Test-SpecKitExtension.ps1  # 15 checks
+pwsh ./packs/dotnet/scripts/Test-InstallArtifacts.ps1  # 18 checks
+pwsh ./packs/dotnet/scripts/Test-GherkinMutation.ps1   # 14 checks
+pwsh ./packs/dotnet/scripts/Test-GateExitContract.ps1  # 24 checks
 ```
 
 The guard's suite includes the escaped-quote payload that defeats a `grep`-based hook —

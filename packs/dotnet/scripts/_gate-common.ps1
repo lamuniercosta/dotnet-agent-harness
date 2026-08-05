@@ -147,14 +147,56 @@ function Get-TestProjects {
     #>
     param([string]$RepoRoot)
 
+    # Scope to the active solution when there is one.
+    #
+    # A repo-wide sweep would run every test project it can find, including an
+    # orphan tools/ or scratch/ one that is not part of the product. One of those
+    # failing to restore would fail this gate while the solution's own property
+    # tests were green - the same objection that makes `-Project <solution>` a
+    # rejection rather than a repo-wide expansion.
+    #
+    # `dotnet sln list` is the authority on membership, so no .sln/.slnx parser
+    # is written here. Only lines ending in .csproj are taken, which sidesteps
+    # the localised header the command prints first.
+    $candidates = @()
+    $solution = $null
+    try { $solution = Resolve-BuildTarget -RepoRoot $RepoRoot -Explicit '' } catch { $solution = $null }
+
+    if ($solution -and $solution -match '\.slnx?$') {
+        $listed = & dotnet sln $solution list 2>&1 | ForEach-Object { $_.ToString() }
+        if ($LASTEXITCODE -eq 0) {
+            $solutionDir = Split-Path $solution -Parent
+            $candidates = @(
+                $listed |
+                    Where-Object { $_.Trim() -match '\.csproj$' } |
+                    ForEach-Object {
+                        $rel = $_.Trim()
+                        $full = if ([System.IO.Path]::IsPathRooted($rel)) { $rel } else { Join-Path $solutionDir $rel }
+                        if (Test-Path $full) { (Resolve-Path $full).Path }
+                    }
+            )
+        }
+    }
+    elseif ($solution -and $solution -match '\.csproj$') {
+        $candidates = @($solution)
+    }
+
+    # No solution, or listing it failed: fall back to the repo-wide sweep. Better
+    # to run too much than to silently verify nothing.
+    if ($candidates.Count -eq 0) {
+        $candidates = @(
+            Get-ChildItem -Path $RepoRoot -Filter '*.csproj' -File -Recurse -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' } |
+                Select-Object -ExpandProperty FullName
+        )
+    }
+
     $found = @(
-        Get-ChildItem -Path $RepoRoot -Filter '*.csproj' -File -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' } |
+        $candidates |
             Where-Object {
-                $text = Get-Content -LiteralPath $_.FullName -Raw
+                $text = Get-Content -LiteralPath $_ -Raw -ErrorAction SilentlyContinue
                 $text -match 'Microsoft\.NET\.Test\.Sdk' -or $text -match '<IsTestProject>\s*true'
             } |
-            Select-Object -ExpandProperty FullName |
             Sort-Object
     )
 
