@@ -322,6 +322,27 @@ try {
         ((@(Get-TestProjects -RepoRoot $solo))[0] -is [string]) `
         'a nested array here makes Split-Path emit every path at once and dotnet test choke'
 
+    # Discovery is scoped to the solution, not the repo. An orphan test project
+    # outside it - a tools/ or scratch/ one that fails to restore - would
+    # otherwise fail this gate while the solution's own property tests were
+    # green, which is the objection that makes -Project <solution> a rejection.
+    Set-Content -LiteralPath (Join-Path $solo 'Only.sln') -Encoding UTF8 -Value @(
+        'Microsoft Visual Studio Solution File, Format Version 12.00'
+        'Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Only", "Only.csproj", "{11111111-1111-1111-1111-111111111111}"'
+        'EndProject'
+    )
+    New-Item -ItemType Directory -Path (Join-Path $solo 'scratch') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $solo 'scratch/Orphan.csproj') -Encoding UTF8 -Value @(
+        '<Project Sdk="Microsoft.NET.Sdk">'
+        '  <ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" /></ItemGroup>'
+        '</Project>'
+    )
+
+    $scoped = @(Get-TestProjects -RepoRoot $solo)
+    Assert-That 'discovery: a test project outside the solution is not run' `
+        ($scoped.Count -eq 1 -and $scoped[0] -notmatch 'Orphan') `
+        "found $($scoped.Count): $($scoped -join ', ') - the solution is the authority on membership"
+
     # ── The gate script's own exits, not just the classifier ─────────────────
     # Everything above asserts Get-TestRunOutcome on canned strings. A regression
     # that classified correctly and then exited wrong in the aggregation block,
@@ -329,8 +350,16 @@ try {
     # script; both paths return before any build, so no SDK is involved.
     $r = Invoke-Gate -Repo $repo -Script 'run-property-tests.ps1' -GateArgs @('-Project', 'BadCode.sln')
     Assert-That 'property gate: a solution passed to -Project is rejected' `
-        ($r.Exit -eq 1 -and $r.Output -match 'not a solution') `
+        ($r.Exit -eq 1 -and $r.Output -match 'single test \.csproj') `
         "exit $($r.Exit) - expanding it would run projects the caller never named"
+
+    # A directory is the other way back into an interleaved run: Resolve-BuildTarget
+    # accepts any path that exists, so `-Project tests` would become one dotnet
+    # test spanning everything under it.
+    $r = Invoke-Gate -Repo $repo -Script 'run-property-tests.ps1' -GateArgs @('-Project', '.')
+    Assert-That 'property gate: a directory passed to -Project is rejected' `
+        ($r.Exit -eq 1 -and $r.Output -match 'single test \.csproj') `
+        "exit $($r.Exit) - a folder spans several projects, whose output cannot be told apart"
 
     # $repo holds Sample.csproj and Sloppy.cs but no test project, so discovery
     # finds nothing. It must say so rather than falling back to the solution -

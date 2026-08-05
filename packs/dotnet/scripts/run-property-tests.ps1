@@ -71,10 +71,16 @@ $targets = @(if ($Project) {
     # A solution is rejected rather than silently reinterpreted. Expanding it to
     # every test project in the repo would run projects outside the named
     # solution, so a scoped request could fail on something it never asked about.
-    if ($Project -match '\.slnx?$') {
-        Write-Host 'GATE COULD NOT RUN: -Project takes a test project, not a solution.' -ForegroundColor Red
-        Write-Host '  Name a .csproj to run one project, or omit -Project to run every'
-        Write-Host '  discovered test project - each is run separately either way.'
+    # A single .csproj, nothing else. Resolve-BuildTarget accepts any path that
+    # exists, so a solution OR a directory would otherwise become one dotnet test
+    # spanning several projects - the interleaved run this design exists to avoid,
+    # re-entered through the one argument that looks like it narrows scope.
+    if ($Project -notmatch '\.csproj$') {
+        Write-Host 'GATE COULD NOT RUN: -Project takes a single test .csproj.' -ForegroundColor Red
+        Write-Host "  Got: $Project"
+        Write-Host '  A solution or a directory would run several projects in one pass, and'
+        Write-Host '  their output cannot be told apart afterwards. Name one .csproj, or omit'
+        Write-Host '  -Project to run every discovered test project - each is run separately.'
         exit 1
     }
     Resolve-BuildTarget -RepoRoot $repoRoot -Explicit $Project
