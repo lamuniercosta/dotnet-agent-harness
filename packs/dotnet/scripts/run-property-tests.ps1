@@ -21,11 +21,17 @@ if ($Help) {
     Write-Output @"
 Usage: run-property-tests.ps1 [OPTIONS]
 
-Runs dotnet test with filter Category=Property. Defaults to the whole solution,
-so every test project is covered without naming them.
+Runs dotnet test with filter Category=Property, ONE TEST PROJECT AT A TIME.
+Every discovered test project is covered without naming them.
+
+Per project on purpose: a whole-solution run interleaves each assembly's
+output, and the signals that classify a run are per assembly while the exit
+code is not - which made "this assembly had no matching tests" and "that
+assembly died before reporting" indistinguishable.
 
 OPTIONS:
-  -Project <path>   Test project or solution to run (default: auto-discovered)
+  -Project <path>   A single test .csproj (default: every discovered one).
+                    A solution is rejected - omit -Project instead.
   -Category <name>  Trait category to filter on (default: Property)
   -Help             Show this help
 
@@ -54,21 +60,39 @@ if (-not (Get-HarnessValue 'gates.propertyTests.enabled' -RepoRoot $repoRoot)) {
 #
 # Enumerating projects costs one `dotnet test` each and makes the whole class of
 # confusion impossible: one project, one result, no interleaving to untangle.
-# A solution is expanded to its test projects rather than run whole, including
-# when the caller names one explicitly: handing the classifier interleaved output
-# is the one thing that must never happen, whichever path got us here.
+# @() at every assignment, not inside Get-TestProjects: PowerShell unwraps a
+# one-element array on return, and `.Count` on the resulting string throws under
+# Set-StrictMode. A repo with exactly one test project - the common shape - would
+# crash before running anything, and the fixture's two projects hid it.
 $targets = if ($Project) {
-    $resolved = Resolve-BuildTarget -RepoRoot $repoRoot -Explicit $Project
-    if ($resolved -like '*.csproj') { @($resolved) } else { Get-TestProjects -RepoRoot $repoRoot }
+    # A solution is rejected rather than silently reinterpreted. Expanding it to
+    # every test project in the repo would run projects outside the named
+    # solution, so a scoped request could fail on something it never asked about.
+    if ($Project -match '\.slnx?$') {
+        Write-Host 'GATE COULD NOT RUN: -Project takes a test project, not a solution.' -ForegroundColor Red
+        Write-Host '  Name a .csproj to run one project, or omit -Project to run every'
+        Write-Host '  discovered test project - each is run separately either way.'
+        exit 1
+    }
+    @(Resolve-BuildTarget -RepoRoot $repoRoot -Explicit $Project)
 }
 else {
-    Get-TestProjects -RepoRoot $repoRoot
+    @(Get-TestProjects -RepoRoot $repoRoot)
 }
 
-# No discoverable test project: fall back to the solution rather than inventing a
-# verdict. Whatever `dotnet test` reports about it is still classified below.
+# No fallback to running the solution: that is the interleaved path this design
+# exists to avoid, and it would be re-entered exactly when discovery is already
+# known to be unreliable. Discovery reads each .csproj for the test SDK or
+# IsTestProject, so a repo declaring either only in Directory.Build.props finds
+# nothing - which is a configuration problem to report, not to paper over.
 if ($targets.Count -eq 0) {
-    $targets = @(Resolve-BuildTarget -RepoRoot $repoRoot -Explicit '')
+    Write-Host 'GATE COULD NOT RUN: no test projects found.' -ForegroundColor Red
+    Write-Host '  Looked for .csproj files referencing Microsoft.NET.Test.Sdk or setting'
+    Write-Host '  <IsTestProject>true</IsTestProject>. Both are inherited if they live only'
+    Write-Host '  in Directory.Build.props, where this cannot see them.'
+    Write-Host '  Fix: set <IsTestProject>true</IsTestProject> in each test .csproj, or pass'
+    Write-Host '  -Project <path-to-test.csproj>.'
+    exit 1
 }
 
 Push-Location $repoRoot

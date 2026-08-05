@@ -266,22 +266,21 @@ try {
     $outcome = Get-TestRunOutcome -Output $noneMatched -ExitCode 0
     Assert-That 'property verdict: a clean no-match run is still SKIPPED' `
         ($outcome.Outcome -eq 'NothingMatched') `
-        'gating on the exit code must not turn a genuine skip into a failure'
+        'a successful run that matched nothing verified nothing, which is exit 2'
 
-    # Some runner versions exit non-zero when a filter matches nothing. Every
-    # assembly attempted reported no match, so there was genuinely nothing to
-    # run - deciding on the exit code alone would turn those empty runs into
-    # failures, which is the accommodation the pre-PR gate made deliberately.
-    $allNoMatchNonZero = @(
+    # One project is still several runs when it multi-targets. A no-match on one
+    # framework beside a crashed host on another is the per-project version of
+    # the interleaving bug, and per-project scheduling does not separate them -
+    # only failing closed does.
+    $multiTfm = @(
         'A total of 1 test files matched the specified pattern.'
-        'A total of 1 test files matched the specified pattern.'
-        'No test matches the given testcase filter `Category=Property` in /r/Unit.dll'
-        'No test matches the given testcase filter `Category=Property` in /r/Acceptance.dll'
+        'No test matches the given testcase filter `Category=Property` in /r/Unit/net8.0/Unit.dll'
+        'The active test run was aborted. Reason: Test host process crashed'
     )
-    $outcome = Get-TestRunOutcome -Output $allNoMatchNonZero -ExitCode 1
-    Assert-That 'property verdict: every assembly no-matching is SKIPPED even on a non-zero exit' `
-        ($outcome.Outcome -eq 'NothingMatched') `
-        "got $($outcome.Outcome) - a runner that exits non-zero on an empty filter must not fail the gate"
+    $outcome = Get-TestRunOutcome -Output $multiTfm -ExitCode 1
+    Assert-That 'property verdict: a no-match on one framework does not excuse a crash on another' `
+        ($outcome.Outcome -eq 'Inconclusive') `
+        "got $($outcome.Outcome) - a failed process with nothing executed is never a skip"
 
     # Matched but every one skipped: the tests exist and are tagged, so telling
     # someone to add property tests they already have sends them the wrong way.
@@ -293,6 +292,28 @@ try {
     Assert-That 'property verdict: all-skipped is distinguishable from none-tagged' `
         ($outcome.Outcome -eq 'NothingMatched' -and $outcome.Skipped -eq 2) `
         "got $($outcome.Outcome)/skipped=$($outcome.Skipped) - the remediation differs between the two"
+
+    # ── Discovery returns an array, even for one project ─────────────────────
+    # PowerShell unwraps a one-element array on return, and .Count on the
+    # resulting string throws under Set-StrictMode - so a repo with exactly one
+    # test project crashed before running anything. The fixture's two projects
+    # hid it, which is why this asserts the single-project shape specifically.
+    $solo = Join-Path ([System.IO.Path]::GetTempPath()) ("harness-solo-" + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $solo -Force | Out-Null
+    $repos += $solo
+    Set-Content -LiteralPath (Join-Path $solo 'Only.csproj') -Encoding UTF8 -Value @(
+        '<Project Sdk="Microsoft.NET.Sdk">'
+        '  <ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.0.0" /></ItemGroup>'
+        '</Project>'
+    )
+
+    $found = Get-TestProjects -RepoRoot $solo
+    $countable = $true
+    try { $null = @($found).Count; $null = $found.Count } catch { $countable = $false }
+
+    Assert-That 'discovery: a single test project is still countable' `
+        ($countable -and @($found).Count -eq 1) `
+        'a one-element return unwraps to a string, and .Count on it throws under StrictMode'
 }
 finally {
     foreach ($r in $repos) {

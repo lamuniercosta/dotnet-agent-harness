@@ -147,7 +147,7 @@ function Get-TestProjects {
     #>
     param([string]$RepoRoot)
 
-    return @(
+    $found = @(
         Get-ChildItem -Path $RepoRoot -Filter '*.csproj' -File -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' } |
             Where-Object {
@@ -157,6 +157,12 @@ function Get-TestProjects {
             Select-Object -ExpandProperty FullName |
             Sort-Object
     )
+
+    # Comma operator: `return $found` unwraps a one-element array to a bare
+    # string, and .Count on a string throws under Set-StrictMode - so a repo with
+    # exactly one test project crashed before running anything. Verified that a
+    # caller wrapping this in @() as well is a harmless no-op, not a nesting.
+    return , $found
 }
 
 function Get-TestRunOutcome {
@@ -178,11 +184,17 @@ function Get-TestRunOutcome {
       test carries [Fact(Skip = "...")] verified nothing, and reporting that as a
       pass is the vacuous green this whole gate exists to prevent.
 
-      A no-match line is accepted regardless of the exit code, because for a
-      SINGLE project it is a complete explanation: the runner discovered the
-      assembly, applied the filter, and found nothing. Some runner versions exit
-      non-zero on that, and those empty runs must stay SKIPPED rather than
-      becoming failures.
+      A no-match line only means SKIPPED when the process SUCCEEDED. One project
+      is still several runs when it multi-targets, so a no-match on one framework
+      can sit beside a crashed host on another - and per-project scheduling does
+      not separate those. Failing closed is the only reading that cannot hide a
+      failure behind "nothing to verify".
+
+      This does drop an accommodation for runners that supposedly exit non-zero
+      when a filter matches nothing. That claim was inherited and never verified;
+      the SDKs this targets exit 0, checked directly. If one does not, the gate
+      says GATE COULD NOT RUN with remediation rather than silently skipping -
+      loud and wrong beats quiet and wrong.
 
       Counting executed tests, rather than trusting the "no test matches" line, is
       what makes this correct on a solution with more than one test assembly. With
@@ -236,6 +248,14 @@ function Get-TestRunOutcome {
         return [PSCustomObject]@{ Outcome = 'Ran'; Executed = $executed; Skipped = $skipped }
     }
 
+    # Fail closed. Zero tests executed and a failed process is unexplained no
+    # matter what else the output says: a no-match line accounts for one target,
+    # not for the failure, and a multi-targeted project produces several targets
+    # per run.
+    if ($ExitCode -ne 0) {
+        return [PSCustomObject]@{ Outcome = 'Inconclusive'; Executed = 0; Skipped = $skipped }
+    }
+
     # Matched but never ran, or never matched. Either way nothing was verified,
     # so it is a skip and not a pass; Skipped tells the caller which remediation
     # to print, because "add property tests" is the wrong advice for someone who
@@ -244,13 +264,7 @@ function Get-TestRunOutcome {
         return [PSCustomObject]@{ Outcome = 'NothingMatched'; Executed = 0; Skipped = $skipped }
     }
 
-    # Nothing ran and nothing said why. Whether the process failed only changes
-    # the wording - the gate cannot conclude either way, so it says so.
-    return [PSCustomObject]@{
-        Outcome  = if ($ExitCode -ne 0) { 'Inconclusive' } else { 'Unknown' }
-        Executed = 0
-        Skipped  = $skipped
-    }
+    return [PSCustomObject]@{ Outcome = 'Unknown'; Executed = 0; Skipped = $skipped }
 }
 
 function Resolve-TestProject {
