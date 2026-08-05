@@ -220,17 +220,18 @@ pwsh ./scripts/apply-fix.ps1      && pwsh ./scripts/Assert-Gates.ps1 -Expect Pas
 
 This tests that the gates **catch** things, not merely that they run.
 
-Eight self-tests guard the pieces that could fail silently:
+Eight self-tests guard the pieces that could fail silently. Each prints its own
+check count — quoted here they only go stale, which has already happened twice:
 
 ```bash
-pwsh ./hooks/Test-Guard.ps1                            # 23 checks
-pwsh ./hooks/Test-SecretScan.ps1                       # 20 checks
-pwsh ./packs/dotnet/scripts/Test-HarnessConfig.ps1     # 14 checks
+pwsh ./hooks/Test-Guard.ps1                            # the guard hook
+pwsh ./hooks/Test-SecretScan.ps1                       # secret scanning, both directions
+pwsh ./packs/dotnet/scripts/Test-HarnessConfig.ps1     # harness.yml parsing
 pwsh ./packs/dotnet/scripts/Test-ThresholdDocs.ps1     # docs vs harness.yml
-pwsh ./packs/dotnet/scripts/Test-SpecKitExtension.ps1  # 15 checks
-pwsh ./packs/dotnet/scripts/Test-InstallArtifacts.ps1  # 18 checks
-pwsh ./packs/dotnet/scripts/Test-GherkinMutation.ps1   # 14 checks
-pwsh ./packs/dotnet/scripts/Test-GateExitContract.ps1  # 24 checks
+pwsh ./packs/dotnet/scripts/Test-SpecKitExtension.ps1  # the Spec Kit coupling
+pwsh ./packs/dotnet/scripts/Test-InstallArtifacts.ps1  # CLAUDE.md imports, constitution
+pwsh ./packs/dotnet/scripts/Test-GherkinMutation.ps1   # feature-file reassembly
+pwsh ./packs/dotnet/scripts/Test-GateExitContract.ps1  # 0 / 1 / 2, both directions
 ```
 
 The guard's suite includes the escaped-quote payload that defeats a `grep`-based hook —
