@@ -194,11 +194,18 @@ try {
     # Total counts skipped tests. A suite where every property test carries
     # [Fact(Skip = "...")] would otherwise report "2 tests executed" having run
     # no test body - the same vacuous pass this gate exists to prevent.
-    $allSkipped = @('Passed!  - Failed:     0, Passed:     0, Skipped:     2, Total:     2, Duration: 3 ms - Unit.dll (net8.0)')
-    $outcome = Get-TestRunOutcome -Output $allSkipped
-    Assert-That 'property verdict: every test skipped is not "executed"' `
-        ($outcome.Outcome -ne 'Ran') `
-        "got $($outcome.Outcome)/$($outcome.Executed) - skipped bodies never ran, so this cannot be a pass"
+    # Asserts the exact outcome, not merely "not Ran": Unknown is also not Ran,
+    # and Unknown exits 1. A single-assembly suite whose property tests are all
+    # skipped emits no no-match line at all, so classifying it by that line alone
+    # made it Unknown and failed a repo that should have been SKIPPED.
+    $allSkipped = @(
+        'A total of 1 test files matched the specified pattern.'
+        'Passed!  - Failed:     0, Passed:     0, Skipped:     2, Total:     2, Duration: 3 ms - Unit.dll (net8.0)'
+    )
+    $outcome = Get-TestRunOutcome -Output $allSkipped -ExitCode 0
+    Assert-That 'property verdict: all-skipped with no no-match line is SKIPPED, not a failure' `
+        ($outcome.Outcome -eq 'NothingMatched' -and $outcome.Skipped -eq 2) `
+        "got $($outcome.Outcome)/skipped=$($outcome.Skipped) - nothing verified is exit 2, and Unknown would exit 1"
 
     # Older VSTest spreads the counts across lines under a "Total tests:" heading.
     # Matching only "Total:" misses it entirely, turning a healthy run into
@@ -217,7 +224,11 @@ try {
     # assemblies - one with no matching tests, one crashing before it reports any
     # counts - the output is indistinguishable from a clean skip except for the
     # exit code. Folding that into NothingMatched reports SKIPPED over a failure.
+    # Two assemblies attempted, only one accounted for: the other died before
+    # reporting anything. That gap is the signal, not the exit code alone.
     $noMatchPlusFailure = @(
+        'A total of 1 test files matched the specified pattern.'
+        'A total of 1 test files matched the specified pattern.'
         'No test matches the given testcase filter `Category=Property` in /r/Acceptance.dll'
         'The active test run was aborted. Reason: Test host process crashed'
     )
@@ -230,6 +241,21 @@ try {
     Assert-That 'property verdict: a clean no-match run is still SKIPPED' `
         ($outcome.Outcome -eq 'NothingMatched') `
         'gating on the exit code must not turn a genuine skip into a failure'
+
+    # Some runner versions exit non-zero when a filter matches nothing. Every
+    # assembly attempted reported no match, so there was genuinely nothing to
+    # run - deciding on the exit code alone would turn those empty runs into
+    # failures, which is the accommodation the pre-PR gate made deliberately.
+    $allNoMatchNonZero = @(
+        'A total of 1 test files matched the specified pattern.'
+        'A total of 1 test files matched the specified pattern.'
+        'No test matches the given testcase filter `Category=Property` in /r/Unit.dll'
+        'No test matches the given testcase filter `Category=Property` in /r/Acceptance.dll'
+    )
+    $outcome = Get-TestRunOutcome -Output $allNoMatchNonZero -ExitCode 1
+    Assert-That 'property verdict: every assembly no-matching is SKIPPED even on a non-zero exit' `
+        ($outcome.Outcome -eq 'NothingMatched') `
+        "got $($outcome.Outcome) - a runner that exits non-zero on an empty filter must not fail the gate"
 
     # Matched but every one skipped: the tests exist and are tagged, so telling
     # someone to add property tests they already have sends them the wrong way.

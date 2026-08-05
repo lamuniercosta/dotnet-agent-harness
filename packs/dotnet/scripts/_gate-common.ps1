@@ -154,6 +154,11 @@ function Get-TestRunOutcome {
       except for the exit code. Folding that into NothingMatched reports SKIPPED
       over a failed run.
 
+      The two are told apart by comparing no-match lines against the number of
+      assemblies attempted, NOT by the exit code alone: some runner versions exit
+      non-zero when a filter matches nothing, and those empty runs must stay
+      SKIPPED rather than becoming failures.
+
       Counting executed tests, rather than trusting the "no test matches" line, is
       what makes this correct on a solution with more than one test assembly. With
       two test projects, the one without matching tests prints that line while the
@@ -186,6 +191,9 @@ function Get-TestRunOutcome {
 
     $executed = 0
     $skipped = 0
+    $noMatch = 0
+    $assemblies = 0
+
     foreach ($line in $Output) {
         # `Passed!` / `Failed!` are the run-level verdict prefixes and carry no
         # count; requiring the colon skips them.
@@ -195,16 +203,40 @@ function Get-TestRunOutcome {
         foreach ($m in [regex]::Matches($line, '\bSkipped:\s*(\d+)')) {
             $skipped += [int]$m.Groups[1].Value
         }
+        if ($line -match 'No test matches the given testcase filter') { $noMatch++ }
+        # Printed once per test assembly, before it runs, so it counts how many
+        # were attempted.
+        if ($line -match 'A total of \d+ test files matched the specified pattern') { $assemblies++ }
     }
 
     if ($executed -gt 0) {
         return [PSCustomObject]@{ Outcome = 'Ran'; Executed = $executed; Skipped = $skipped }
     }
 
-    if (@($Output | Where-Object { $_ -match 'No test matches the given testcase filter' }).Count -gt 0) {
-        if ($ExitCode -ne 0) {
-            return [PSCustomObject]@{ Outcome = 'Inconclusive'; Executed = 0; Skipped = $skipped }
-        }
+    # Every assembly that was attempted reported no match, so there was genuinely
+    # nothing to run - whatever the exit code says. Some runner versions exit
+    # non-zero on an empty filter result, and that has to stay a SKIP; deciding
+    # this on the exit code alone would turn those into failures.
+    if ($noMatch -gt 0 -and $assemblies -gt 0 -and $noMatch -ge $assemblies) {
+        return [PSCustomObject]@{ Outcome = 'NothingMatched'; Executed = 0; Skipped = $skipped }
+    }
+
+    # Tests matched the filter and then did not run. Nothing was verified, so it
+    # is a skip rather than a pass - but a different one from "none are tagged",
+    # and the remediation differs.
+    if ($skipped -gt 0) {
+        return [PSCustomObject]@{ Outcome = 'NothingMatched'; Executed = 0; Skipped = $skipped }
+    }
+
+    # Zero executed, unaccounted assemblies, and a failed run: something died
+    # before reporting. A no-match line from one assembly does not explain it.
+    if ($ExitCode -ne 0) {
+        return [PSCustomObject]@{ Outcome = 'Inconclusive'; Executed = 0; Skipped = $skipped }
+    }
+
+    # A clean run with a no-match line but no parsed discovery lines - an older
+    # runner whose preamble differs. Nothing ran and nothing failed.
+    if ($noMatch -gt 0) {
         return [PSCustomObject]@{ Outcome = 'NothingMatched'; Executed = 0; Skipped = $skipped }
     }
 
