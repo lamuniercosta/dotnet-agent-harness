@@ -135,29 +135,54 @@ function Resolve-BuildTarget {
     throw 'No .sln, .slnx, or .csproj found in this repository.'
 }
 
+function Get-TestProjects {
+    <#
+      Every test project in the repo, so a gate can run them ONE AT A TIME.
+
+      Running a whole solution in one `dotnet test` interleaves the output of
+      every assembly, and no amount of parsing reliably separates "this assembly
+      had no matching tests" from "that assembly died before reporting". Four
+      rounds of review on this gate were all variations of that one confusion.
+      Running per project removes it by construction: one project, one result.
+    #>
+    param([string]$RepoRoot)
+
+    return @(
+        Get-ChildItem -Path $RepoRoot -Filter '*.csproj' -File -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' } |
+            Where-Object {
+                $text = Get-Content -LiteralPath $_.FullName -Raw
+                $text -match 'Microsoft\.NET\.Test\.Sdk' -or $text -match '<IsTestProject>\s*true'
+            } |
+            Select-Object -ExpandProperty FullName |
+            Sort-Object
+    )
+}
+
 function Get-TestRunOutcome {
     <#
-      Classifies a `dotnet test` run from its output, so a gate can tell "nothing
-      to verify" from "verified something".
+      Classifies ONE `dotnet test` run of ONE project, so a gate can tell
+      "nothing to verify" from "verified something".
+
+      Single-project by contract. Handed the interleaved output of a whole
+      solution it cannot be correct, because the signals it reads are per
+      assembly and the exit code is not. Callers enumerate projects with
+      Get-TestProjects and classify each separately.
 
         Ran            - at least one test executed; judge it on the exit code
-        NothingMatched - zero executed, the runner said the filter matched nothing,
-                         and the run itself succeeded
-        Inconclusive   - zero executed and a no-match line, but the run FAILED; the
-                         no-match explains one assembly, not the failure
-        Unknown        - zero executed and no explanation; the gate cannot conclude
+        NothingMatched - nothing ran: either the filter matched nothing, or every
+                         match was skipped. Skipped says which.
+        Inconclusive   - nothing ran, nothing explains why, and the run FAILED
 
-      Inconclusive exists because a no-match line and a failure can appear in the
-      same run. With two test assemblies, one having no matching tests and the
-      other crashing during discovery before it reports any counts, the output
-      carries the no-match message and no summary - identical to a clean skip
-      except for the exit code. Folding that into NothingMatched reports SKIPPED
-      over a failed run.
+      Skipped tests are never counted as executed. A suite where every property
+      test carries [Fact(Skip = "...")] verified nothing, and reporting that as a
+      pass is the vacuous green this whole gate exists to prevent.
 
-      The two are told apart by comparing no-match lines against the number of
-      assemblies attempted, NOT by the exit code alone: some runner versions exit
-      non-zero when a filter matches nothing, and those empty runs must stay
-      SKIPPED rather than becoming failures.
+      A no-match line is accepted regardless of the exit code, because for a
+      SINGLE project it is a complete explanation: the runner discovered the
+      assembly, applied the filter, and found nothing. Some runner versions exit
+      non-zero on that, and those empty runs must stay SKIPPED rather than
+      becoming failures.
 
       Counting executed tests, rather than trusting the "no test matches" line, is
       what makes this correct on a solution with more than one test assembly. With
@@ -191,56 +216,41 @@ function Get-TestRunOutcome {
 
     $executed = 0
     $skipped = 0
-    $noMatch = 0
-    $assemblies = 0
+    $noMatch = $false
 
     foreach ($line in $Output) {
         # `Passed!` / `Failed!` are the run-level verdict prefixes and carry no
-        # count; requiring the colon skips them.
+        # count; requiring the colon skips them. Both labels are summed so the
+        # legacy VSTest layout, which spreads them over separate lines under a
+        # "Total tests:" heading, reads the same as the current one-line summary.
         foreach ($m in [regex]::Matches($line, '\b(?:Passed|Failed):\s*(\d+)')) {
             $executed += [int]$m.Groups[1].Value
         }
         foreach ($m in [regex]::Matches($line, '\bSkipped:\s*(\d+)')) {
             $skipped += [int]$m.Groups[1].Value
         }
-        if ($line -match 'No test matches the given testcase filter') { $noMatch++ }
-        # Printed once per test assembly, before it runs, so it counts how many
-        # were attempted.
-        if ($line -match 'A total of \d+ test files matched the specified pattern') { $assemblies++ }
+        if ($line -match 'No test matches the given testcase filter') { $noMatch = $true }
     }
 
     if ($executed -gt 0) {
         return [PSCustomObject]@{ Outcome = 'Ran'; Executed = $executed; Skipped = $skipped }
     }
 
-    # Every assembly that was attempted reported no match, so there was genuinely
-    # nothing to run - whatever the exit code says. Some runner versions exit
-    # non-zero on an empty filter result, and that has to stay a SKIP; deciding
-    # this on the exit code alone would turn those into failures.
-    if ($noMatch -gt 0 -and $assemblies -gt 0 -and $noMatch -ge $assemblies) {
+    # Matched but never ran, or never matched. Either way nothing was verified,
+    # so it is a skip and not a pass; Skipped tells the caller which remediation
+    # to print, because "add property tests" is the wrong advice for someone who
+    # has them and skipped them.
+    if ($skipped -gt 0 -or $noMatch) {
         return [PSCustomObject]@{ Outcome = 'NothingMatched'; Executed = 0; Skipped = $skipped }
     }
 
-    # Tests matched the filter and then did not run. Nothing was verified, so it
-    # is a skip rather than a pass - but a different one from "none are tagged",
-    # and the remediation differs.
-    if ($skipped -gt 0) {
-        return [PSCustomObject]@{ Outcome = 'NothingMatched'; Executed = 0; Skipped = $skipped }
+    # Nothing ran and nothing said why. Whether the process failed only changes
+    # the wording - the gate cannot conclude either way, so it says so.
+    return [PSCustomObject]@{
+        Outcome  = if ($ExitCode -ne 0) { 'Inconclusive' } else { 'Unknown' }
+        Executed = 0
+        Skipped  = $skipped
     }
-
-    # Zero executed, unaccounted assemblies, and a failed run: something died
-    # before reporting. A no-match line from one assembly does not explain it.
-    if ($ExitCode -ne 0) {
-        return [PSCustomObject]@{ Outcome = 'Inconclusive'; Executed = 0; Skipped = $skipped }
-    }
-
-    # A clean run with a no-match line but no parsed discovery lines - an older
-    # runner whose preamble differs. Nothing ran and nothing failed.
-    if ($noMatch -gt 0) {
-        return [PSCustomObject]@{ Outcome = 'NothingMatched'; Executed = 0; Skipped = $skipped }
-    }
-
-    return [PSCustomObject]@{ Outcome = 'Unknown'; Executed = 0; Skipped = $skipped }
 }
 
 function Resolve-TestProject {

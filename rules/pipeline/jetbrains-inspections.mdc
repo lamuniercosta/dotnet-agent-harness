@@ -19,7 +19,8 @@ From the repository root. Use `-BaseRef <base>` when the base branch is not the 
 
 ## Failure handling
 
-- If the script exits non-zero, fix every reported issue at **WARNING** severity or higher before proceeding.
+- **Exit `1`** — fix every reported issue at **WARNING** severity or higher before proceeding.
+- **Exit `2` (SKIPPED)** — nothing was inspected, usually because no `.cs` file changed against the base branch. It is not a pass. When you need verification rather than a diff check, re-run with `-All`.
 - Do not rely on `ReadLints` for JetBrains-only inspections (e.g. `ExplicitCallerInfoArgument`).
 - When an explicit value is intentional (e.g. a fixed telemetry span name in a test), use a targeted ReSharper suppression comment instead of ignoring the finding.
 

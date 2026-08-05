@@ -158,8 +158,37 @@ if ($Expect -eq 'Pass') {
     $checks++
     $percentage = Join-Path $Repo 'Bad/Percentage.cs'
     $original = Get-Content -LiteralPath $percentage -Raw
+    $gate = Join-Path $Repo 'scripts/run-property-tests.ps1'
 
-    @'
+    # Both runs are deliberately UNSCOPED, across the whole solution.
+    #
+    # This used to pass -Project Bad.Tests to work around #24: with
+    # Bad.AcceptanceTests in the solution, that assembly reports "No test matches
+    # the given testcase filter" for Category=Property, and the gate read the
+    # whole run as SKIPPED even though Bad.Tests had run its property tests.
+    #
+    # Scoping it hid the bug from CI. Two test assemblies is the ordinary shape of
+    # a .NET solution and the condition that reproduced #24, so the fixture runs
+    # the gate the way a consumer does.
+    try {
+        # GREEN first, before anything is planted. Without it, an assertion that
+        # only ever sees the broken state cannot tell a working gate from one that
+        # fails on every multi-assembly solution.
+        & dotnet build (Join-Path $Repo 'BadCode.sln') --verbosity quiet *> $null
+        $cleanOutput = & pwsh -NoProfile -File $gate 2>&1 | Out-String
+        $cleanExit = $LASTEXITCODE
+
+        if ($cleanExit -eq 0 -and $cleanOutput -match 'passed \((\d+) test\(s\) executed') {
+            Write-Host ("  ok    {0,-22} exit 0 on the intact solution, {1} executed" -f 'property-tests', $Matches[1])
+        }
+        else {
+            Write-Host ("  FAIL  {0,-22} exit {1} on the intact solution - a gate that always fails proves nothing" -f 'property-tests', $cleanExit) -ForegroundColor Red
+            Write-Host ($cleanOutput -split "`r?`n" | Select-Object -Last 6 | ForEach-Object { "        $_" }) -ForegroundColor DarkGray
+            $failures++
+        }
+
+        $checks++
+        @'
 namespace Bad;
 
 // Temporarily broken by Assert-Gates to prove the property gate fires.
@@ -172,28 +201,23 @@ public static class Percentage
 }
 '@ | Set-Content -LiteralPath $percentage -Encoding UTF8
 
-    try {
         & dotnet build (Join-Path $Repo 'BadCode.sln') --verbosity quiet *> $null
-        # Deliberately UNSCOPED, across the whole solution.
-        #
-        # This used to pass -Project Bad.Tests to work around #24: with
-        # Bad.AcceptanceTests in the solution, that assembly reports "No test
-        # matches the given testcase filter" for Category=Property, and the
-        # gate's zero-match detection read the whole run as SKIPPED even though
-        # Bad.Tests had run its property tests.
-        #
-        # Scoping it hid the bug from CI. Two test assemblies is the ordinary
-        # shape of a .NET solution and the condition that reproduced #24, so the
-        # fixture runs the gate the way a consumer does - otherwise the fix is
-        # proven only against canned strings.
-        & pwsh -NoProfile -File (Join-Path $Repo 'scripts/run-property-tests.ps1') *> $null
+        $brokenOutput = & pwsh -NoProfile -File $gate 2>&1 | Out-String
         $propExit = $LASTEXITCODE
 
-        if ($propExit -eq 1) {
-            Write-Host ("  ok    {0,-22} exit 1 on a violated invariant" -f 'property-tests')
+        # Exit 1 alone is not proof. A build error, a missing filter match, a
+        # crashed test host and a genuinely caught invariant all exit 1, so the
+        # assertion names what it expects to find: the gate's own FAILED verdict
+        # and the property that broke.
+        $caught = $brokenOutput -match 'Property tests: FAILED' -and
+                  $brokenOutput -match 'Clamp_AlwaysWithinBounds'
+
+        if ($propExit -eq 1 -and $caught) {
+            Write-Host ("  ok    {0,-22} exit 1 naming the violated invariant" -f 'property-tests')
         }
         else {
-            Write-Host ("  FAIL  {0,-22} exit {1}, expected 1 - the gate missed a broken invariant" -f 'property-tests', $propExit) -ForegroundColor Red
+            Write-Host ("  FAIL  {0,-22} exit {1} - expected 1 reporting Clamp_AlwaysWithinBounds" -f 'property-tests', $propExit) -ForegroundColor Red
+            Write-Host ($brokenOutput -split "`r?`n" | Select-Object -Last 8 | ForEach-Object { "        $_" }) -ForegroundColor DarkGray
             $failures++
         }
     }
