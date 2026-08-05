@@ -13,7 +13,8 @@ means a consuming repo's gates may start failing on code that previously passed.
 Everything here came from installing `0.1.0` into two real projects. The fixture
 had proved the gates against code written to be caught by them; the first
 contact with repositories that already had history, a `CLAUDE.md`, and more than
-one test assembly found eleven defects the fixture could not.
+one test assembly found every defect listed below, none of which the fixture
+could have surfaced.
 
 ### Breaking
 
@@ -69,9 +70,10 @@ you handle `2`.
 
 ### Added
 
-- Six self-test suites covering the installer, the Spec Kit coupling, the
-  Gherkin mutation logic and the exit contract — each verified to fail against
-  the code it replaced
+- Five self-test suites — secret scanning, the Spec Kit coupling, the installed
+  artifacts, the Gherkin mutation logic and the gate exit contract — bringing the
+  total to eight. Each was verified to fail against the code it replaced, because
+  a test written after the fix proves only that the fix is self-consistent
 - An acceptance-test fixture proving the Gherkin mutation gate in both
   directions, retiring one of the two stated limitations
 - `AVAILABLE` install status for templates that ship but are deliberately not
