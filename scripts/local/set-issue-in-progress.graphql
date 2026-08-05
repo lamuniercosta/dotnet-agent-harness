@@ -6,29 +6,21 @@ query($owner: String!, $name: String!, $number: Int!) {
           id
           project {
             id
-            number
             title
-            owner {
-              __typename
-              ... on User { login }
-              ... on Organization { login }
+            field(name: "Status") {
+              ... on ProjectV2SingleSelectField {
+                id
+                options {
+                  id
+                  name
+                }
+              }
             }
           }
           fieldValueByName(name: "Status") {
             __typename
             ... on ProjectV2ItemFieldSingleSelectValue {
               name
-              optionId
-              field {
-                ... on ProjectV2SingleSelectField {
-                  id
-                  name
-                  options {
-                    id
-                    name
-                  }
-                }
-              }
             }
           }
         }
