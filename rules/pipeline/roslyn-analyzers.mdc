@@ -23,7 +23,8 @@ Run alongside InspectCode and cyclomatic complexity — all three are required.
 
 ## Failure handling
 
-- If the script exits non-zero, fix every reported CA/IDE warning before proceeding.
+- **Exit `1`** — fix every reported CA/IDE warning before proceeding.
+- **Exit `2` (SKIPPED)** — nothing was analysed, usually because no `.cs` file changed against the base branch. It is not a pass. When you need verification rather than a diff check, re-run with `-All`.
 - CA1502 is excluded from this script; use `run-cyclomatic-complexity.ps1` for complexity.
 - Severities are configured in `.editorconfig` under the Roslyn analyzer gate section.
 - To ban an API outright (e.g. `DateTime.Now`), add it to `BannedSymbols.txt` as `P:|M:|T:|F:<DocumentationCommentId>;<reason>` rather than writing a new rule.

@@ -28,7 +28,8 @@ The refactor gate later tightens this to `gates.complexity.refactor` (default 6)
 
 ## Failure handling
 
-- If the script exits non-zero, refactor the reported method(s) into smaller units before proceeding.
+- **Exit `1`** — refactor the reported method(s) into smaller units before proceeding.
+- **Exit `2` (SKIPPED)** — nothing was measured, usually because no `.cs` file changed against the base branch. It is not a pass. When you need verification rather than a diff check, re-run with `-All`.
 - Prefer extracting private helpers, early returns, and guard clauses over suppressions.
 - Suppressions (`#pragma warning disable CA1502`) are permitted only for generated code or when complexity is unavoidable; include a brief justification.
 

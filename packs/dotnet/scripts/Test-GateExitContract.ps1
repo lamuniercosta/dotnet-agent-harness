@@ -6,9 +6,15 @@
 # three diff-scoped gates once exited 0 on an empty changed-file set. Both
 # reported a pass over something they had never read.
 #
-# Asserted in BOTH directions throughout. A gate that always skips looks exactly
-# like a gate that correctly skips, so every SKIPPED assertion is paired with a
-# case that must still fail.
+# A gate that always skips looks exactly like a gate that correctly skips, so the
+# SKIPPED assertions are paired with cases that must still fail.
+#
+# Roslyn and complexity get a real planted violation here, and each asserts the
+# diagnostic it expects to see rather than accepting any exit 1 - a build error
+# and a caught violation both exit 1. InspectCode's failure direction is NOT
+# covered here, because it needs `jb` restored; the fixture round trip proves it
+# instead. The property gate's failure direction is likewise proven end to end by
+# the fixture, since it needs a real multi-assembly solution.
 
 [CmdletBinding()]
 param()
@@ -138,9 +144,24 @@ try {
     Set-Content -LiteralPath (Join-Path $repo 'Sloppy.cs') -Value $violating -Encoding UTF8
     $r = Invoke-Gate -Repo $repo -Script 'run-roslyn-analyzers.ps1'
 
+    # Names the diagnostic rather than accepting any exit 1: a build error, an
+    # unwired gate and a caught violation all exit 1, so a bare exit check would
+    # pass while the analyzer found nothing.
     Assert-That 'analyzers: a changed file with a violation still exits 1' `
-        ($r.Exit -eq 1) `
-        "exit $($r.Exit) - if everything skips, the gate verifies nothing"
+        ($r.Exit -eq 1 -and $r.Output -match 'Sloppy\.cs' -and $r.Output -match '\b(CA|IDE)\d+\b') `
+        "exit $($r.Exit) - expected 1 reporting a CA/IDE diagnostic in Sloppy.cs"
+
+    # Complexity gets its own planted violation. Without it, a change that made
+    # every gate skip would still pass the block above on Roslyn alone.
+    $complex = @('namespace Sample;', '', 'public static class Tangled', '{', '    public static int Route(int n)', '    {')
+    foreach ($i in 1..20) { $complex += "        if (n == $i) { return $i; }" }
+    $complex += @('        return 0;', '    }', '}')
+    Set-Content -LiteralPath (Join-Path $repo 'Tangled.cs') -Value $complex -Encoding UTF8
+    $r = Invoke-Gate -Repo $repo -Script 'run-cyclomatic-complexity.ps1'
+
+    Assert-That 'complexity: a changed file over the threshold still exits 1' `
+        ($r.Exit -eq 1 -and $r.Output -match 'Route') `
+        "exit $($r.Exit) - expected 1 naming the method over the threshold"
 
     # ── Vulnerable packages: a scan that enumerated nothing is not clean ──────
     # Uses the canned-document seam, so no restore and no network.
@@ -158,17 +179,17 @@ try {
         ($r.Output -match 'GATE COULD NOT RUN')
 
     # ── Property-gate verdict (#24) ──────────────────────────────────────────
-    # Canned output, because the case that matters needs two test assemblies and
-    # the rule itself is what regressed. Real multi-assembly behaviour is proven
-    # by the fixture round trip.
-    $multiAssembly = @(
-        'No test matches the given testcase filter `Category=Property` in /r/Acceptance.dll'
+    # Canned single-project output. #24 itself - one assembly's no-match masking
+    # another's passing tests - is now prevented structurally rather than parsed
+    # around, and is proven end to end by the fixture's two-assembly solution.
+    $ranClean = @(
+        'A total of 1 test files matched the specified pattern.'
         'Passed!  - Failed:     0, Passed:     2, Skipped:     0, Total:     2, Duration: 59 ms - Unit.dll (net8.0)'
     )
-    $outcome = Get-TestRunOutcome -Output $multiAssembly
-    Assert-That 'property verdict: one assembly no-matching does not mask another running' `
+    $outcome = Get-TestRunOutcome -Output $ranClean
+    Assert-That 'property verdict: executed tests are counted, skipped ones are not' `
         ($outcome.Outcome -eq 'Ran' -and $outcome.Executed -eq 2) `
-        "got $($outcome.Outcome)/$($outcome.Executed) - this is #24: SKIPPED over a run that verified plenty"
+        "got $($outcome.Outcome)/$($outcome.Executed)"
 
     $noneMatched = @(
         'A total of 1 test files matched the specified pattern.'
@@ -224,18 +245,23 @@ try {
     # assemblies - one with no matching tests, one crashing before it reports any
     # counts - the output is indistinguishable from a clean skip except for the
     # exit code. Folding that into NothingMatched reports SKIPPED over a failure.
-    # Two assemblies attempted, only one accounted for: the other died before
-    # reporting anything. That gap is the signal, not the exit code alone.
-    $noMatchPlusFailure = @(
+    # A project that died before reporting anything: no counts, no no-match line,
+    # non-zero exit. Nothing explains the absent tests, so the gate must say so
+    # rather than call it a skip.
+    #
+    # The multi-assembly version of this - one project no-matching while another
+    # crashes - is no longer expressible: the gate runs one project per
+    # invocation and expands a solution into its projects, so interleaved output
+    # never reaches this function. That aggregation is proven end to end by the
+    # fixture, which runs a real two-assembly solution.
+    $crashedProject = @(
         'A total of 1 test files matched the specified pattern.'
-        'A total of 1 test files matched the specified pattern.'
-        'No test matches the given testcase filter `Category=Property` in /r/Acceptance.dll'
         'The active test run was aborted. Reason: Test host process crashed'
     )
-    $outcome = Get-TestRunOutcome -Output $noMatchPlusFailure -ExitCode 1
-    Assert-That 'property verdict: a no-match line does not excuse a failed run' `
+    $outcome = Get-TestRunOutcome -Output $crashedProject -ExitCode 1
+    Assert-That 'property verdict: a project that died before reporting is Inconclusive' `
         ($outcome.Outcome -eq 'Inconclusive') `
-        "got $($outcome.Outcome) - a crashed assembly must not be reported as nothing to verify"
+        "got $($outcome.Outcome) - a crashed run must not be reported as nothing to verify"
 
     $outcome = Get-TestRunOutcome -Output $noneMatched -ExitCode 0
     Assert-That 'property verdict: a clean no-match run is still SKIPPED' `

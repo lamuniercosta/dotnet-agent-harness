@@ -43,76 +43,103 @@ if (-not (Get-HarnessValue 'gates.propertyTests.enabled' -RepoRoot $repoRoot)) {
     exit 2
 }
 
-$target = Resolve-BuildTarget -RepoRoot $repoRoot -Explicit $Project
+# One project per run, deliberately.
+#
+# Running the whole solution in a single `dotnet test` interleaves every
+# assembly's output, and the signals that classify a run - the no-match message,
+# the counts - are per assembly while the exit code is not. That made "this
+# assembly had no matching tests" indistinguishable from "that assembly died
+# before reporting", which produced a SKIPPED verdict over a solution whose
+# property tests had passed, and later a SKIPPED verdict over a failed run.
+#
+# Enumerating projects costs one `dotnet test` each and makes the whole class of
+# confusion impossible: one project, one result, no interleaving to untangle.
+# A solution is expanded to its test projects rather than run whole, including
+# when the caller names one explicitly: handing the classifier interleaved output
+# is the one thing that must never happen, whichever path got us here.
+$targets = if ($Project) {
+    $resolved = Resolve-BuildTarget -RepoRoot $repoRoot -Explicit $Project
+    if ($resolved -like '*.csproj') { @($resolved) } else { Get-TestProjects -RepoRoot $repoRoot }
+}
+else {
+    Get-TestProjects -RepoRoot $repoRoot
+}
+
+# No discoverable test project: fall back to the solution rather than inventing a
+# verdict. Whatever `dotnet test` reports about it is still classified below.
+if ($targets.Count -eq 0) {
+    $targets = @(Resolve-BuildTarget -RepoRoot $repoRoot -Explicit '')
+}
 
 Push-Location $repoRoot
 try {
-    Write-Host "Property tests: running tests with Category=$Category..."
-    $output = dotnet test $target --filter "Category=$Category" --verbosity minimal 2>&1 | ForEach-Object { $_.ToString() }
-    $exitCode = $LASTEXITCODE
-    $output | ForEach-Object { Write-Host $_ }
+    $ran = 0
+    $skippedTotal = 0
+    $failed = @()
+    $unreadable = @()
 
-    # No property tests is SKIPPED (exit 2), never passed (exit 0).
-    #
-    # This used to exit 0, which meant a repo with zero property tests reported
-    # "Property tests: passed" having verified nothing - the precise failure this
-    # harness exists to prevent, sitting inside the harness itself.
-    #
-    # It then used to match the "no tests matched" line anywhere in the output,
-    # which broke the moment a solution had a second test assembly: the assembly
-    # without property tests prints that line while another runs them, and the
-    # gate reported SKIPPED over a run that had verified plenty. Decide on the
-    # number of tests actually executed instead - see Get-TestRunOutcome.
-    $outcome = Get-TestRunOutcome -Output $output -ExitCode $exitCode
+    foreach ($target in $targets) {
+        $name = Split-Path $target -Leaf
+        Write-Host "Property tests: $name (Category=$Category)..."
 
-    if ($outcome.Outcome -eq 'NothingMatched') {
-        if ($outcome.Skipped -gt 0) {
-            # Tests exist and are tagged; they just never ran. Telling someone to
-            # add property tests they already have sends them the wrong way.
-            Write-Host "Property tests: SKIPPED - $($outcome.Skipped) test(s) matched but every one was skipped."
-            Write-Host '  Nothing was verified. Remove the Skip attribute, or set'
-            Write-Host '  gates.propertyTests.enabled: false in harness.yml to opt out deliberately.'
-            exit 2
+        $output = dotnet test $target --filter "Category=$Category" --verbosity minimal 2>&1 | ForEach-Object { $_.ToString() }
+        $exitCode = $LASTEXITCODE
+        $output | ForEach-Object { Write-Host $_ }
+
+        $outcome = Get-TestRunOutcome -Output $output -ExitCode $exitCode
+        $skippedTotal += $outcome.Skipped
+
+        switch ($outcome.Outcome) {
+            'Ran' {
+                $ran += $outcome.Executed
+                if ($exitCode -ne 0) { $failed += $name }
+            }
+            'NothingMatched' { }
+            default { $unreadable += "$name ($($outcome.Outcome), exit $exitCode)" }
         }
+    }
 
-        Write-Host "Property tests: SKIPPED - no tests tagged Category=$Category."
-        Write-Host '  The refactor gate expects property tests for pure/domain logic.'
-        Write-Host "  Add FsCheck properties tagged [Trait(`"Category`",`"$Category`")], or set"
+    # An unreadable run is not a skip and not a pass. Reported first: if one
+    # project could not be interpreted, no verdict over the rest is trustworthy.
+    if ($unreadable.Count -gt 0) {
+        Write-Host ''
+        Write-Host 'GATE COULD NOT RUN: a test project produced no readable result.' -ForegroundColor Red
+        foreach ($u in $unreadable) { Write-Host "  $u" }
+        Write-Host '  Nothing accounts for the missing tests - a build error, a crashed test host,'
+        Write-Host '  or an assembly that could not be discovered.'
+        Write-Host "  Run it directly to see why: dotnet test <project> --filter `"Category=$Category`""
+        exit 1
+    }
+
+    if ($failed.Count -gt 0) {
+        Write-Host ''
+        Write-Host "Property tests: FAILED in $($failed -join ', ') ($ran test(s) executed)."
+        exit 1
+    }
+
+    if ($ran -gt 0) {
+        Write-Host ''
+        Write-Host "Property tests: passed ($ran test(s) executed across $($targets.Count) project(s))."
+        exit 0
+    }
+
+    # Nothing executed anywhere. SKIPPED (exit 2), never passed - a gate that
+    # verified nothing has not earned a green verdict.
+    Write-Host ''
+    if ($skippedTotal -gt 0) {
+        # They exist and are tagged; they just never ran. Telling someone to add
+        # property tests they already have sends them the wrong way.
+        Write-Host "Property tests: SKIPPED - $skippedTotal test(s) matched but every one was skipped."
+        Write-Host '  Nothing was verified. Remove the Skip attribute, or set'
         Write-Host '  gates.propertyTests.enabled: false in harness.yml to opt out deliberately.'
         exit 2
     }
 
-    # A no-match line explains an assembly with no matching tests. It does not
-    # explain a failed run. With several test assemblies, one can report no match
-    # while another crashes before producing any counts - output indistinguishable
-    # from a clean skip except for the exit code. Reporting that as SKIPPED hides
-    # a failure behind "nothing to verify".
-    if ($outcome.Outcome -eq 'Inconclusive') {
-        Write-Host "GATE COULD NOT RUN: no tests executed, but dotnet test exited $exitCode." -ForegroundColor Red
-        Write-Host '  A "no test matches" message accounts for one assembly, not for the failure.'
-        Write-Host '  Something failed before reporting results - a build error, a crashed test host,'
-        Write-Host '  or an assembly that could not be discovered.'
-        Write-Host "  Run it directly to see why: dotnet test $target --filter `"Category=$Category`""
-        exit 1
-    }
-
-    # Zero tests executed and nothing saying why. Reporting that as either a pass
-    # or a skip would be a guess about a run that produced no readable result, so
-    # say so and stop.
-    if ($outcome.Outcome -eq 'Unknown') {
-        Write-Host 'GATE COULD NOT RUN: dotnet test reported no executed tests and no reason.' -ForegroundColor Red
-        Write-Host '  Neither a test-count summary nor a "no test matches" message was found.'
-        Write-Host "  Run it directly to see why: dotnet test $target --filter `"Category=$Category`""
-        exit 1
-    }
-
-    if ($exitCode -ne 0) {
-        Write-Host "Property tests: FAILED ($($outcome.Executed) test(s) executed)."
-        exit 1
-    }
-
-    Write-Host "Property tests: passed ($($outcome.Executed) test(s) executed)."
-    exit 0
+    Write-Host "Property tests: SKIPPED - no tests tagged Category=$Category."
+    Write-Host '  The refactor gate expects property tests for pure/domain logic.'
+    Write-Host "  Add FsCheck properties tagged [Trait(`"Category`",`"$Category`")], or set"
+    Write-Host '  gates.propertyTests.enabled: false in harness.yml to opt out deliberately.'
+    exit 2
 }
 finally {
     Pop-Location
