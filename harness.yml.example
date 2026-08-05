@@ -17,7 +17,7 @@
 # updated on every run - don't edit it by hand. Its job is to answer "what am I
 # on?" after an install changes behaviour, and to let the installer report
 # 0.1.0 -> 0.2.0 rather than overwriting silently.
-harnessVersion: 0.1.0
+harnessVersion: 0.2.0
 
 # Which language pack's gates to run. Only `dotnet` ships today.
 pack: dotnet

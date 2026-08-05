@@ -8,6 +8,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [semantic versioning](https://semver.org/), where a **major** bump
 means a consuming repo's gates may start failing on code that previously passed.
 
+## [0.2.0] — 2026-08-05
+
+Everything here came from installing `0.1.0` into two real projects. The fixture
+had proved the gates against code written to be caught by them; the first
+contact with repositories that already had history, a `CLAUDE.md`, and more than
+one test assembly found eleven defects the fixture could not.
+
+### Breaking
+
+A **minor** bump rather than a major one: no gate starts failing code that
+previously passed. What changes is what the gates report about work they never
+did.
+
+- **A gate with nothing to verify now exits `2` (SKIPPED), not `0`.** The three
+  diff-scoped gates returned `0` when no `.cs` file had changed, so the first
+  run after an install reported green over a codebase no gate had read. Every
+  document in this repo already said 2 was the answer; only the code disagreed.
+  **A caller treating any non-zero result as failure will now see routine no-op
+  runs as failures** — read `2` as "verified nothing" and re-run with `-All`
+  when verification is what you want.
+- **The property gate runs one test project per invocation.** It used to run the
+  whole solution and classify the interleaved output, which cannot distinguish
+  "this assembly had no matching tests" from "that assembly died before
+  reporting". Costs one `dotnet test` per test project.
+- **`run-property-tests.ps1 -Project` no longer accepts a solution.** Name a
+  `.csproj`, or omit it to run every discovered test project.
+- **A vulnerable-package scan that enumerated no projects exits `1`**, not `0`
+  with "no vulnerable packages".
+
+### Fixed
+
+- Property tests were reported as SKIPPED on any solution with more than one
+  test assembly — the ordinary shape of a .NET solution, so the gate was
+  effectively dead for most consumers
+- `CLAUDE.md` `@imports` were never installed into a repo that already had a
+  `CLAUDE.md`, so **no harness rule loaded on Claude Code at all** — silently,
+  because a missing import is indistinguishable from a quiet rule
+- The constitution was documented as rendered by `install.ps1` and was rendered
+  by nothing
+- `.specify/extensions.yml` was overwritten unconditionally, silently disabling
+  any registered Spec Kit extension
+- The `after_refactor` hook could never fire — Spec Kit emits no such event
+- The Gherkin mutation gate crashed on the last scenario of every feature file,
+  ran tests without rebuilding the mutated feature, and counted a failed run as
+  a killed mutant
+- The vulnerable-package gate crashed on any solution containing a project with
+  no advisories, hiding 44 live advisories across two projects
+- `install.ps1` crashed on the upgrade path when `harness.yml` had no version
+  stamp
+- Gates never found `.editorconfig` on Linux or macOS
+- `/code-review`'s position in the pipeline, the failure-routing table, and the
+  human-gate time budgets, all lost when the harness was extracted
+
+### Added
+
+- Six self-test suites covering the installer, the Spec Kit coupling, the
+  Gherkin mutation logic and the exit contract — each verified to fail against
+  the code it replaced
+- An acceptance-test fixture proving the Gherkin mutation gate in both
+  directions, retiring one of the two stated limitations
+- `AVAILABLE` install status for templates that ship but are deliberately not
+  copied
+
 ## [0.1.0] — 2026-07-31
 
 First release. Extracted from a private, gitignored Cursor setup and generalised
