@@ -245,6 +245,38 @@ try {
     Assert-That 'an existing branch name refuses instead of reusing a worktree' `
         ($collisionError -match 'already exists') $collisionError
 
+    # A worktree inside the repo is the one layout every doc forbids. The default
+    # root is a sibling, but an override must not reach back in - a relative root
+    # is joined to the repo, and an absolute in-repo path is just as wrong. Both
+    # must refuse before `git worktree add` runs, so no branch and no checkout is
+    # left behind. Fresh branch names, so the branch-exists guard cannot mask the
+    # containment error.
+    $relInRepoError = ''
+    try { & $newScript -Description 'Relative in repo root' -Type feature -WorktreeRoot '.inside-worktrees' -BaseBranch main -Remote origin 3>&1 6>&1 | Out-Null }
+    catch { $relInRepoError = $_.Exception.Message }
+    Assert-That 'a relative WorktreeRoot that lands inside the repo is rejected' `
+        ($relInRepoError -match 'inside the repository') $relInRepoError
+    Assert-That 'the rejected relative in-repo root created no checkout' `
+        (-not (Test-Path -LiteralPath (Join-Path $wtWork '.inside-worktrees')))
+    Assert-That 'the rejected relative in-repo root created no branch' `
+        (-not (Invoke-Git $wtWork branch --list 'feature/relative-in-repo-root'))
+
+    $absInRepoRoot = Join-Path $wtWork 'nested-worktrees'
+    $absInRepoError = ''
+    try { & $newScript -Description 'Absolute in repo root' -Type feature -WorktreeRoot $absInRepoRoot -BaseBranch main -Remote origin 3>&1 6>&1 | Out-Null }
+    catch { $absInRepoError = $_.Exception.Message }
+    Assert-That 'an absolute WorktreeRoot inside the repo is rejected' `
+        ($absInRepoError -match 'inside the repository') $absInRepoError
+    Assert-That 'the rejected absolute in-repo root created no checkout' `
+        (-not (Test-Path -LiteralPath $absInRepoRoot))
+
+    # The escape valve stays open: a root OUTSIDE the repo is accepted, proving
+    # the check rejects containment specifically, not every override.
+    $outsideRoot = Join-Path $tempRoot 'custom-worktrees'
+    $outsideOutput = (& $newScript -Description 'Outside root ok' -Type feature -WorktreeRoot $outsideRoot -BaseBranch main -Remote origin 3>&1 6>&1 | Out-String)
+    Assert-That 'a WorktreeRoot outside the repo is accepted' `
+        (Test-Path -LiteralPath (Join-Path $outsideRoot 'feature-outside-root-ok')) $outsideOutput
+
     # -NoWorktree keeps the old contract, dirty-tree refusal included.
     $dirtyError = ''
     try { & $newScript -Description 'Switch in place' -Type feature -BaseBranch main -Remote origin -NoWorktree 3>&1 6>&1 | Out-Null }

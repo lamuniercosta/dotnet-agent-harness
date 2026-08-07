@@ -26,7 +26,12 @@ recursive glob walk them, so one task's checkout lands in another task's gate
 results. This repo already demonstrates the failure — a plain `find` from the
 root returns files from the `.claude/worktrees/` checkouts Claude Code creates.
 
-`task.worktreeRoot` overrides the location for a consumer whose layout needs it.
+`task.worktreeRoot` (or `-WorktreeRoot`) overrides the location for a consumer
+whose layout needs it — but the invariant is enforced, not merely defaulted. A
+relative override is resolved against the repo root, and any override that
+normalises to the repo or a descendant of it is rejected before `git worktree
+add` runs. Otherwise a natural-looking value like `.worktrees` would recreate
+the exact in-repo layout the default exists to avoid.
 
 ## Gitignored files do not come along
 

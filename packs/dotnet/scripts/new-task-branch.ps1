@@ -217,6 +217,26 @@ if ($useWorktree) {
         $WorktreeRoot = Join-Path $mainRoot $WorktreeRoot
     }
 
+    # Normalise before the containment check so '..', '.', and trailing
+    # separators cannot smuggle an in-repo root past it.
+    $WorktreeRoot = [System.IO.Path]::GetFullPath($WorktreeRoot)
+    $resolvedRepo = [System.IO.Path]::GetFullPath($mainRoot)
+
+    # The one topology the ADR, task skill, workflow rule, and Codex adapter all
+    # forbid: a worktree inside the repo. Git keeps linked worktrees out of
+    # `git status`, but `dotnet build`, InspectCode, and every recursive glob
+    # still walk them, so one task's checkout contaminates another's gate
+    # results. The default root is a sibling; an override must not reach back in -
+    # whether relative (joined to the repo above) or an absolute in-repo path.
+    $sep = [System.IO.Path]::DirectorySeparatorChar
+    $altSep = [System.IO.Path]::AltDirectorySeparatorChar
+    $repoPrefix = $resolvedRepo.TrimEnd($sep, $altSep) + $sep
+    $rootPrefix = $WorktreeRoot.TrimEnd($sep, $altSep) + $sep
+    $pathCmp = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    if ($rootPrefix.StartsWith($repoPrefix, $pathCmp)) {
+        throw "Worktree root '$WorktreeRoot' is inside the repository '$resolvedRepo'. Worktrees must live outside the repo (the default is a sibling, '$(Split-Path $resolvedRepo -Leaf).worktrees'), because dotnet build, InspectCode, and recursive globs walk in-repo worktrees and mix one task's files into another's gate results. Pass -WorktreeRoot with a path outside the repo, or set task.worktreeRoot in harness.yml."
+    }
+
     # Branch names carry '/', which would silently become a directory level.
     $worktreePath = Join-Path $WorktreeRoot ($branch -replace '/', '-')
     if (Test-Path -LiteralPath $worktreePath) {
