@@ -9,7 +9,8 @@
   Blocks:
     Bash        - rm -rf of a root/home/glob target, deletion of a build output
                   directory, force-push to a protected or implicit destination,
-                  git reset --hard to a remote ref, and
+                  deletion of a protected branch via push (--delete/-d or a
+                  `:dst` refspec), git reset --hard to a remote ref, and
                   `git checkout -- .` over a dirty tree.
     Edit/Write  - writes inside node_modules, bin, obj, or .git.
 
@@ -208,7 +209,7 @@ function Find-GitSubcommandIndex {
     return $index
 }
 
-function Get-UnsafeForcePushReason {
+function Get-UnsafePushReason {
     param([string]$Command)
 
     $protectedBranches = @('main', 'master', 'develop', 'development', 'qa', 'release', 'production')
@@ -223,6 +224,7 @@ function Get-UnsafeForcePushReason {
             if ($subcommandIndex -lt 0 -or $words[$subcommandIndex] -ne 'push') { continue }
 
             $force = $false
+            $delete = $false
             $endOfOptions = $false
             $skipOptionValue = $false
             $repositoryNamed = $false
@@ -244,6 +246,15 @@ function Get-UnsafeForcePushReason {
                         $force = $true
                     }
                     if ($word -eq '--mirror') { $force = $true }
+                    # A delete push is as destructive to a protected ref as a
+                    # force-push, so it earns the same treatment. --delete/-d marks
+                    # every refspec a deletion; the clustered short form (-fd) is
+                    # matched like -f, with the same -o<value> guard so `-od` (a
+                    # push-option) is not mistaken for a delete.
+                    if ($word -eq '--delete' -or
+                        ($word -match '^-[^-]*d[^-]*$' -and $word -notmatch '^-o.+')) {
+                        $delete = $true
+                    }
                     if ($word -eq '--repo') { $repositoryNamed = $true }
                     if ($word -like '--repo=*') { $repositoryNamed = $true }
                     if ($word -in $optionsWithValues) { $skipOptionValue = $true }
@@ -254,27 +265,53 @@ function Get-UnsafeForcePushReason {
 
             $refspecStart = if ($repositoryNamed) { 0 } else { 1 }
             $hasExplicitDestination = $positionals.Count -gt $refspecStart
-            if ($hasExplicitDestination) {
-                $refspecs = $positionals.GetRange($refspecStart, $positionals.Count - $refspecStart)
-                if (@($refspecs | Where-Object { $_.StartsWith('+') }).Count -gt 0) { $force = $true }
+            $refspecs = if ($hasExplicitDestination) {
+                $positionals.GetRange($refspecStart, $positionals.Count - $refspecStart)
+            } else {
+                [System.Collections.Generic.List[string]]::new()
             }
+            if (@($refspecs | Where-Object { $_.StartsWith('+') }).Count -gt 0) { $force = $true }
 
-            if (-not $force) { continue }
-            if (-not $hasExplicitDestination) {
+            # A delete with no explicit ref is rejected by git itself ("--delete
+            # doesn't make sense without any refs"), so only the force path - which
+            # can still resolve a destination through push.default - needs the
+            # implicit-destination guard.
+            if ($force -and -not $hasExplicitDestination) {
                 return 'force-push has no explicit destination. Name the remote and task ref (for example: origin HEAD:refs/heads/feature/123-fix).'
             }
 
             foreach ($refspec in $refspecs) {
                 $destination = $refspec.TrimStart('+')
                 $colon = $destination.LastIndexOf(':')
-                if ($colon -ge 0) { $destination = $destination.Substring($colon + 1) }
+                $emptySource = $false
+                if ($colon -ge 0) {
+                    $emptySource = [string]::IsNullOrEmpty($destination.Substring(0, $colon))
+                    $destination = $destination.Substring($colon + 1)
+                }
                 $destination = $destination -replace '^refs/heads/', ''
 
+                # The colon form of a delete (`:main`) has an empty left-hand side,
+                # so it is a deletion even with no --delete flag. A --delete flag
+                # makes every refspec a deletion regardless of its shape. A refspec
+                # that is neither a delete nor a force is a plain (fast-forward)
+                # push and stays out of scope, even to a protected branch.
+                $refspecIsDelete = $delete -or $emptySource
+
                 if ($destination -in $protectedBranches) {
-                    return 'force-push to a protected branch. Push a task branch and open a PR instead.'
+                    if ($refspecIsDelete) {
+                        return 'delete of a protected branch. Delete a merged task branch instead, and let the PR flow retire the ref.'
+                    }
+                    if ($force) {
+                        return 'force-push to a protected branch. Push a task branch and open a PR instead.'
+                    }
                 }
                 if ($destination -in @('HEAD', '@') -or $destination.Contains('*')) {
-                    return 'force-push destination is still implicit or spans multiple refs. Name one explicit task branch destination.'
+                    if ($refspecIsDelete) {
+                        return 'delete destination is still implicit or spans multiple refs. Name one explicit task branch to delete.'
+                    }
+                    if ($force) {
+                        return 'force-push destination is still implicit or spans multiple refs. Name one explicit task branch destination.'
+                    }
                 }
             }
         }
@@ -311,9 +348,11 @@ switch -Regex ($tool) {
 
         # Force pushes must expose their destination instead of resolving it
         # through branch upstream + push.default. Lease protection reduces the
-        # race window but does not make an implicit or protected ref safe.
-        $unsafeForcePush = Get-UnsafeForcePushReason $cmd
-        if ($unsafeForcePush) { Deny $unsafeForcePush }
+        # race window but does not make an implicit or protected ref safe. A
+        # delete push to a protected branch is caught by the same parser: it is
+        # every bit as destructive to the ref as a force-push.
+        $unsafePush = Get-UnsafePushReason $cmd
+        if ($unsafePush) { Deny $unsafePush }
 
         # Hard reset to a remote ref silently discards local commits.
         if ($cmd -match 'git\s+reset\s+--hard\s+(origin|upstream)/') {

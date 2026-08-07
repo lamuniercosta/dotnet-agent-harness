@@ -81,6 +81,19 @@ Assert-Blocked 'reset --hard origin'     (Bash 'git reset --hard origin/main')
 Assert-Blocked 'checkout -- .'           (Bash 'git checkout -- .')
 
 Write-Host ''
+Write-Host 'Deleting a protected branch via push is blocked:'
+Assert-Blocked 'delete --delete main'     (Bash 'git push origin --delete main')
+Assert-Blocked 'delete -d master'         (Bash 'git push origin -d master')
+Assert-Blocked 'delete :refs/heads/main'  (Bash 'git push origin :refs/heads/main')
+Assert-Blocked 'delete :main'             (Bash 'git push origin :main')
+Assert-Blocked 'delete behind global opt' (Bash 'git -C . push origin :main')
+Assert-Blocked 'delete clustered -fd'     (Bash 'git push -fd origin main')
+Assert-Blocked 'delete wildcard refspec'  (Bash 'git push origin :refs/heads/*')
+Assert-Blocked 'delete HEAD'              (Bash 'git push origin --delete HEAD')
+Assert-Blocked 'delete under dry-run'     (Bash 'git push --dry-run --delete origin main')
+Assert-Blocked 'delete plus empty source' (Bash 'git push origin +:main')
+
+Write-Host ''
 Write-Host 'The escaped-quote bypass is closed:'
 # A grep -o '"command"[^"]*"' extractor truncates at the escaped quote and sees
 # only `echo `, so every pattern below it misses the rm that follows.
@@ -118,6 +131,13 @@ Assert-Allowed 'task ref after -C' (Bash 'git -C . push -f origin HEAD:refs/head
 Assert-Allowed 'task ref after -c' (Bash 'git -c push.default=upstream push --force origin HEAD:refs/heads/feature/142-add-retry')
 Assert-Allowed 'option value named push is not subcommand' (Bash 'git -C push status --short')
 Assert-Allowed 'task ref after unlisted global flag' (Bash 'git --literal-pathspecs push -f origin HEAD:refs/heads/feature/142-add-retry')
+Assert-Allowed 'delete a task branch'  (Bash 'git push origin --delete feature/142-add-retry')
+Assert-Allowed 'delete task branch colon form' (Bash 'git push origin :feature/142-add-retry')
+Assert-Allowed 'bare delete, no ref'   (Bash 'git push --delete origin')
+Assert-Allowed 'push-option d not a delete' (Bash 'git push -od origin main')
+Assert-Allowed 'ref named --delete after separator' (Bash 'git push -- --delete')
+Assert-Allowed 'plain push to protected branch' (Bash 'git push origin main')
+Assert-Allowed 'task delete beside protected fast-forward' (Bash 'git push origin :old-feature main')
 Assert-Allowed 'reset --hard HEAD~1'  (Bash 'git reset --hard HEAD~1')
 Assert-Allowed 'restore one path'     (Bash 'git checkout -- src/Foo.cs')
 Assert-Allowed 'edit source'          (Edit '/repo/src/Api/Program.cs')
