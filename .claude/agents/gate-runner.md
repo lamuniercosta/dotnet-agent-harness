@@ -31,7 +31,9 @@ dotnet test --no-build --verbosity quiet
 dotnet stryker                                   # minutes-expensive; pre-PR only
 ```
 
-Each gate takes no args to analyse changed files vs the base branch, `-Files "a.cs","b.cs"` for an explicit set, or `-All` for the whole solution. **Exit 0 = pass, 1 = fail, 2 = SKIPPED.** A SKIPPED gate verified nothing and is never folded into a green verdict.
+Only the three analyzer gates — roslyn-analyzers, cyclomatic-complexity, jetbrains-inspectcode — take `-BaseRef`/`-Files`/`-All`: no args analyses changed files vs the base branch, `-Files "a.cs","b.cs"` an explicit set, `-All` the whole solution. Property tests and gherkin-mutation scope with `-Project`; vulnerable-packages takes `-Severity`/`-IncludeTransitive` and has no scope flag at all. Never pass `-All` to property tests, gherkin-mutation or vulnerable-packages — PowerShell rejects the unknown parameter and the script exits 1 without scanning anything. That is a launch failure, not a red gate: fix the invocation and re-run rather than reporting a failure.
+
+**Exit 0 = pass, 1 = fail, 2 = SKIPPED.** A SKIPPED gate verified nothing and is never folded into a green verdict.
 
 InspectCode is a whole-solution pass taking tens of seconds. Mutation takes minutes. Do not run either unless asked or doing a pre-PR sweep.
 

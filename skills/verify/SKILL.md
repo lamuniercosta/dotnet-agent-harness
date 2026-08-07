@@ -38,7 +38,9 @@ Phases 2–4 are the **static-analysis gates**. They are not interchangeable —
 - **Cyclomatic complexity** — CA1502 only, threshold from `harness.yml`. Separated because it is the one gate whose threshold tightens between stages.
 - **InspectCode** — ReSharper/Rider inspections, a *different engine* from Roslyn. Close to a superset of phase 2 (ReSharper honours `.editorconfig` and re-reports CA/IDE rules), and it is the only engine here that reports duplication. Phase 2 still earns its place on speed: roughly 40s against several minutes.
 
-Each gate takes the same arguments: no args analyses changed `.cs` files vs the repo's default branch plus untracked; `-Files "a.cs","b.cs"` for an explicit set; `-All` for the whole solution. Exit 0 = pass, 1 = fail, 2 = SKIPPED (verified nothing — never report it as a pass).
+These three — and only these three — share the `-BaseRef`/`-Files`/`-All` scope arguments: no args analyses changed `.cs` files vs the repo's default branch plus untracked; `-Files "a.cs","b.cs"` for an explicit set; `-All` for the whole solution. Phases 6, 7 and the gherkin-mutation gate scope differently (`-Project`/`-Category`, `-Severity`/`-IncludeTransitive`, `-Project`/`-SpecsPath`) and reject `-All` outright: PowerShell fails the parameter binding and the script exits 1 having scanned nothing. Treat that exit 1 as a bad invocation to fix, never as a failed gate.
+
+Exit 0 = pass, 1 = fail, 2 = SKIPPED (verified nothing — never report it as a pass).
 
 **A gate that is not wired refuses to run.** If the analyzer it depends on is not actually enabled, it exits 1 with remediation rather than reporting a pass it did not earn. Install the wiring with `./install.ps1 <repo>`. These scripts require PowerShell 7 (`pwsh`).
 

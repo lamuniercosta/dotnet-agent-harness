@@ -64,8 +64,15 @@ dotnet test
 dotnet stryker                              # minutes-expensive; pre-PR only
 ```
 
-No args analyses changed files vs the base branch; `-Files "a.cs","b.cs"` for an
-explicit set; `-All` for the whole solution. **Exit 0 = pass, 1 = fail, 2 = SKIPPED.** A SKIPPED gate verified nothing and is never folded into a green verdict.
+`-BaseRef`/`-Files`/`-All` exist **only on the three analyzer gates** — roslyn-analyzers,
+cyclomatic-complexity, jetbrains-inspectcode. There, no args analyses changed files vs
+the base branch; `-Files "a.cs","b.cs"` an explicit set; `-All` the whole solution. The
+rest take their own scope instead: `run-property-tests.ps1 -Project -Category`,
+`run-gherkin-mutation.ps1 -Project -SpecsPath`, `run-vulnerable-packages.ps1 -Severity
+-IncludeTransitive`. Passing `-All` to one of those exits 1 on a parameter-binding
+error — a failure to launch, not a failed scan; do not report it as a red gate.
+
+**Exit 0 = pass, 1 = fail, 2 = SKIPPED.** A SKIPPED gate verified nothing and is never folded into a green verdict.
 
 **A gate that could not run has not passed.** The scripts enforce this themselves:
 if the analyzer they depend on is not wired, they exit 1 with remediation rather

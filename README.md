@@ -53,8 +53,9 @@ Three details that carry more weight than they look:
   `.cs` file changed against the base branch**, no property tests, no `.feature` files, or
   InspectCode switched off in config — returns 2, and nothing folds a 2 into a green verdict.
   "Skipped" and "clean" are different results, and collapsing them is exactly how a
-  quality bar quietly stops existing. Re-run with `-All` when you want verification
-  rather than a diff check.
+  quality bar quietly stops existing. On the three analyzer gates, re-run with `-All`
+  when you want verification rather than a diff check; the other gates have no `-All`
+  and skip for reasons no flag can fix.
 
 Every threshold lives in exactly one place: `harness.yml`. The tool configs
 (`CodeMetricsConfig.txt`, `stryker-config.json`, `.editorconfig` severities) and the
