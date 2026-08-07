@@ -155,9 +155,8 @@ function New-InspectCodeDotnetShim {
     else {
         $unixShim = Join-Path $shimDir 'dotnet'
         Set-Content -LiteralPath $unixShim -Encoding UTF8 -Value @(
-            '#!/usr/bin/env pwsh'
-            '& "$PSScriptRoot/dotnet-shim.ps1" @args'
-            'exit $LASTEXITCODE'
+            '#!/bin/sh'
+            'exec pwsh -NoProfile -File "$(dirname "$0")/dotnet-shim.ps1" "$@"'
         )
         & chmod +x $unixShim
     }
@@ -242,12 +241,30 @@ try {
     $env:PATH = "$shimDir$([System.IO.Path]::PathSeparator)$originalPath"
     try {
         $env:HARNESS_INSPECTCODE_TEST_EXIT = '3'
+
+        # Prove the platform wrapper preserves the controlled process exit
+        # before relying on it to test the gate. The old Unix wrapper invoked a
+        # nested PowerShell script and collapsed exit 3 to 0, so the gate quite
+        # correctly reached its missing-report failure instead of the skip.
+        $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+        try {
+            $PSNativeCommandUseErrorActionPreference = $false
+            & dotnet jb inspectcode ignored.sln
+            $shimExit = $LASTEXITCODE
+        }
+        finally {
+            $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+        }
+        Assert-That 'inspectcode test shim preserves native exit 3' `
+            ($shimExit -eq 3) `
+            "fake dotnet exited $shimExit - the gate verdict test would be exercising the wrong process result"
+
         $r = Invoke-Gate -Repo $repo -Script 'run-jetbrains-inspectcode.ps1' `
             -GateArgs @('-All', '-NoBuild') -NativeExitErrors
 
         Assert-That 'inspectcode: jb exit 3 is SKIPPED, not clean' `
             ($r.Exit -eq 2 -and $r.Output -match 'SKIPPED' -and $r.Output -match 'no matching files') `
-            "exit $($r.Exit) - InspectCode matched nothing, so it did not earn a pass"
+            "exit $($r.Exit) - InspectCode matched nothing, so it did not earn a pass. Output: $($r.Output.Trim())"
 
         $env:HARNESS_INSPECTCODE_TEST_EXIT = '0'
         $r = Invoke-Gate -Repo $repo -Script 'run-jetbrains-inspectcode.ps1' `
