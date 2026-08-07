@@ -33,6 +33,23 @@ tracker: github
 # Path to the solution. Omit to glob for a single *.sln / *.slnx.
 solution: null
 
+task:
+  # Create each task in its own git worktree instead of switching the current
+  # checkout. On by default because a single checkout serialises work: one agent
+  # holding a branch blocks every other agent, and a dirty tree blocks intake
+  # entirely. Separate worktrees let tasks run in parallel without any of that.
+  #
+  # Set to false for a one-checkout workflow. Each worktree is a full checkout
+  # needing its own `dotnet restore`, which is the cost you are opting out of.
+  worktree: true
+
+  # Where worktrees are created. Omit for `<repo>.worktrees` beside the repo -
+  # a sibling, deliberately NOT inside it. Git excludes linked worktrees from
+  # `git status`, but nothing else does: an in-repo worktree is walked by
+  # `dotnet build`, InspectCode, and every recursive glob, so one task's
+  # checkout shows up in another task's gate results.
+  worktreeRoot: null
+
 gates:
   complexity:
     # CA1502 cyclomatic complexity ceiling.

@@ -52,7 +52,9 @@ Follow [`skills/task/SKILL.md`](../../../skills/task/SKILL.md) exactly:
 3. `./packs/dotnet/scripts/new-task-branch.ps1 -Issue <n> [-Type …]` (from a consumer install the script is under `./scripts/`; in **this** repo the pack path is `./packs/dotnet/scripts/new-task-branch.ps1`)
 4. Hand off to mandatory `/grill-with-docs` after the board step below — do not skip the grill
 
-If the working tree is dirty or the branch already exists, stop and report; do not force.
+Step 3 creates a **worktree** at `../dotnet-agent-harness.worktrees/{type}-{issue}-{slug}`. Work there from step 4 onward; a dirty main checkout does not block intake, which is what lets several agents work this repo at once. If the branch already exists, stop and report; do not force.
+
+Run the board step below from **either** location — it only calls `gh`.
 
 ### 2. Move project Status → In Progress
 
@@ -61,6 +63,8 @@ After a successful branch create (or if already on the correct task branch and t
 ```powershell
 pwsh ./scripts/local/Set-IssueInProgress.ps1 -Issue <n>
 ```
+
+`scripts/local/` is tracked, so this path works unchanged from the task worktree too.
 
 Behaviour (do not reimplement ad hoc):
 

@@ -2,6 +2,12 @@
 # Creates a task branch from an up-to-date base branch, following the convention:
 #   {type}/{issue}-{slugified-title}     where type is feature | bug | hotfix
 #
+# By default the branch is created in its own git worktree beside the repo, so
+# several tasks - and several agents - can run at once. A single checkout
+# serialises them: one branch at a time, and a dirty tree blocks intake
+# entirely. Pass -NoWorktree (or set task.worktree: false) for the old
+# switch-in-place behaviour.
+#
 # The title defaults to the GitHub issue title (fetched with `gh`) unless
 # -Description is supplied. The harness is GitHub-native but the tracker is
 # optional: pass -Description and no -Issue to work with no tracker at all.
@@ -11,6 +17,7 @@
 #   ./scripts/new-task-branch.ps1 -Issue 142 -Type bug
 #   ./scripts/new-task-branch.ps1 -Description "Add upload retry" -Type feature
 #   ./scripts/new-task-branch.ps1 -Issue 142 -Push
+#   ./scripts/new-task-branch.ps1 -Issue 142 -NoWorktree
 
 [CmdletBinding()]
 param(
@@ -20,6 +27,9 @@ param(
     [string]$BaseBranch,
     [string]$Remote = 'origin',
     [switch]$Push,
+    [switch]$Worktree,
+    [switch]$NoWorktree,
+    [string]$WorktreeRoot,
     [switch]$Help
 )
 
@@ -29,9 +39,10 @@ $ErrorActionPreference = 'Stop'
 
 if ($Help) {
     Write-Output @"
-Usage: new-task-branch.ps1 [-Issue <number>] [-Type <feature|bug|hotfix>] [-Description <text>] [-BaseBranch <name>] [-Push]
+Usage: new-task-branch.ps1 [-Issue <number>] [-Type <feature|bug|hotfix>] [-Description <text>] [-BaseBranch <name>] [-Push] [-NoWorktree]
 
-Creates {type}/{issue}-{slug} from an up-to-date {Remote}/{BaseBranch}.
+Creates {type}/{issue}-{slug} from an up-to-date {Remote}/{BaseBranch}, in its own
+git worktree under <repo>.worktrees/ unless worktrees are turned off.
 If -Description is omitted, the GitHub issue title is used (requires the `gh` CLI, authenticated).
 If -Type is omitted, it is inferred from the issue's labels (a 'bug' label -> bug), defaulting to feature.
 Hotfix is always an explicit human call - it is never inferred.
@@ -43,9 +54,16 @@ OPTIONS:
   -BaseBranch <name>  Base branch (default: the remote's default branch)
   -Remote <name>      Remote name (default: origin)
   -Push               Push the new branch and set upstream
+  -Worktree           Force worktree mode, whatever harness.yml says
+  -NoWorktree         Switch the current checkout instead of creating a worktree
+  -WorktreeRoot <dir> Where to create worktrees (default: <repo>.worktrees beside the repo)
   -Help               Show this help
 "@
     exit 0
+}
+
+if ($Worktree -and $NoWorktree) {
+    throw 'Pass -Worktree or -NoWorktree, not both.'
 }
 
 if ([string]::IsNullOrWhiteSpace($Issue) -and [string]::IsNullOrWhiteSpace($Description)) {
@@ -72,12 +90,47 @@ function ConvertTo-BranchSlug {
     return $s
 }
 
-$repoRoot = Get-RepoRoot
+function Get-MainWorktreeRoot {
+    <#
+      The main worktree, not whichever one we happen to be standing in.
 
-# Refuse to branch on top of uncommitted work.
-$dirty = git -C $repoRoot status --porcelain
-if ($dirty) {
-    throw 'Working tree is not clean. Commit or stash changes before creating a new task branch.'
+      `Get-RepoRoot` returns the git toplevel, which inside a linked worktree is
+      that worktree. Deriving the worktree root from it would nest the next
+      task's checkout inside the current task's, so worktree roots would grow a
+      level deeper on every task. `git worktree list` reports the main worktree
+      first, which is the anchor we actually want.
+    #>
+    param([string]$RepoRoot)
+
+    $listed = @(git -C $RepoRoot worktree list --porcelain 2>$null)
+    if ($LASTEXITCODE -eq 0) {
+        $first = $listed | Where-Object { $_ -like 'worktree *' } | Select-Object -First 1
+        if ($first) {
+            $path = $first -replace '^worktree ', ''
+            if (Test-Path -LiteralPath $path) { return (Resolve-Path -LiteralPath $path).Path }
+        }
+    }
+    return $RepoRoot
+}
+
+$repoRoot = Get-RepoRoot
+$mainRoot = Get-MainWorktreeRoot -RepoRoot $repoRoot
+
+# Worktree mode: -Worktree / -NoWorktree beat harness.yml, which beats the default.
+# Read the config from the MAIN worktree: harness.yml is gitignored, so a linked
+# worktree does not have one and would silently answer with defaults.
+$config = Get-HarnessConfig -RepoRoot $mainRoot
+$useWorktree = if ($Worktree) { $true } elseif ($NoWorktree) { $false } else { [bool]$config['task.worktree'] }
+
+# A dirty tree only conflicts with switching THIS checkout. Creating a separate
+# worktree touches no tracked file here, and refusing anyway would reintroduce
+# exactly the serialisation worktrees exist to remove - an agent mid-edit could
+# not start the next task.
+if (-not $useWorktree) {
+    $dirty = git -C $repoRoot status --porcelain
+    if ($dirty) {
+        throw 'Working tree is not clean. Commit or stash changes before creating a new task branch, or use worktree mode (the default) which leaves this checkout alone.'
+    }
 }
 
 # --- resolve the title (and type) from the issue when not supplied ----------
@@ -136,16 +189,82 @@ if ($LASTEXITCODE -ne 0) {
 
 git -C $repoRoot rev-parse --verify --quiet "refs/heads/$branch" > $null
 if ($LASTEXITCODE -eq 0) {
-    throw "Branch '$branch' already exists locally. Switch to it with 'git switch $branch'."
+    $existsHint = if ($useWorktree) {
+        "Branch '$branch' already exists locally. Find its worktree with 'git worktree list', or delete the branch if it is stale."
+    }
+    else {
+        "Branch '$branch' already exists locally. Switch to it with 'git switch $branch'."
+    }
+    throw $existsHint
 }
 
-Write-Host "Creating '$branch' from $Remote/$BaseBranch..."
-git -C $repoRoot switch -c $branch "$Remote/$BaseBranch"
-if ($LASTEXITCODE -ne 0) { throw "Failed to create branch '$branch'." }
+$worktreePath = $null
+
+if ($useWorktree) {
+    if (-not $WorktreeRoot) {
+        $WorktreeRoot = if ($config['task.worktreeRoot']) {
+            $config['task.worktreeRoot']
+        }
+        else {
+            # A sibling of the repo, not a child. Git keeps linked worktrees out
+            # of `git status`, but `dotnet build`, InspectCode, and every
+            # recursive glob still walk them - an in-repo worktree puts one
+            # task's checkout into another task's gate results.
+            Join-Path (Split-Path $mainRoot -Parent) ((Split-Path $mainRoot -Leaf) + '.worktrees')
+        }
+    }
+    if (-not [System.IO.Path]::IsPathRooted($WorktreeRoot)) {
+        $WorktreeRoot = Join-Path $mainRoot $WorktreeRoot
+    }
+
+    # Branch names carry '/', which would silently become a directory level.
+    $worktreePath = Join-Path $WorktreeRoot ($branch -replace '/', '-')
+    if (Test-Path -LiteralPath $worktreePath) {
+        throw "Worktree path '$worktreePath' already exists. Remove it with 'git worktree remove' (or delete it) before reusing the name."
+    }
+
+    if (-not (Test-Path -LiteralPath $WorktreeRoot)) {
+        New-Item -ItemType Directory -Path $WorktreeRoot -Force | Out-Null
+    }
+
+    Write-Host "Creating worktree for '$branch' from $Remote/$BaseBranch..."
+    git -C $repoRoot worktree add -b $branch -- $worktreePath "$Remote/$BaseBranch"
+    if ($LASTEXITCODE -ne 0) { throw "Failed to create worktree for '$branch' at '$worktreePath'." }
+}
+else {
+    Write-Host "Creating '$branch' from $Remote/$BaseBranch..."
+    git -C $repoRoot switch -c $branch "$Remote/$BaseBranch"
+    if ($LASTEXITCODE -ne 0) { throw "Failed to create branch '$branch'." }
+}
+
+# Gitignored files do not come with a new worktree, and harness.yml is one of
+# them. Without it every configured threshold silently reverts to the harness
+# default - a gate that passes because it forgot the bar, which is the one
+# failure this pipeline exists to prevent. Copy it, or say plainly that the
+# worktree is running on defaults.
+$configWarnings = @()
+if ($worktreePath) {
+    $sourceConfig = Join-Path $mainRoot 'harness.yml'
+    if (Test-Path -LiteralPath $sourceConfig) {
+        Copy-Item -LiteralPath $sourceConfig -Destination (Join-Path $worktreePath 'harness.yml') -Force
+        Write-Host 'Copied harness.yml into the worktree (gitignored, so git does not).'
+    }
+    else {
+        $configWarnings += 'No harness.yml in the main worktree - gates in this worktree run on harness defaults.'
+    }
+
+    # Spec Kit is a runtime dependency, not vendored, so it is gitignored too.
+    # Re-initialising it is the consumer's call, not something to do behind them.
+    if ((Test-Path -LiteralPath (Join-Path $mainRoot '.specify')) -and
+        -not (Test-Path -LiteralPath (Join-Path $worktreePath '.specify'))) {
+        $configWarnings += "Spec Kit's .specify/ is gitignored and was not copied - run 'specify init' in the worktree before any /speckit-* step."
+    }
+}
 
 if ($Push) {
+    $pushFrom = if ($worktreePath) { $worktreePath } else { $repoRoot }
     Write-Host "Pushing '$branch' to $Remote..."
-    git -C $repoRoot push -u $Remote $branch
+    git -C $pushFrom push -u $Remote $branch
     if ($LASTEXITCODE -ne 0) { throw "Failed to push '$branch'." }
 }
 
@@ -157,7 +276,24 @@ $commitSubject = if ($Issue) { "$summary (#$Issue)" } else { $summary }
 Write-Output ''
 Write-Output "Branch created: $branch"
 Write-Output "Base:           $Remote/$BaseBranch (up to date)"
+if ($worktreePath) {
+    Write-Output "Worktree:       $worktreePath"
+}
 Write-Output "Commit subject: $commitSubject"
+
+foreach ($warning in $configWarnings) { Write-Warning $warning }
+
 Write-Output ''
+if ($worktreePath) {
+    Write-Output 'Work in the worktree - this checkout is untouched and still on its own branch:'
+    Write-Output "  cd `"$worktreePath`""
+    Write-Output '  dotnet tool restore   # each worktree restores its own tools'
+    Write-Output ''
+}
 Write-Output 'Reference the issue in commit subjects so GitHub links the work. Before opening a PR, run:'
 Write-Output '  ./scripts/rebase-task-branch.ps1 -Push'
+if ($worktreePath) {
+    Write-Output ''
+    Write-Output 'When the PR is merged, remove the worktree:'
+    Write-Output "  git worktree remove `"$worktreePath`""
+}
