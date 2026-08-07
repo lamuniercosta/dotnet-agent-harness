@@ -8,8 +8,9 @@
 
   Blocks:
     Bash        - rm -rf of a root/home/glob target, deletion of a build output
-                  directory, force-push to a protected branch, git reset --hard
-                  to a remote ref, and `git checkout -- .` over a dirty tree.
+                  directory, force-push to a protected branch, an ambiguous bare
+                  force-with-lease push, git reset --hard to a remote ref, and
+                  `git checkout -- .` over a dirty tree.
     Edit/Write  - writes inside node_modules, bin, obj, or .git.
 
   IMPLEMENTATION NOTE - this is the whole reason the hook is PowerShell rather
@@ -112,11 +113,19 @@ switch -Regex ($tool) {
             Deny 'recursive delete of node_modules/bin/obj. Use `dotnet clean` or a fresh restore instead.'
         }
 
-        # Force-push to an integration branch.
-        if ($cmd -match 'git\s+push\b' -and
-            $cmd -match '(--force(?!-with-lease)|\s-f\b)' -and
+        # Force-push to an integration branch. --force-with-lease reduces the
+        # race window but does not make rewriting a protected ref safe.
+        $isForcePush = $cmd -match 'git\s+push\b' -and
+            $cmd -match '(?<!\S)(?:--force(?:-with-lease(?:=\S+)?)?|-[a-zA-Z]*f[a-zA-Z]*)(?=\s|$)'
+        if ($isForcePush -and
             $cmd -match '\b(main|master|develop|development|qa|release|production)\b') {
             Deny 'force-push to a protected branch. Push a task branch and open a PR instead.'
+        }
+
+        # A bare lease push resolves through branch upstream + push.default.
+        # Its destination is invisible to this hook and may be a protected ref.
+        if ($cmd -match 'git\s+push\s+--force-with-lease(?:=[^\s;&|]+)?(?=\s*(?:$|[;&|]))') {
+            Deny 'bare force-with-lease has no visible destination. Push an explicit task ref (for example: origin HEAD:refs/heads/feature/123-fix).'
         }
 
         # Hard reset to a remote ref silently discards local commits.

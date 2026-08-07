@@ -69,13 +69,18 @@ if ($LASTEXITCODE -ne 0) {
 Write-Host "Rebase clean: '$current' is up to date with $Remote/$BaseBranch."
 
 if ($Push) {
-    Write-Host "Pushing with --force-with-lease..."
-    git push --force-with-lease
-    if ($LASTEXITCODE -ne 0) { throw "Push failed. Someone may have pushed to '$current'; re-fetch and retry." }
+    $destinationRef = "refs/heads/$current"
+    $lease = "--force-with-lease=$destinationRef"
+    $refspec = "HEAD:$destinationRef"
+    Write-Host "Pushing '$current' to $Remote/$current with --force-with-lease..."
+    git push $lease --set-upstream -- $Remote $refspec
+    if ($LASTEXITCODE -ne 0) {
+        throw "Push to '$Remote/$current' failed. Review Git's error output; the remote branch was not updated."
+    }
     Write-Host "Pushed. Branch is ready for a PR."
 }
 else {
     Write-Output ""
     Write-Output "Next: push the rebased branch, then open the PR:"
-    Write-Output "  git push --force-with-lease"
+    Write-Output "  git push --force-with-lease=refs/heads/$current --set-upstream -- $Remote HEAD:refs/heads/$current"
 }

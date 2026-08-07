@@ -182,6 +182,10 @@ jobs:
         shell: pwsh
         run: ./packs/dotnet/scripts/Test-GherkinMutation.ps1
 
+      - name: Task branch helpers never push through a protected upstream
+        shell: pwsh
+        run: ./packs/dotnet/scripts/Test-TaskBranchScripts.ps1
+
       # Both directions. A gate that always skips is indistinguishable from one
       # that correctly skips, so every SKIPPED assertion is paired with a case
       # that must still fail.
