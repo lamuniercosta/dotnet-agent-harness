@@ -92,6 +92,9 @@ Assert-Blocked 'delete wildcard refspec'  (Bash 'git push origin :refs/heads/*')
 Assert-Blocked 'delete HEAD'              (Bash 'git push origin --delete HEAD')
 Assert-Blocked 'delete under dry-run'     (Bash 'git push --dry-run --delete origin main')
 Assert-Blocked 'delete plus empty source' (Bash 'git push origin +:main')
+Assert-Blocked 'delete abbrev --del'      (Bash 'git push origin --del main')
+Assert-Blocked 'delete abbrev --de'       (Bash 'git push origin --de main')
+Assert-Blocked 'delete abbrev --delet'    (Bash 'git push origin --delet master')
 
 Write-Host ''
 Write-Host 'The escaped-quote bypass is closed:'
@@ -138,6 +141,8 @@ Assert-Allowed 'push-option d not a delete' (Bash 'git push -od origin main')
 Assert-Allowed 'ref named --delete after separator' (Bash 'git push -- --delete')
 Assert-Allowed 'plain push to protected branch' (Bash 'git push origin main')
 Assert-Allowed 'task delete beside protected fast-forward' (Bash 'git push origin :old-feature main')
+Assert-Allowed 'negated --no-delete to protected' (Bash 'git push --no-delete origin main')
+Assert-Allowed 'dry-run push to protected' (Bash 'git push --dry-run origin main')
 Assert-Allowed 'reset --hard HEAD~1'  (Bash 'git reset --hard HEAD~1')
 Assert-Allowed 'restore one path'     (Bash 'git checkout -- src/Foo.cs')
 Assert-Allowed 'edit source'          (Edit '/repo/src/Api/Program.cs')
