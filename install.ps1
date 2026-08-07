@@ -19,7 +19,9 @@
   Repository to install into. Defaults to the current directory.
 
 .PARAMETER Platform
-  Which agent platform(s) to wire: cursor, claude, or both (default).
+  Which agent platform(s) to wire: cursor, claude, codex, both, or all (default).
+  `both` predates the Codex adapter and still means cursor + claude, so a pinned
+  -Platform both keeps exactly the behaviour it always had.
   Skills and agents are shared regardless; this only affects the adapters.
 
 .EXAMPLE
@@ -32,8 +34,8 @@ param(
     [Parameter(Position = 0)]
     [string]$TargetRepo = '.',
 
-    [ValidateSet('cursor', 'claude', 'both')]
-    [string]$Platform = 'both',
+    [ValidateSet('cursor', 'claude', 'codex', 'both', 'all')]
+    [string]$Platform = 'all',
 
     [switch]$Help
 )
@@ -217,7 +219,7 @@ if ($PSCmdlet.ShouldProcess((Join-Path $TargetRepo '.cursor/rules/README.md'), '
 }
 
 # ── 3. Per-platform adapters — the only genuinely divergent files ────────────
-if ($Platform -in @('cursor', 'both')) {
+if ($Platform -in @('cursor', 'both', 'all')) {
     if ($PSCmdlet.ShouldProcess((Join-Path $TargetRepo '.cursor'), 'install cursor adapter')) {
         New-Item -ItemType Directory -Force -Path (Join-Path $TargetRepo '.cursor') | Out-Null
         Copy-Item (Join-Path $harnessRoot 'adapters/cursor/hooks.json') (Join-Path $TargetRepo '.cursor/hooks.json') -Force
@@ -236,7 +238,7 @@ if ($Platform -in @('cursor', 'both')) {
     }
 }
 
-if ($Platform -in @('claude', 'both')) {
+if ($Platform -in @('claude', 'both', 'all')) {
     if ($PSCmdlet.ShouldProcess((Join-Path $TargetRepo '.claude/settings.json'), 'install claude settings')) {
         New-Item -ItemType Directory -Force -Path (Join-Path $TargetRepo '.claude') | Out-Null
         Copy-Item (Join-Path $harnessRoot 'adapters/claude/settings.json') (Join-Path $TargetRepo '.claude/settings.json') -Force
@@ -293,6 +295,46 @@ if ($Platform -in @('claude', 'both')) {
             Copy-Item (Join-Path $harnessRoot 'adapters/claude/mcp.json') $mcpDest -Force
         }
         Add-Result '.mcp.json' 'ADDED' 'microsoft-learn + context7'
+    }
+}
+
+if ($Platform -in @('codex', 'all')) {
+    # Codex reads AGENTS.md from the repo ROOT and has no @import, so unlike
+    # CLAUDE.md this adapter is a self-contained distillation of the same ten
+    # rules rather than a list of pointers.
+    #
+    # That is exactly why the append trick used for CLAUDE.md is wrong here.
+    # Appending ten lines of @imports under a repo's own instructions is small and
+    # reversible; appending a whole ruleset is neither, and it would sit in silent
+    # contradiction with whatever the repo already told its agents. An existing
+    # AGENTS.md is reported for a hand merge - the same call already made for the
+    # two MCP configs.
+    $agentsMd = Join-Path $TargetRepo 'AGENTS.md'
+    if (Test-Path $agentsMd) {
+        Add-Result 'AGENTS.md' 'SKIPPED' 'already exists - merge the conventions from adapters/codex/AGENTS.md by hand'
+    }
+    else {
+        if ($PSCmdlet.ShouldProcess($agentsMd, 'install AGENTS.md')) {
+            Copy-Item (Join-Path $harnessRoot 'adapters/codex/AGENTS.md') $agentsMd -Force
+        }
+        Add-Result 'AGENTS.md' 'ADDED' 'distilled rules - Codex cannot @import them'
+    }
+
+    # TOML rather than JSON, and project-scoped rather than ~/.codex/config.toml:
+    # the global file holds the user's own plugins, marketplaces and auth, and the
+    # harness has no business writing there. Codex loads project config only for a
+    # TRUSTED project, which AGENTS.md says out loud - an untrusted repo silently
+    # registers no servers.
+    $codexConfig = Join-Path $TargetRepo '.codex/config.toml'
+    if (Test-Path $codexConfig) {
+        Add-Result '.codex/config.toml' 'SKIPPED' 'already exists - merge the two documentation servers by hand'
+    }
+    else {
+        if ($PSCmdlet.ShouldProcess($codexConfig, 'install MCP config')) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $TargetRepo '.codex') | Out-Null
+            Copy-Item (Join-Path $harnessRoot 'adapters/codex/config.toml') $codexConfig -Force
+        }
+        Add-Result '.codex/config.toml' 'ADDED' 'microsoft-learn + context7'
     }
 }
 
@@ -656,6 +698,16 @@ Write-Output '  specify init --here --integration claude   # or --integration cu
 Write-Output '  ./scripts/run-roslyn-analyzers.ps1 -All    # audit the code you already have'
 Write-Output '  /task <issue>                             # start the pipeline'
 Write-Output ''
+# The line above is a Cursor/Claude skill. Codex discovers skills from
+# .agents/skills and does not read .claude/skills, so none of them load there -
+# printing it unqualified to a Codex user names a command that does not exist.
+if ($Platform -in @('codex', 'all')) {
+    Write-Output 'On Codex: AGENTS.md carries the conventions, but harness SKILLS do not load'
+    Write-Output '(they live in .claude/skills; Codex reads .agents/skills). Trust the project'
+    Write-Output 'on first open or .codex/config.toml registers no MCP servers. Hooks are not'
+    Write-Output 'wired either, so no secret-scan warning fires - see AGENTS.md.'
+    Write-Output ''
+}
 # The gates analyse files changed against the base branch. Installing changes no
 # .cs file, so the first no-arg run has nothing to look at and reports SKIPPED
 # (exit 2) rather than a pass it did not earn. That is the right answer and still

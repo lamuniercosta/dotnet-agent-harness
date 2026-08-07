@@ -41,7 +41,7 @@ function New-TargetRepo {
     # [string[]] on the content parameters: an array bound to [string] is joined
     # into one space-separated line, producing a file that passes assertions for
     # entirely the wrong reason.
-    param([string[]]$ClaudeMd, [switch]$WithSpecify, [string[]]$Csproj)
+    param([string[]]$ClaudeMd, [switch]$WithSpecify, [string[]]$Csproj, [string[]]$AgentsMd)
 
     $repo = Join-Path ([System.IO.Path]::GetTempPath()) ("harness-artifacts-" + [guid]::NewGuid().ToString('N'))
     New-Item -ItemType Directory -Path $repo -Force | Out-Null
@@ -55,12 +55,20 @@ function New-TargetRepo {
     if ($null -ne $Csproj) {
         Set-Content -LiteralPath (Join-Path $repo 'Sample.csproj') -Value $Csproj -Encoding UTF8
     }
+    if ($null -ne $AgentsMd) {
+        Set-Content -LiteralPath (Join-Path $repo 'AGENTS.md') -Value $AgentsMd -Encoding UTF8
+    }
     return $repo
 }
 
 function Invoke-Install {
-    param([string]$Repo)
-    & pwsh -NoProfile -File $installer $Repo *>&1 | Out-String
+    param([string]$Repo, [string]$Platform)
+    if ($Platform) {
+        & pwsh -NoProfile -File $installer $Repo -Platform $Platform *>&1 | Out-String
+    }
+    else {
+        & pwsh -NoProfile -File $installer $Repo *>&1 | Out-String
+    }
 }
 
 Write-Host ''
@@ -186,6 +194,65 @@ try {
     Assert-That 'the baseline hint is printed' `
         ($output -match 'Run them once with -All to get a baseline') `
         'the first no-arg gate run passes having checked nothing; say so'
+
+    # ── Codex adapter: AGENTS.md absent ──────────────────────────────────────
+    # AGENTS.md is a self-contained distillation, not a pointer list: Codex has no
+    # @import, so if the file does not arrive intact the conventions do not arrive
+    # at all - and, as with CLAUDE.md, nothing reports it.
+    $repo = New-TargetRepo
+    $repos += $repo
+    $output = Invoke-Install -Repo $repo
+    $agentsPath = Join-Path $repo 'AGENTS.md'
+
+    Assert-That 'absent AGENTS.md is created by the default platform' `
+        (Test-Path $agentsPath) `
+        'the default is -Platform all; a Codex user gets no conventions without this'
+
+    if (Test-Path $agentsPath) {
+        $agents = Get-Content -LiteralPath $agentsPath -Raw
+        # The distillation is worthless if the honest part is what went missing:
+        # a Codex session runs with no secret-scan hook and must say so.
+        Assert-That 'AGENTS.md carries the missing-tripwire warning' `
+            ($agents -match 'Never paste a live credential') `
+            'the one limitation a user must read before their first session'
+        Assert-That 'AGENTS.md carries the gate exit contract' `
+            ($agents -match 'Exit 0 = pass, 1 = fail, 2 = SKIPPED')
+    }
+
+    Assert-That '.codex/config.toml registers both documentation servers' `
+        ((Test-Path (Join-Path $repo '.codex/config.toml')) -and
+         ((Get-Content -LiteralPath (Join-Path $repo '.codex/config.toml') -Raw) -match 'mcp_servers\.microsoft-learn') -and
+         ((Get-Content -LiteralPath (Join-Path $repo '.codex/config.toml') -Raw) -match 'mcp_servers\.context7'))
+
+    # ── Codex adapter: AGENTS.md exists ──────────────────────────────────────
+    # Deliberately NOT the append treatment CLAUDE.md gets. Ten @import lines are a
+    # small reversible addition; a whole ruleset dumped under a repo's own agent
+    # instructions is neither, and would contradict them silently.
+    $ownAgents = @('# House rules', '', 'Our own agent instructions.')
+    $repo = New-TargetRepo -AgentsMd $ownAgents
+    $repos += $repo
+    $output = Invoke-Install -Repo $repo
+    $agents = Get-Content -LiteralPath (Join-Path $repo 'AGENTS.md') -Raw
+
+    Assert-That 'an existing AGENTS.md is left byte-identical' `
+        ($agents -ceq (($ownAgents -join "`r`n") + "`r`n")) `
+        'the repo''s own agent instructions were overwritten or appended to'
+    Assert-That 'the untouched AGENTS.md is reported for a hand merge' `
+        ($output -match 'AGENTS\.md' -and $output -match 'SKIPPED')
+
+    # ── -Platform both keeps its original meaning ────────────────────────────
+    # `both` predates Codex. It must still mean cursor + claude, or every pinned
+    # invocation silently changes what it installs.
+    $repo = New-TargetRepo
+    $repos += $repo
+    Invoke-Install -Repo $repo -Platform 'both' | Out-Null
+
+    Assert-That '-Platform both writes no Codex adapter' `
+        ((-not (Test-Path (Join-Path $repo 'AGENTS.md'))) -and
+         (-not (Test-Path (Join-Path $repo '.codex/config.toml')))) `
+        'both means cursor + claude; widening it would change what a pinned flag does'
+    Assert-That '-Platform both still writes the Claude adapter' `
+        (Test-Path (Join-Path $repo 'CLAUDE.md'))
 }
 finally {
     foreach ($r in $repos) {

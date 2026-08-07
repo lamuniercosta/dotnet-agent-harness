@@ -1,0 +1,24 @@
+# Documentation MCP servers. Neither needs a paid account:
+# microsoft-learn is open, context7 works anonymously (CONTEXT7_API_KEY only
+# raises rate limits). Routing between them is the `documentation-sources` rule:
+# Microsoft Learn owns every Microsoft/Azure topic, context7 covers the rest.
+#
+# Cursor and Claude Code read the same two servers from JSON - see
+# adapters/cursor/mcp.json and adapters/claude/mcp.json. Codex reads TOML, so
+# this is the one adapter file that is a transliteration rather than a copy.
+# `url` registers a streamable-HTTP server natively; no stdio bridge is needed.
+#
+# env_http_headers maps HEADER NAME -> ENV VAR NAME, which is why the two spell
+# CONTEXT7_API_KEY twice. It is not a typo, and it is not the key itself: the
+# value never enters this file.
+#
+# Project-scoped config loads ONLY for a TRUSTED project. Open the repo with
+# `codex` once and trust it, or these servers stay silently unregistered - the
+# symptom is an agent that answers .NET API questions from memory.
+
+[mcp_servers.microsoft-learn]
+url = "https://learn.microsoft.com/api/mcp"
+
+[mcp_servers.context7]
+url = "https://mcp.context7.com/mcp"
+env_http_headers = { "CONTEXT7_API_KEY" = "CONTEXT7_API_KEY" }
