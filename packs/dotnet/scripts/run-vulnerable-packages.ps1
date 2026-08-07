@@ -12,7 +12,8 @@
 #   ./scripts/run-vulnerable-packages.ps1 -IncludeTransitive:$false
 #
 # Exit 0 = no findings at or above -Severity. Exit 1 = findings, or the scan
-# could not run. A scan that could not run is never reported as a pass.
+# could not run. Exit 2 = SKIPPED when the gate is disabled. A scan that could
+# not run is never reported as a pass.
 
 [CmdletBinding()]
 param(
@@ -41,8 +42,11 @@ $repoRoot = Get-RepoRoot
 $config = Get-HarnessConfig -RepoRoot $repoRoot
 
 if (-not $config['gates.vulnerablePackages.fail']) {
-    Write-Host 'Vulnerable-package gate disabled in harness.yml (gates.vulnerablePackages.fail: false).'
-    exit 0
+    # `fail` is the legacy enable/disable key for this gate. Keep accepting it
+    # for compatibility, but do not report a pass when it prevents the scan.
+    Write-Host 'Vulnerable-package gate: SKIPPED - disabled in harness.yml (gates.vulnerablePackages.fail: false).'
+    Write-Host '  Nothing was verified. Set gates.vulnerablePackages.fail to true to run the scan.'
+    exit 2
 }
 
 if ($null -eq $IncludeTransitive) {

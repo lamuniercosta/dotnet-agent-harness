@@ -11,10 +11,11 @@
 #
 # Roslyn and complexity get a real planted violation here, and each asserts the
 # diagnostic it expects to see rather than accepting any exit 1 - a build error
-# and a caught violation both exit 1. InspectCode's failure direction is NOT
+# and a caught violation both exit 1. InspectCode's finding direction is NOT
 # covered here, because it needs `jb` restored; the fixture round trip proves it
-# instead. The property gate's failure direction is likewise proven end to end by
-# the fixture, since it needs a real multi-assembly solution.
+# instead. Its process/report verdicts use a fake `dotnet` command below. The
+# property gate's failure direction is likewise proven end to end by the fixture,
+# since it needs a real multi-assembly solution.
 
 [CmdletBinding()]
 param()
@@ -95,6 +96,48 @@ function Invoke-Gate {
     }
 }
 
+# A portable fake `dotnet` command lets the installed InspectCode gate reach its
+# post-process verdicts without restoring JetBrains tools or using the network.
+# The gate still builds its real command line and removes any stale report first.
+function New-InspectCodeDotnetShim {
+    param([string]$Repo)
+
+    $shimDir = Join-Path $Repo '.inspectcode-test-bin'
+    New-Item -ItemType Directory -Path $shimDir -Force | Out-Null
+
+    $shimScript = Join-Path $shimDir 'dotnet-shim.ps1'
+    Set-Content -LiteralPath $shimScript -Encoding UTF8 -Value @(
+        '[CmdletBinding(PositionalBinding = $false)]'
+        'param([Parameter(ValueFromRemainingArguments = $true)][string[]]$CommandArgs)'
+        ''
+        "if (`$CommandArgs.Count -ge 2 -and `$CommandArgs[0] -eq 'tool' -and `$CommandArgs[1] -eq 'restore') { exit 0 }"
+        "if (`$CommandArgs.Count -ge 2 -and `$CommandArgs[0] -eq 'jb' -and `$CommandArgs[1] -eq 'inspectcode') {"
+        '    exit [int]$env:HARNESS_INSPECTCODE_TEST_EXIT'
+        '}'
+        'Write-Error "Unexpected fake dotnet arguments: $CommandArgs"'
+        'exit 1'
+    )
+
+    if ($IsWindows) {
+        Set-Content -LiteralPath (Join-Path $shimDir 'dotnet.cmd') -Encoding Ascii -Value @(
+            '@echo off'
+            'pwsh -NoProfile -File "%~dp0dotnet-shim.ps1" %*'
+            'exit /b %ERRORLEVEL%'
+        )
+    }
+    else {
+        $unixShim = Join-Path $shimDir 'dotnet'
+        Set-Content -LiteralPath $unixShim -Encoding UTF8 -Value @(
+            '#!/usr/bin/env pwsh'
+            '& "$PSScriptRoot/dotnet-shim.ps1" @args'
+            'exit $LASTEXITCODE'
+        )
+        & chmod +x $unixShim
+    }
+
+    return $shimDir
+}
+
 Write-Host ''
 Write-Host 'Gate exit contract: 0 = pass, 1 = fail, 2 = SKIPPED'
 Write-Host ''
@@ -163,6 +206,33 @@ try {
         ($r.Exit -eq 1 -and $r.Output -match 'Route') `
         "exit $($r.Exit) - expected 1 naming the method over the threshold"
 
+    # ── InspectCode process/report verdicts ──────────────────────────────────
+    # Exercise the installed script end to end with a fake dotnet command. The
+    # fake restores successfully, then returns the requested InspectCode exit
+    # without writing a SARIF report.
+    $shimDir = New-InspectCodeDotnetShim -Repo $repo
+    $originalPath = $env:PATH
+    $env:PATH = "$shimDir$([System.IO.Path]::PathSeparator)$originalPath"
+    try {
+        $env:HARNESS_INSPECTCODE_TEST_EXIT = '3'
+        $r = Invoke-Gate -Repo $repo -Script 'run-jetbrains-inspectcode.ps1' -GateArgs @('-All', '-NoBuild')
+
+        Assert-That 'inspectcode: jb exit 3 is SKIPPED, not clean' `
+            ($r.Exit -eq 2 -and $r.Output -match 'SKIPPED' -and $r.Output -match 'no matching files') `
+            "exit $($r.Exit) - InspectCode matched nothing, so it did not earn a pass"
+
+        $env:HARNESS_INSPECTCODE_TEST_EXIT = '0'
+        $r = Invoke-Gate -Repo $repo -Script 'run-jetbrains-inspectcode.ps1' -GateArgs @('-All', '-NoBuild')
+
+        Assert-That 'inspectcode: a missing SARIF report fails closed' `
+            ($r.Exit -eq 1 -and $r.Output -match 'GATE COULD NOT RUN' -and $r.Output -match 'no SARIF report') `
+            "exit $($r.Exit) - a successful process without its promised report is inconclusive"
+    }
+    finally {
+        $env:PATH = $originalPath
+        Remove-Item Env:\HARNESS_INSPECTCODE_TEST_EXIT -ErrorAction SilentlyContinue
+    }
+
     # ── Vulnerable packages: a scan that enumerated nothing is not clean ──────
     # Uses the canned-document seam, so no restore and no network.
     $emptyScan = Join-Path $repo 'empty-scan.json'
@@ -177,6 +247,21 @@ try {
         'reporting "no vulnerable packages" after enumerating nothing is a pass it did not earn'
     Assert-That 'vulnerable-packages: says it could not run' `
         ($r.Output -match 'GATE COULD NOT RUN')
+
+    # The legacy `fail` key acts as this gate's enable switch. Turning it off
+    # verifies nothing, so it follows the same disabled-gate contract as
+    # InspectCode and property tests.
+    $configPath = Join-Path $repo 'harness.yml'
+    $config = Get-Content -LiteralPath $configPath -Raw
+    $config = $config -replace '(?m)^    fail: true\s*$', '    fail: false'
+    Set-Content -LiteralPath $configPath -Value $config -Encoding UTF8
+
+    $r = Invoke-Gate -Repo $repo -Script 'run-vulnerable-packages.ps1'
+    Assert-That 'vulnerable-packages: disabled gate exits 2, not 0' `
+        ($r.Exit -eq 2) `
+        "exit $($r.Exit) - a disabled scan verified no dependencies"
+    Assert-That 'vulnerable-packages: disabled gate says SKIPPED' `
+        ($r.Output -match 'SKIPPED')
 
     # ── Property-gate verdict (#24) ──────────────────────────────────────────
     # Canned single-project output. #24 itself - one assembly's no-match masking
