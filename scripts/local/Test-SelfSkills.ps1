@@ -181,14 +181,14 @@ try {
 
     $sampleSkill = Join-Path $fixture '.agents/skills/task/SKILL.md'
     $sampleWriteTime = (Get-Item -LiteralPath $sampleSkill).LastWriteTimeUtc.Ticks
-    $manifestWriteTime = (Get-Item -LiteralPath $manifestPath).LastWriteTimeUtc.Ticks
+    $manifestWriteTime = (Get-Item -LiteralPath $manifestPath -Force).LastWriteTimeUtc.Ticks
     $treeBeforeSecondRun = Get-TreeFingerprint -Root $fixture
     $second = Invoke-SelfSync -Root $fixture
     Assert-That 'an unchanged second sync succeeds and reports no semantic changes' `
         (($second.ExitCode -eq 0) -and ($second.Output -match 'no semantic changes')) $second.Output
     Assert-That 'an unchanged second sync rewrites neither skills nor manifest' `
         (((Get-Item -LiteralPath $sampleSkill).LastWriteTimeUtc.Ticks -eq $sampleWriteTime) -and
-         ((Get-Item -LiteralPath $manifestPath).LastWriteTimeUtc.Ticks -eq $manifestWriteTime) -and
+         ((Get-Item -LiteralPath $manifestPath -Force).LastWriteTimeUtc.Ticks -eq $manifestWriteTime) -and
          ((Get-TreeFingerprint -Root $fixture) -ceq $treeBeforeSecondRun))
 
     Assert-That 'authored overrides and foreign skills survive repeated refresh byte-identical' `
