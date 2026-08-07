@@ -2,7 +2,7 @@
 # harness.yml - the single configuration surface.
 #
 # PowerShell ships no YAML parser, and requiring one (powershell-yaml) would
-# break the harness's zero-setup promise. The schema here is fixed and shallow,
+# break the harness's zero-setup promise. The schema here is fixed and small,
 # so a strict subset reader is enough: 2-space indent, `key: value` scalars,
 # nested maps, and `#` comments. No lists, anchors, or multi-line strings.
 #
@@ -33,12 +33,24 @@ $script:HarnessSchema = @{
     'gates.vulnerablePackages.includeTransitive' = 'bool'
     'gates.inspectCode.enabled'                  = 'bool'
     'gates.propertyTests.enabled'                = 'bool'
-    'agents.tiers.fast.claude'                   = 'scalar'
-    'agents.tiers.fast.cursor'                   = 'scalar'
-    'agents.tiers.balanced.claude'               = 'scalar'
-    'agents.tiers.balanced.cursor'               = 'scalar'
-    'agents.tiers.deep.claude'                   = 'scalar'
-    'agents.tiers.deep.cursor'                   = 'scalar'
+    'agents.tiers.fast.claude.model'             = 'scalar'
+    'agents.tiers.fast.claude.effort'            = 'scalar'
+    'agents.tiers.fast.cursor.model'             = 'scalar'
+    'agents.tiers.fast.cursor.effort'            = 'scalar'
+    'agents.tiers.fast.codex.model'              = 'scalar'
+    'agents.tiers.fast.codex.effort'             = 'scalar'
+    'agents.tiers.balanced.claude.model'         = 'scalar'
+    'agents.tiers.balanced.claude.effort'        = 'scalar'
+    'agents.tiers.balanced.cursor.model'         = 'scalar'
+    'agents.tiers.balanced.cursor.effort'        = 'scalar'
+    'agents.tiers.balanced.codex.model'          = 'scalar'
+    'agents.tiers.balanced.codex.effort'         = 'scalar'
+    'agents.tiers.deep.claude.model'             = 'scalar'
+    'agents.tiers.deep.claude.effort'            = 'scalar'
+    'agents.tiers.deep.cursor.model'             = 'scalar'
+    'agents.tiers.deep.cursor.effort'            = 'scalar'
+    'agents.tiers.deep.codex.model'              = 'scalar'
+    'agents.tiers.deep.codex.effort'             = 'scalar'
 }
 
 function Get-HarnessDefaults {
@@ -61,12 +73,24 @@ function Get-HarnessDefaults {
         'gates.vulnerablePackages.includeTransitive' = $true
         'gates.inspectCode.enabled'                  = $true
         'gates.propertyTests.enabled'                = $true
-        'agents.tiers.fast.claude'                   = 'inherit'
-        'agents.tiers.fast.cursor'                   = 'auto'
-        'agents.tiers.balanced.claude'               = 'inherit'
-        'agents.tiers.balanced.cursor'               = 'auto'
-        'agents.tiers.deep.claude'                   = 'inherit'
-        'agents.tiers.deep.cursor'                   = 'auto'
+        'agents.tiers.fast.claude.model'             = 'claude-haiku-4-5-20251001'
+        'agents.tiers.fast.claude.effort'            = 'low'
+        'agents.tiers.fast.cursor.model'             = 'gpt-5.6-luna'
+        'agents.tiers.fast.cursor.effort'            = 'low'
+        'agents.tiers.fast.codex.model'              = 'gpt-5.6-terra'
+        'agents.tiers.fast.codex.effort'             = 'low'
+        'agents.tiers.balanced.claude.model'         = 'inherit'
+        'agents.tiers.balanced.claude.effort'        = 'inherit'
+        'agents.tiers.balanced.cursor.model'         = 'inherit'
+        'agents.tiers.balanced.cursor.effort'        = 'inherit'
+        'agents.tiers.balanced.codex.model'          = 'inherit'
+        'agents.tiers.balanced.codex.effort'         = 'inherit'
+        'agents.tiers.deep.claude.model'             = 'inherit'
+        'agents.tiers.deep.claude.effort'            = 'inherit'
+        'agents.tiers.deep.cursor.model'             = 'inherit'
+        'agents.tiers.deep.cursor.effort'            = 'inherit'
+        'agents.tiers.deep.codex.model'              = 'inherit'
+        'agents.tiers.deep.codex.effort'             = 'inherit'
     }
 }
 
@@ -128,6 +152,9 @@ function ConvertFrom-HarnessYaml {
             throw "${Path}:${lineNo}: duplicate key '$dotted'."
         }
         if (-not $script:HarnessSchema.ContainsKey($dotted)) {
+            if ($dotted -match '^agents\.tiers\.(fast|balanced|deep)\.(claude|cursor|codex)$') {
+                throw "${Path}:${lineNo}: legacy scalar agent tier '$dotted' is unsupported in 0.3.0; nest 'model:' and 'effort:' below the host. See CHANGELOG.md."
+            }
             $known = ($script:HarnessSchema.Keys | Sort-Object) -join ', '
             throw "${Path}:${lineNo}: unknown key '$dotted'.`n  Known keys: $known"
         }

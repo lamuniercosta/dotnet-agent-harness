@@ -1,7 +1,7 @@
 ---
 name: security-reviewer
 description: Security review of a diff — runs the vulnerable-package scan, then reviews changed code for secrets, injection, missing authorization, permissive CORS, and PII leakage. Read-only. Use in the /ship-review fan-out or when a change touches auth, crypto, secrets, or user-supplied input.
-model: inherit
+tier: deep
 readonly: true
 tools: Read, Bash, Grep, Glob
 ---
@@ -20,7 +20,9 @@ Do not re-report what the analyzers already flag. If `run-roslyn-analyzers.ps1` 
 
 Exit 1 means a known-vulnerable package is referenced. Report each with package, version, severity, and advisory URL. This is blocking: a shipped CVE is not a warning.
 
-If the scan could not run — restore failure, no NuGet source — report **SKIP** with the reason. Never report a clean supply chain you did not actually verify.
+If the scan could not run — restore failure, no NuGet source — report **Could
+not run** with the reason. Never report a clean supply chain you did not actually
+verify.
 
 ## 2. Review the changed code
 

@@ -30,3 +30,7 @@ Named profiles under `.claude/agents/` are not copied. Codex can spawn general
 subagents using the complete briefs embedded in the relevant skills; when that is
 not appropriate or available, the skill runs the work inline and discloses the
 fallback.
+
+The named-profile consequence above is superseded by
+[ADR 0006](0006-canonical-agent-profiles-generate-host-discovery-copies.md),
+after Codex added documented file-based custom agents.

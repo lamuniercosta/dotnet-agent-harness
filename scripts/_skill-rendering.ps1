@@ -2,6 +2,22 @@
 # Dot-sourced by install.ps1 and the repo-local self-development bootstrap so
 # Codex adaptation has one implementation.
 
+function ConvertTo-CodexSkillReferences {
+    param(
+        [Parameter(Mandatory = $true)][string]$Content,
+        [Parameter(Mandatory = $true)][string]$SkillsSource
+    )
+
+    $skillNames = @(Get-ChildItem -LiteralPath $SkillsSource -Directory | ForEach-Object { $_.Name })
+    $namePattern = @($skillNames | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    # The preceding character must not be part of a URL or path segment.
+    $pattern = '(?<![A-Za-z0-9._-])/(?:' + $namePattern + '|speckit-[A-Za-z0-9-]+)(?=$|[^A-Za-z0-9_-])'
+    return [regex]::Replace($Content, $pattern, {
+            param($match)
+            '$' + $match.Value.Substring(1)
+        })
+}
+
 function Convert-CodexSkillReferences {
     <#
       Codex exposes project skills as `$name`, while the same canonical
@@ -17,9 +33,6 @@ function Convert-CodexSkillReferences {
     )
 
     $skillNames = @(Get-ChildItem -LiteralPath $SkillsSource -Directory | ForEach-Object { $_.Name })
-    $namePattern = @($skillNames | ForEach-Object { [regex]::Escape($_) }) -join '|'
-    # The preceding character must not be part of a URL or path segment.
-    $pattern = '(?<![A-Za-z0-9._-])/(?:' + $namePattern + '|speckit-[A-Za-z0-9-]+)(?=$|[^A-Za-z0-9_-])'
 
     if (-not (Test-Path -LiteralPath $CodexSkills)) { return }
 
@@ -28,10 +41,7 @@ function Convert-CodexSkillReferences {
         if (-not (Test-Path -LiteralPath $ownedSkill)) { continue }
         Get-ChildItem -LiteralPath $ownedSkill -File -Recurse -Filter '*.md' | ForEach-Object {
             $original = Get-Content -LiteralPath $_.FullName -Raw
-            $adapted = [regex]::Replace($original, $pattern, {
-                    param($match)
-                    '$' + $match.Value.Substring(1)
-                })
+            $adapted = ConvertTo-CodexSkillReferences -Content $original -SkillsSource $SkillsSource
             if ($adapted -cne $original) {
                 Set-Content -LiteralPath $_.FullName -Value $adapted -Encoding UTF8 -NoNewline
             }

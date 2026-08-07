@@ -9,7 +9,7 @@ load automatically when you touch a matching file.
 
 ## Always-on rules
 
-Imported from `.cursor/rules/` deliberately. These ten exist in exactly one place:
+Imported from `.cursor/rules/` deliberately. These eleven exist in exactly one place:
 Cursor requires them at that path to load them, and an `@import` resolves any
 relative path, so copying them into `.claude/rules/` would create two files that
 drift. One file, one home, both platforms.
@@ -18,6 +18,7 @@ If you are working Claude-only, do not delete `.cursor/` — every import below
 resolves into it.
 
 @.cursor/rules/agent-pipeline.mdc
+@.cursor/rules/delegation.mdc
 @.cursor/rules/github-workflow.mdc
 @.cursor/rules/coding-conventions.mdc
 @.cursor/rules/documentation-sources.mdc
@@ -76,22 +77,25 @@ error — a failure to launch, not a failed scan; do not report it as a red gate
 
 **A gate that could not run has not passed.** The scripts enforce this themselves:
 if the analyzer they depend on is not wired, they exit 1 with remediation rather
-than reporting a pass they did not earn. Report an unrunnable gate as SKIP, never
-fold it into a green verdict, and never substitute plain `dotnet build`.
+than reporting a pass they did not earn. Report an unrunnable gate as `Could not
+run`; reserve `Skipped` for exit 2, never fold either into a green verdict, and
+never substitute plain `dotnet build`.
 
 ## Agents
 
-Five agents live in `.claude/agents/` and are read natively by both Cursor and
-Claude Code. Delegate to them rather than running noisy work inline:
+Seven agents live in `.claude/agents/` for Claude Code. Cursor receives generated
+copies in `.cursor/agents/`. Delegate to them when the delegation rule applies:
 
 - `gate-runner` (read-only) — runs the gates, returns `file:line` + cause
-- `test-writer` — the only agent that writes files; stays inside `tests/`
+- `code-scout` (read-only) — bulk search returning a compact factual conclusion
+- `edit-applier` — exact mechanical edits to an exclusively assigned file set
+- `test-writer` — writes tests and stays inside `tests/`
 - `mutation-analyst` (read-only) — triages Stryker survivors
 - `code-reviewer` (read-only) — one named axis per call: Risk, Standards, or Spec
 - `security-reviewer` (read-only) — supply chain, authz, injection, data exposure
 
-They default to `inherit`/`auto` models, so the pipeline costs nothing beyond the
-editor subscription. Pin per tier in `harness.yml` if you want to.
+Profiles declare `fast`, `balanced`, or `deep`; installation renders each host's
+configured model and effort. Only `fast` is pinned to a cheaper model by default.
 
 ## Non-negotiables
 

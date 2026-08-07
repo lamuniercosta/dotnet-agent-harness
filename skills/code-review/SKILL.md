@@ -98,11 +98,10 @@ Start all applicable axes together when the host supports parallel delegation. R
 | Standards | `code-reviewer` (second call, Standards brief) | inline | always |
 | Spec | inline | — | a spec was found in step 4 |
 
-Cursor and Claude Code can route these roles to the named profiles shipped in
-`.claude/agents/`. On Codex, spawn general subagents with the complete briefs
-below rather than assuming those Claude profiles load. If the host exposes no
-subagent mechanism, run each brief inline in sequence and say so in the final
-summary, so the reader knows the axes were not independent.
+Claude Code, Cursor, and Codex can route these roles to their generated named
+profiles. If the host exposes no subagent mechanism, run each brief inline in
+sequence and say so in the final summary, so the reader knows the axes were not
+independent.
 
 Every prompt gets: the diff command, the commit list, the blast-radius table from step 2, and the relevant step-3 pre-pass results.
 

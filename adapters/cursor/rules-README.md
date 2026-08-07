@@ -5,7 +5,7 @@ never open Cursor.
 
 ## Why a Claude-only project still has one
 
-The ten always-on rules here exist in exactly one place, and `CLAUDE.md` reaches
+The eleven always-on rules here exist in exactly one place, and `CLAUDE.md` reaches
 them by import:
 
 ```
@@ -18,7 +18,7 @@ Cursor can only auto-load rules from `.cursor/rules/`, and a Claude `@import`
 resolves any relative path — so one copy here serves both, while a copy in each
 tree would be two files free to drift.
 
-**Deleting this directory silently breaks all ten imports.** Nothing errors; the
+**Deleting this directory silently breaks all eleven imports.** Nothing errors; the
 rules just stop arriving, and the symptom is "the agent ignores our conventions".
 
 ## What's in here

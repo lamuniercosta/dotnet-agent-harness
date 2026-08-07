@@ -2,11 +2,69 @@
 
 Notable changes to `dotnet-agent-harness`. The version here is written into a
 consuming repo's `harness.yml` as `harnessVersion`, so an install reports
-`0.1.0 -> 0.2.0` rather than overwriting silently.
+the old and new versions rather than overwriting silently.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [semantic versioning](https://semver.org/), where a **major** bump
 means a consuming repo's gates may start failing on code that previously passed.
+
+## [0.3.0] — 2026-08-07
+
+### Breaking
+
+- **Agent tier configuration is now nested by `model` and `effort`.** The old
+  scalar Claude and Cursor keys are intentionally rejected instead of silently
+  preserving inert configuration. Migrate this:
+
+  ```yaml
+  agents:
+    tiers:
+      fast:
+        claude: inherit
+        cursor: auto
+  ```
+
+  to this:
+
+  ```yaml
+  agents:
+    tiers:
+      fast:
+        claude:
+          model: claude-haiku-4-5-20251001
+          effort: low
+        cursor:
+          model: gpt-5.6-luna
+          effort: low
+        codex:
+          model: gpt-5.6-terra
+          effort: low
+  ```
+
+  To undo the new cheap-model default for any host, set both of that host's
+  fields to `inherit`.
+
+### Added
+
+- Seven tiered named agents now install in every host's native discovery format:
+  `.claude/agents/*.md`, `.cursor/agents/*.md`, and `.codex/agents/*.toml`.
+- `code-scout` handles bounded read-only searches whose conclusion is much
+  smaller than their input.
+- `edit-applier` handles one fully specified mechanical edit over an exclusive
+  file set, with a stop-and-report contract for ambiguity or partial work.
+- An always-on cost-aware delegation rule governs cheap mid-task errands, the
+  cases that stay inline, semantic-verdict prohibitions, and one-strike fallback.
+
+### Changed
+
+- `fast` profiles default to verified cheaper models at low effort on Claude
+  Code, Cursor, and Codex. `balanced` and `deep` continue to inherit.
+- Read-only profiles render native controls per host: Claude Code plan mode,
+  Cursor `readonly`, and Codex's read-only sandbox.
+- Generated agents use marker-based per-file ownership. Reinstallations refresh
+  marked files, preserve unrelated agents, report unmarked same-name collisions,
+  and adopt only byte-exact 0.2.0 Claude profiles during migration.
+- Codex skill invocations inside generated agent instructions use `$name` syntax.
 
 ## [0.2.0] — 2026-08-05
 
@@ -140,3 +198,5 @@ account:
   checklist in `CONTRIBUTING.md`
 
 [0.1.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.1.0
+[0.2.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.2.0
+[0.3.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.3.0

@@ -1,6 +1,6 @@
 # dotnet-agent-harness
 
-`v0.1.0`
+`v0.3.0`
 
 A gated, spec-driven development pipeline for AI coding agents — for **Cursor**,
 **Claude Code**, and **Codex**, with no paid third-party service.
@@ -18,13 +18,13 @@ scripts actually catch defects.
 | **Pipeline** | 11 stages | Ticket to PR, with three human approval gates |
 | **Gates** | 6 | Numeric thresholds, each a script with a real exit code |
 | **Skills** | 25 | `SKILL.md` files — process, pipeline stages, and .NET reference |
-| **Agents** | 5 | Subagents that keep long tool output out of the main context |
-| **Rules** | 10 + 8 | Authored always-on rules, plus vendored glob-scoped .NET guidance |
+| **Agents** | 7 | Tiered subagents for noisy stages and cheap mechanical errands |
+| **Rules** | 11 + 8 | Authored always-on rules, plus vendored glob-scoped .NET guidance |
 | **Hooks** | 4 | Destructive-command guard, secret scan, format-on-edit, gate reminder |
 
-The adapters contain the host-specific wiring. The `skills/` tree is canonical;
-installation writes it to `.claude/skills/` for Cursor and Claude Code and generates
-Codex's syntax-adjusted `.agents/skills/` copy from the same source.
+The adapters contain the host-specific wiring. The `skills/` and
+`.claude/agents/` source trees are canonical; installation generates each host's
+native discovery copies from them.
 
 ## The gates
 
@@ -75,6 +75,10 @@ Nothing is clobbered. Files the harness owns are refreshed; files the repo owns
 absent and otherwise left alone and reported. Add `-WhatIf` to see the plan without
 writing anything.
 
+Generated agent copies carry a per-file ownership marker. Reinstallation refreshes
+marked profiles and preserves unrelated agents; an unmarked same-name file is reported
+as a collision and left untouched.
+
 Into a **new** project:
 
 ```bash
@@ -98,8 +102,10 @@ The canonical source plus host-specific delivery files:
 ```
 .claude/skills/         25 skill copies ← Cursor and Claude Code
 .agents/skills/         generated Codex copies ← invoke as `$name`
-.claude/agents/          5 named agent profiles ← Cursor and Claude Code
-.cursor/rules/          10 rules    ← Cursor globs them; CLAUDE.md @imports them
+.claude/agents/          7 generated profiles ← Claude Code
+.cursor/agents/          7 generated profiles ← Cursor
+.codex/agents/           7 generated TOML profiles ← Codex
+.cursor/rules/          11 rules    ← Cursor globs them; CLAUDE.md @imports them
 .cursor/rules/vendor/    8 rules    ← glob-scoped, `globs:`  (Cursor)
 .claude/rules/vendor/    8 rules    ← glob-scoped, `paths:`  (Claude Code)
 scripts/                gate scripts + hooks/
@@ -110,10 +116,10 @@ AGENTS.md · .codex/config.toml · .codex/hooks.json
 ```
 
 A Claude-only install still writes `.cursor/rules/`, and vice versa. Cosmetically odd,
-structurally correct: one file, one home.
+structurally correct: the authored rule still has one home.
 
-`vendor/` is the single exception, written to both trees — **both platforms load those
-rules natively by glob**, but from different directories with different frontmatter keys,
+Vendored rules are written to both host trees — **both platforms load those rules
+natively by glob**, but from different directories with different frontmatter keys,
 and Cursor does not read `.claude/rules/`. Each file carries both keys; the `paths:` half
 is generated from `globs:`, because the two have different semantics (`*.cs` means "any
 `.cs`" to Cursor and "root only" to Claude).
@@ -139,35 +145,52 @@ backed by recall is not.
 
 ## Skills and agents
 
-Cursor and Claude Code use the `.claude/skills/` delivery and the five named
-profiles in `.claude/agents/`. Codex receives generated copies of those skills in
-`.agents/skills/`: invoke one as `$name`, or let Codex activate it implicitly when the
-request matches its description. Codex does not load named `.claude/agents/` profiles;
-it can instead delegate an embedded brief to a generic subagent, or do the work inline.
+Cursor and Claude Code use the `.claude/skills/` delivery. Codex receives generated
+copies in `.agents/skills/`: invoke one as `$name`, or let Codex activate it
+implicitly. Named agents are generated separately for each host under
+`.claude/agents/`, `.cursor/agents/`, and `.codex/agents/`.
 
 | Agent | Mode | Job |
 |---|---|---|
 | `gate-runner` | read-only | Runs the gates; returns `file:line` + cause, not raw output |
-| `test-writer` | **writable** | The only agent that writes; stays inside `tests/` |
+| `code-scout` | read-only | Bulk search returning a compact factual conclusion |
+| `edit-applier` | **writable** | One specified mechanical edit over exclusive files |
+| `test-writer` | **writable** | Writes or extends tests; stays inside `tests/` |
 | `mutation-analyst` | read-only | Triages Stryker survivors: real gap vs equivalent mutant |
 | `code-reviewer` | read-only | One named axis per call — Risk, Standards, or Spec |
 | `security-reviewer` | read-only | Supply chain, authz, injection, data exposure |
 
 ## Cost
 
-Shipped defaults put Cursor and Claude Code agent profiles on `auto` / `inherit`, so
-their pipelines stay within the host plan's included usage where available. Codex skills
-and generic subagents use the model selected for the Codex task. Profiles declare a
-*tier*, never a model id, so pinning is one block in `harness.yml` and a model rename is
-a one-line fix:
+Profiles declare a `fast`, `balanced`, or `deep` tier rather than a model id.
+Installation renders the tier into native model and effort fields for every host.
+Only mechanically checkable `fast` work is pinned by default:
+
+- Claude Code: `claude-haiku-4-5-20251001`, effort `low`
+- Cursor: `gpt-5.6-luna`, effort `low`
+- Codex: `gpt-5.6-terra`, effort `low`
+
+`balanced` and `deep` inherit the active host or session model. Change one tier
+block to alter every profile assigned to it:
 
 ```yaml
 agents:
   tiers:
     deep:
-      claude: inherit    # change to pin, e.g. claude-opus-5
-      cursor: auto
+      claude:
+        model: inherit
+        effort: inherit
+      cursor:
+        model: inherit
+        effort: inherit
+      codex:
+        model: inherit
+        effort: inherit
 ```
+
+The always-on delegation rule uses cheap agents only for short, one-shot errands
+whose answer is much smaller than their input. It deliberately has no numeric
+threshold: the runtime behavior is guidance and cannot be proven by CI.
 
 ## Configuration
 
@@ -195,8 +218,8 @@ default would be the exact failure the gates exist to prevent.
 
 ```
 skills/              25 SKILL.md sources → host discovery directories on install
-.claude/agents/       5 named profiles for Cursor and Claude Code
-rules/pipeline/      10 authored always-on rules
+.claude/agents/       7 canonical profiles → three host discovery formats
+rules/pipeline/      11 authored always-on rules
 rules/vendor/         8 third-party .NET rules, isolated and attributed (see NOTICE)
 hooks/                4 hook scripts + 3 self-tests
 adapters/             the only per-platform files: hook wiring, MCP, agent instructions
@@ -271,7 +294,7 @@ pwsh ./scripts/local/Test-SelfSkills.ps1               # self-development skill 
 pwsh ./packs/dotnet/scripts/Test-HarnessConfig.ps1     # harness.yml parsing
 pwsh ./packs/dotnet/scripts/Test-ThresholdDocs.ps1     # docs vs harness.yml
 pwsh ./packs/dotnet/scripts/Test-SpecKitExtension.ps1  # the Spec Kit coupling
-pwsh ./packs/dotnet/scripts/Test-InstallArtifacts.ps1  # CLAUDE.md imports, constitution
+pwsh ./packs/dotnet/scripts/Test-InstallArtifacts.ps1  # host agents, imports, constitution
 pwsh ./packs/dotnet/scripts/Test-GherkinMutation.ps1   # feature-file reassembly
 pwsh ./packs/dotnet/scripts/Test-TaskBranchScripts.ps1 # task branch and worktree safety
 pwsh ./packs/dotnet/scripts/Test-GateExitContract.ps1  # 0 / 1 / 2, both directions

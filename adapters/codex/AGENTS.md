@@ -28,6 +28,37 @@ session. Project hooks must be reviewed before their safety nets run.
 - Never lower a gate threshold to make a gate pass. That is the one move the
   pipeline exists to prevent.
 
+## Cost-aware delegation
+
+Agent tiers reflect the cost of a silent miss, not apparent difficulty. Use a
+`fast` named agent for a cheap errand only when all four conditions hold:
+
+1. You need a compact answer, not source material you will quote, edit, or
+   reason over line by line.
+2. The material to inspect is much larger than the returned answer.
+3. The brief is short and complete without replaying accumulated conversation.
+4. The work is one-shot and should not need clarification.
+
+Keep the work inline when you need the contents afterward, the brief transfers
+substantial context, trusting the result requires re-reading the source, or one
+tool call answers the question. The governing asymmetry is: **delegate
+conclusions; keep required content inline.** There is no numeric threshold.
+
+A cheap errand may gather evidence but may not make semantic verdicts, feed a
+human gate or `$grill-with-docs`, or perform unspecified writes. `gate-runner`
+has one mechanical exception: it may translate a reported command and exit code
+into `Pass`, `Failure`, `Skipped`, or `Could not run`; it may not dismiss
+findings, judge equivalent mutants, or overrule tool evidence.
+
+Delegate a writable errand to `edit-applier` only when the brief gives one exact
+transformation, an explicit file set, and an objective check. Those files belong
+exclusively to the errand until it returns. Do not edit them concurrently, and
+parallel writable errands must have disjoint file sets. Review the diff afterward.
+
+If an errand is ambiguous, partial, or untrustworthy, finish it inline and do not
+re-brief the cheap agent. If partial edits already exist, review the current diff
+and continue from it; do not roll back automatically.
+
 ## Coding conventions
 
 - Define an interface in the same file as its primary implementation
@@ -81,8 +112,9 @@ A SKIPPED gate verified nothing and is never folded into a green verdict.
 
 **A gate that could not run has not passed.** The scripts enforce this themselves:
 if the analyzer they depend on is not wired, they exit 1 with remediation rather
-than reporting a pass they did not earn. Report an unrunnable gate as SKIP, never
-fold it into a green verdict, and never substitute plain `dotnet build`.
+than reporting a pass they did not earn. Report an unrunnable gate as `Could not
+run`; reserve `Skipped` for exit 2, never fold either into a green verdict, and
+never substitute plain `dotnet build`.
 
 ### Running the gates under `codex exec`
 
@@ -249,7 +281,7 @@ recall it. `gitleaks` in CI covers only the commit-time half.
 Hooks are guardrails, not a complete enforcement boundary. Keep Codex's sandbox
 enabled and read approval prompts rather than approving reflexively.
 
-### Skills are available; named Claude profiles are not
+### Skills and named agents are available
 
 The harness installs its canonical `skills/` source to `.agents/skills/`, which Codex
 discovers; Cursor and Claude Code receive the same source under `.claude/skills/`.
@@ -258,9 +290,12 @@ matches its description.
 For Spec Kit `0.8.14`, initialize Codex with `specify init --integration codex`; that
 provides the `$speckit-*` commands.
 
-Codex does not read the named `.claude/agents/` profiles. For their work, give a generic
-Codex subagent the profile's brief in the delegation prompt; when delegation is not
-appropriate, perform the work inline.
+The harness generates seven named profiles under `.codex/agents/`: `gate-runner`,
+`code-scout`, `edit-applier`, `test-writer`, `mutation-analyst`, `code-reviewer`,
+and `security-reviewer`. Their model and reasoning effort come from the profile's
+tier in `harness.yml`; inherited fields fall back to Codex's configured default.
+`code-scout` overlaps with Codex's built-in `explorer` without replacing it. A
+consumer who prefers the built-in can remove the generated `code-scout` profile.
 
 ### MCP servers need the project trusted
 

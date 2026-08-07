@@ -34,7 +34,7 @@ Acceptance tests (Gherkin + Reqnroll) are **opt-in**. Skip Stage 4, Human gate 2
 - After `/implement`, run the refactor gates before marking a feature complete
 - A surviving mutant is a missing test. Route it back to `/implement` — **never lower the threshold to go green**
 - Never open a PR without rebasing onto the latest default branch first
-- **A gate that could not run has not passed.** Report it as SKIP with remediation, never fold it into a green verdict
+- **A gate that could not run has not passed.** Report `Could not run` with remediation; reserve `Skipped` for exit 2 and never fold either into a green verdict
 
 ## Failure Routing
 
@@ -64,12 +64,17 @@ Use `/pipeline` to determine the current stage. Extension hooks in `.specify/ext
 
 ## Agents
 
-Delegate the four noisiest stages so their output does not consume the main context. All five ship in `.claude/agents/`, which **Cursor and Claude Code both read natively** — no plugin, no subscription, nothing metered.
+Delegate noisy stages and eligible mid-task errands so raw material does not
+consume the main context. All seven profiles ship in the native discovery tree
+for Claude Code, Cursor, and Codex. The always-on `delegation.mdc` rule decides
+when spawning a cheap errand actually saves context and cost.
 
 | Stage | Agent |
 |---|---|
 | Running any gate | `gate-runner` (read-only) |
-| Writing or extending tests | `test-writer` (the only writable agent) |
+| Bulk repository search with a compact factual answer | `code-scout` (read-only) |
+| Fully specified mechanical edit to exclusive files | `edit-applier` (writable) |
+| Writing or extending tests | `test-writer` (writable; tests only) |
 | Interpreting Stryker survivors | `mutation-analyst` (read-only) |
 | Reviewing a diff | `code-reviewer` · `security-reviewer` (read-only) |
 

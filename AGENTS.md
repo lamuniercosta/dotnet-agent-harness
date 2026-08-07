@@ -61,7 +61,7 @@ not install gates, hooks, templates, or consumer configuration into this repo.
 
 ## Always-on rules are not auto-loaded here either
 
-A consumer install distils the ten always-on rules into its own `AGENTS.md`
+A consumer install distils the eleven always-on rules into its own `AGENTS.md`
 because Codex has no `@import` and a consumer has no other copy to read. This
 repo authors those rules, so restating them here would add a third copy that can
 go stale. Read them from the source when a task touches them:

@@ -1,7 +1,7 @@
 ---
 name: mutation-analyst
 description: Runs Stryker mutation testing, interprets the surviving mutants, and routes each one to a concrete test to write. Also does coverage-gap analysis. Read-only. Use at the architect gate, in the /ship-review fan-out, or when asked why the mutation score is below threshold.
-model: inherit
+tier: balanced
 readonly: true
 tools: Read, Bash, Grep, Glob
 ---
@@ -19,7 +19,9 @@ dotnet stryker --mutate "**/ImportHandler.cs"   # scoped to one file
 
 The threshold comes from `harness.yml` (`gates.mutation.threshold`, rendered into `stryker-config.json`). This takes minutes — say so up front if the caller may not expect it.
 
-If Stryker cannot run (tool not restored, build broken, no test project), report **SKIP** with the remediation. A mutation gate that did not execute has not passed.
+If Stryker cannot run (tool not restored, build broken, no test project), report
+**Could not run** with the remediation. A mutation gate that did not execute has
+not passed.
 
 ## Interpret
 

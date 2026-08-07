@@ -52,18 +52,21 @@ codex` for Codex). Check before routing there.
 
 ## Agents
 
-Four stages produce enough tool output to swamp the conversation. Delegate them rather than running inline:
+Named profiles cover noisy stages and bounded mid-task errands:
 
 | Instead of | Delegate to | Why |
 |---|---|---|
 | Running gate scripts inline | `gate-runner` | Returns `file:line` + cause, not raw analyzer output |
+| Bulk searching when only a conclusion is needed | `code-scout` | Keeps raw material out of the parent context |
+| Applying a fully specified mechanical edit | `edit-applier` | Changes only an explicit, exclusively assigned file set |
 | Writing tests inline on a large change | `test-writer` | Keeps fixture/spec churn out of the main context |
 | Reading Stryker's report | `mutation-analyst` | Survivor lists are long and mostly noise |
 | Reviewing a whole diff | `code-reviewer` · `security-reviewer` | Independent perspectives, run in parallel |
 
-The named profiles live in `.claude/agents/` for Cursor and Claude Code. Codex
-does not load those profiles; spawn general subagents with the briefs embedded in
-the calling skill, or run inline and disclose the fallback.
+Installation generates named profiles in `.claude/agents/` for Claude Code,
+`.cursor/agents/` for Cursor, and `.codex/agents/` for Codex. The always-on
+`delegation.mdc` rule governs cheap errands; do not restate its eligibility and
+one-strike rules here.
 
 ## Core operating behaviors (always on)
 

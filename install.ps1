@@ -7,8 +7,9 @@
   Adopt-first: this adds the harness to a repo that already exists. `new-project.sh`
   scaffolds a solution and then calls this same script, so there is one code path.
 
-  Nothing is clobbered. Files the harness owns (skills, agents, rules, hooks, gate
-  scripts) are refreshed on every run. Files the REPO owns (Directory.Build.props,
+  Nothing is clobbered. Files the harness owns (skills, marked generated agents,
+  rules, hooks, gate scripts) are refreshed on every run. Unmarked agent collisions
+  are preserved and reported. Files the REPO owns (Directory.Build.props,
   .editorconfig, harness.yml) are created if absent and otherwise left alone and
   reported, so you can merge by hand.
 
@@ -22,7 +23,8 @@
   Which agent platform(s) to wire: cursor, claude, codex, both, or all (default).
   `both` predates the Codex adapter and still means cursor + claude, so a pinned
   -Platform both keeps exactly the behaviour it always had.
-  Shared assets are always installed. `codex` and `all` additionally generate
+  Shared assets are always installed. The selected hosts receive generated named
+  agents in their native discovery format. `codex` and `all` additionally generate
   the `.agents/skills` discovery copy with Codex `$name` syntax.
 
 .EXAMPLE
@@ -132,9 +134,242 @@ function Copy-Tree {
     Add-Result $Label 'SYNCED' "$count files"
 }
 
+function Read-CanonicalAgentProfile {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $raw = (Get-Content -LiteralPath $Path -Raw) -replace "`r`n", "`n"
+    $lines = @($raw -split "`n", 0, 'SimpleMatch')
+    if ($lines.Count -lt 4 -or $lines[0] -ne '---') {
+        throw "${Path}: agent profile must start with YAML frontmatter."
+    }
+
+    $closing = -1
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -eq '---') { $closing = $i; break }
+    }
+    if ($closing -lt 0) { throw "${Path}: agent profile frontmatter is not closed." }
+
+    $metadata = @{}
+    for ($i = 1; $i -lt $closing; $i++) {
+        if ($lines[$i] -notmatch '^([A-Za-z][A-Za-z0-9]*):\s*(.*)$') {
+            throw "${Path}: unsupported agent frontmatter line '$($lines[$i])'."
+        }
+        $metadata[$Matches[1]] = $Matches[2]
+    }
+
+    foreach ($required in @('name', 'description', 'tier', 'readonly', 'tools')) {
+        if (-not $metadata.ContainsKey($required) -or -not $metadata[$required]) {
+            throw "${Path}: agent profile is missing '$required'."
+        }
+    }
+    if ($metadata['tier'] -notin @('fast', 'balanced', 'deep')) {
+        throw "${Path}: tier must be fast, balanced, or deep; got '$($metadata['tier'])'."
+    }
+    if ($metadata['readonly'] -notin @('true', 'false')) {
+        throw "${Path}: readonly must be true or false; got '$($metadata['readonly'])'."
+    }
+
+    $body = if ($closing + 1 -lt $lines.Count) {
+        ($lines[($closing + 1)..($lines.Count - 1)] -join "`n")
+    }
+    else { '' }
+
+    return [PSCustomObject]@{
+        Name        = $metadata['name']
+        Description = $metadata['description']
+        Tier        = $metadata['tier']
+        ReadOnly    = $metadata['readonly'] -eq 'true'
+        Tools       = $metadata['tools']
+        Body        = $body
+        SourcePath  = $Path
+    }
+}
+
+function Get-AgentTierSetting {
+    param(
+        [Parameter(Mandatory)]$Profile,
+        [Parameter(Mandatory)][ValidateSet('claude', 'cursor', 'codex')][string]$AgentHost,
+        [Parameter(Mandatory)][ValidateSet('model', 'effort')][string]$Setting
+    )
+
+    return $config["agents.tiers.$($Profile.Tier).$AgentHost.$Setting"]
+}
+
+function ConvertTo-TomlString {
+    param([AllowEmptyString()][string]$Value)
+    return ($Value | ConvertTo-Json -Compress)
+}
+
+function Render-MarkdownAgentProfile {
+    param(
+        [Parameter(Mandatory)]$Profile,
+        [Parameter(Mandatory)][ValidateSet('claude', 'cursor')][string]$AgentHost
+    )
+
+    $model = Get-AgentTierSetting -Profile $Profile -AgentHost $AgentHost -Setting model
+    $effort = Get-AgentTierSetting -Profile $Profile -AgentHost $AgentHost -Setting effort
+    $frontmatter = @(
+        '---'
+        'harnessGenerated: true'
+        "name: $($Profile.Name)"
+        "description: $($Profile.Description)"
+        "tier: $($Profile.Tier)"
+    )
+
+    if ($AgentHost -eq 'claude') {
+        if ($model -ne 'inherit') { $frontmatter += "model: $model" }
+        if ($effort -ne 'inherit') { $frontmatter += "effort: $effort" }
+        if ($Profile.ReadOnly) { $frontmatter += 'permissionMode: plan' }
+    }
+    else {
+        if ($model -eq 'inherit') {
+            if ($effort -ne 'inherit') {
+                throw "Cursor tier '$($Profile.Tier)' cannot set effort '$effort' while model is inherit."
+            }
+            $frontmatter += 'model: inherit'
+        }
+        elseif ($effort -eq 'inherit') {
+            $frontmatter += "model: $model"
+        }
+        else {
+            $frontmatter += "model: $model[effort=$effort]"
+        }
+        $frontmatter += "readonly: $($Profile.ReadOnly.ToString().ToLowerInvariant())"
+    }
+
+    $frontmatter += "tools: $($Profile.Tools)"
+    $frontmatter += '---'
+    return (($frontmatter + $Profile.Body) -join "`n").TrimEnd("`r", "`n") + "`n"
+}
+
+function Render-CodexAgentProfile {
+    param([Parameter(Mandatory)]$Profile)
+
+    $model = Get-AgentTierSetting -Profile $Profile -AgentHost codex -Setting model
+    $effort = Get-AgentTierSetting -Profile $Profile -AgentHost codex -Setting effort
+    $description = ConvertTo-CodexSkillReferences -Content $Profile.Description `
+        -SkillsSource (Join-Path $harnessRoot 'skills')
+    $instructions = ConvertTo-CodexSkillReferences -Content $Profile.Body.Trim() `
+        -SkillsSource (Join-Path $harnessRoot 'skills')
+    $toml = @(
+        '# dotnet-agent-harness: generated agent'
+        "name = $(ConvertTo-TomlString $Profile.Name)"
+        "description = $(ConvertTo-TomlString $description)"
+        "developer_instructions = $(ConvertTo-TomlString $instructions)"
+    )
+    if ($model -ne 'inherit') { $toml += "model = $(ConvertTo-TomlString $model)" }
+    if ($effort -ne 'inherit') { $toml += "model_reasoning_effort = $(ConvertTo-TomlString $effort)" }
+    if ($Profile.ReadOnly) { $toml += 'sandbox_mode = "read-only"' }
+    return ($toml -join "`n") + "`n"
+}
+
+function Test-HarnessOwnedAgent {
+    param([Parameter(Mandatory)][string]$Path)
+
+    $lines = @(Get-Content -LiteralPath $Path)
+    if ($lines.Count -eq 0) { return $false }
+    if ($lines[0] -eq '# dotnet-agent-harness: generated agent') { return $true }
+    if ($lines[0] -ne '---') { return $false }
+
+    for ($i = 1; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -eq '---') { return $false }
+        if ($lines[$i] -match '^harnessGenerated:\s*true\s*$') { return $true }
+    }
+    return $false
+}
+
+function Test-ExactLegacyClaudeAgent {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Name)
+
+    # SHA-256 of the five v0.2.0 canonical files after normalizing CRLF to LF.
+    # This permits only the promised exact legacy copies while remaining stable
+    # across Git's platform-specific checkout line endings.
+    $legacyHashes = @{
+        'code-reviewer'     = 'bb8122fba5ee688f5afe3fb9bf277eddf83c1864a6582e6f3790bd46b9785970'
+        'gate-runner'       = '2df8284b218888d69b2cbcf8f9255c23a91440676e5a2d3b8d7d04f70a22987a'
+        'mutation-analyst'  = '212d7c1b3bc8869d24c6ce3aa6f1eb4ec6192cacaadfa0948a42d9b8b75c59fd'
+        'security-reviewer' = '5fecdbeabfe0e31a8e027fac310a4f76b5b80f9163a49ce8f38cb7588db20dc0'
+        'test-writer'       = '8228e564544dbab747737457096bff6de1a8e59956eb7a2a56f2bd88112f0e23'
+    }
+    if (-not $legacyHashes.ContainsKey($Name)) { return $false }
+    $normalized = ([IO.File]::ReadAllText($Path) -replace "`r`n", "`n")
+    $bytes = [Text.Encoding]::UTF8.GetBytes($normalized)
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $actual = [Convert]::ToHexString($sha.ComputeHash($bytes)).ToLowerInvariant()
+    }
+    finally { $sha.Dispose() }
+    return $actual -eq $legacyHashes[$Name]
+}
+
+function Install-GeneratedAgentProfile {
+    param(
+        [Parameter(Mandatory)]$Profile,
+        [Parameter(Mandatory)][ValidateSet('claude', 'cursor', 'codex')][string]$AgentHost,
+        [Parameter(Mandatory)][string]$Destination,
+        [Parameter(Mandatory)][string]$Content
+    )
+
+    $item = "$AgentHost agent: $($Profile.Name)"
+    $status = 'ADDED'
+    $note = "$($Profile.Tier) tier"
+    if (Test-Path $Destination) {
+        if (Test-HarnessOwnedAgent -Path $Destination) {
+            $status = 'SYNCED'
+        }
+        elseif ($AgentHost -eq 'claude' -and
+                (Test-ExactLegacyClaudeAgent -Path $Destination -Name $Profile.Name)) {
+            $status = 'ADOPTED'
+            $note += '; exact v0.2.0 profile'
+        }
+        else {
+            Add-Result $item 'COLLISION' 'unmarked file preserved; rename it or add the harness ownership marker to adopt it'
+            return
+        }
+    }
+
+    if ($PSCmdlet.ShouldProcess($Destination, "render $AgentHost agent '$($Profile.Name)'")) {
+        New-Item -ItemType Directory -Force -Path (Split-Path $Destination -Parent) | Out-Null
+        Set-Content -LiteralPath $Destination -Value $Content -NoNewline -Encoding UTF8
+    }
+    Add-Result $item $status $note
+}
+
+function Install-AgentProfiles {
+    $source = Join-Path $harnessRoot '.claude/agents'
+    $profiles = @(Get-ChildItem -LiteralPath $source -File -Filter '*.md' | Sort-Object Name |
+        ForEach-Object { Read-CanonicalAgentProfile -Path $_.FullName })
+
+    foreach ($profile in $profiles) {
+        if ($Platform -in @('claude', 'both', 'all')) {
+            $destination = Join-Path $TargetRepo ".claude/agents/$($profile.Name).md"
+            Install-GeneratedAgentProfile -Profile $profile -AgentHost claude -Destination $destination `
+                -Content (Render-MarkdownAgentProfile -Profile $profile -AgentHost claude)
+        }
+        if ($Platform -in @('cursor', 'both', 'all')) {
+            $destination = Join-Path $TargetRepo ".cursor/agents/$($profile.Name).md"
+            Install-GeneratedAgentProfile -Profile $profile -AgentHost cursor -Destination $destination `
+                -Content (Render-MarkdownAgentProfile -Profile $profile -AgentHost cursor)
+        }
+        if ($Platform -in @('codex', 'all')) {
+            $destination = Join-Path $TargetRepo ".codex/agents/$($profile.Name).toml"
+            Install-GeneratedAgentProfile -Profile $profile -AgentHost codex -Destination $destination `
+                -Content (Render-CodexAgentProfile -Profile $profile)
+        }
+    }
+}
+
 # ── 1. harness.yml — the repo owns its settings, the harness owns the version ─
 $harnessVersion = (Get-Content -LiteralPath (Join-Path $harnessRoot 'VERSION') -Raw).Trim()
 $harnessFile = Join-Path $TargetRepo 'harness.yml'
+$config = $null
+
+# Preflight an existing consumer config before stamping its version. A 0.2.0
+# scalar agent-tier shape must fail with migration guidance without leaving a
+# misleading 0.3.0 stamp behind.
+if (Test-Path $harnessFile) {
+    $config = Get-HarnessConfig -RepoRoot $TargetRepo
+}
 
 if (Test-Path $harnessFile) {
     # Settings are the repo's; the version stamp is ours. Rewriting only that
@@ -171,8 +406,11 @@ else {
     Add-Result 'harness.yml' 'ADDED' "v$harnessVersion - edit thresholds here, not the tool configs"
 }
 
-# Read config from the TARGET repo (defaults apply when -WhatIf skipped the copy).
-$config = Get-HarnessConfig -RepoRoot $TargetRepo
+# Read newly created config from the TARGET repo. Defaults apply when -WhatIf
+# skipped the copy; existing config was already parsed during preflight.
+if ($null -eq $config) {
+    $config = Get-HarnessConfig -RepoRoot $TargetRepo
+}
 
 # ── 2. Shared sources, delivered where each host discovers them ─────────────
 #
@@ -191,11 +429,11 @@ $config = Get-HarnessConfig -RepoRoot $TargetRepo
 # So a Claude-only install still has a .cursor/rules/ directory, and a
 # Cursor-only install still has .claude/skills/. Codex requires a generated
 # .agents/skills copy because it uses `$name` rather than `/name` commands.
-# Named .claude agents are intentionally not copied there: Codex does not load
-# them as named agents.
+# Agent profiles are the other exception: one canonical Markdown source is
+# rendered into each selected host's native discovery directory and syntax.
 
 Copy-Tree (Join-Path $harnessRoot 'skills') (Join-Path $TargetRepo '.claude/skills') 'skills -> .claude/skills (both platforms read this)'
-Copy-Tree (Join-Path $harnessRoot '.claude/agents') (Join-Path $TargetRepo '.claude/agents') 'agents -> .claude/agents (both platforms read this)'
+Install-AgentProfiles
 Copy-Tree (Join-Path $harnessRoot 'hooks') (Join-Path $TargetRepo 'scripts/hooks') 'hooks -> scripts/hooks'
 
 if ($Platform -in @('codex', 'all')) {
@@ -745,7 +983,7 @@ else {
 Write-Output ''
 if ($Platform -in @('codex', 'all')) {
     Write-Output 'On Codex: harness skills are available from .agents/skills; use `$task` to'
-    Write-Output 'start the pipeline. Named .claude agents remain unavailable on Codex. Trust the project'
+    Write-Output 'start the pipeline. Named agents are available from .codex/agents. Trust the project'
     Write-Output 'on first open or .codex/config.toml registers no MCP servers. .codex/hooks.json'
     Write-Output 'wires prompt and tool-use checks after you review and trust the harness. Codex'
     Write-Output 'has no file-read hook event, so a secret scan cannot run before file context loads.'
