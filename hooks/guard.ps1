@@ -175,8 +175,7 @@ function Split-ShellWords {
 function Find-GitSubcommandIndex {
     param([string[]]$Words, [int]$GitIndex)
 
-    $globalOptionsWithValues = @('-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env')
-    $globalFlags = @('-p', '--paginate', '-P', '--no-pager', '--no-replace-objects', '--bare')
+    $globalOptionsWithValues = @('-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env', '--exec-path')
     $index = $GitIndex + 1
 
     while ($index -lt $Words.Count) {
@@ -194,7 +193,11 @@ function Find-GitSubcommandIndex {
             $index++
             continue
         }
-        if ($word -in $globalFlags) {
+        # Any other leading option is a flag. Skipping flags generically keeps
+        # this safe when Git adds global flags; only value-taking options need
+        # explicit entries above so their argument is not mistaken for a
+        # subcommand.
+        if ($word.StartsWith('-')) {
             $index++
             continue
         }
