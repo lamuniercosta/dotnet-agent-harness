@@ -54,8 +54,9 @@ Three details that carry more weight than they look:
   InspectCode switched off in config — returns 2, and nothing folds a 2 into a green verdict.
   "Skipped" and "clean" are different results, and collapsing them is exactly how a
   quality bar quietly stops existing. On the three analyzer gates, re-run with `-All`
-  when you want verification rather than a diff check; the other gates have no `-All`
-  and skip for reasons no flag can fix.
+  when you want verification rather than a diff check. The other gates take their own
+  scope parameters instead of `-All` — gherkin-mutation's `-SpecsPath`, for instance,
+  aims it at acceptance tests outside `specs/`, turning a skip into a run.
 
 Every threshold lives in exactly one place: `harness.yml`. The tool configs
 (`CodeMetricsConfig.txt`, `stryker-config.json`, `.editorconfig` severities) and the
