@@ -107,7 +107,8 @@ editor subscription. Pin per tier in `harness.yml` if you want to.
 
 ## Workflow
 
-1. `/task <issue>` — read the issue, create the branch
+1. `/task <issue>` — read the issue, create the branch in its own worktree
+   (`<repo>.worktrees/…`, beside the repo); work there, not in the main checkout
 2. `/grill-with-docs` — **mandatory**; settles vocabulary in `CONTEXT.md` + ADRs
 3. `/speckit-specify` → `/speckit-plan` → `/speckit-tasks` — **human gate 1**
 4. `/implement` — TDD, tests must pass

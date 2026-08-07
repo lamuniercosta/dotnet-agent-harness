@@ -160,6 +160,112 @@ try {
         ($protectedError -match "Refusing to rebase 'main'") $protectedError
     Assert-That 'protected-branch refusal leaves remote main unchanged' `
         (((Invoke-Git $remote rev-parse refs/heads/main).Trim()) -eq $mainBefore)
+
+    # ── Worktree intake ──────────────────────────────────────────────────────
+    #
+    # new-task-branch.ps1 resolves the repo from its OWN location
+    # (git -C $PSScriptRoot), not the caller's cwd, so the pack copy would target
+    # this harness repo however the test is invoked. Copying the scripts into the
+    # fixture is both the fix and the honest simulation: a consumer runs an
+    # installed copy under <repo>/scripts/.
+    $wtWork = Join-Path $tempRoot 'wt-work'
+    Invoke-Git $tempRoot clone $remote $wtWork | Out-Null
+    Invoke-Git $wtWork config user.email 'harness-tests@example.invalid' | Out-Null
+    Invoke-Git $wtWork config user.name 'Harness Tests' | Out-Null
+
+    $fixtureScripts = Join-Path $wtWork 'scripts'
+    New-Item -ItemType Directory -Path $fixtureScripts -Force | Out-Null
+    foreach ($dep in 'new-task-branch.ps1', '_gate-common.ps1', '_harness-config.ps1') {
+        Copy-Item -LiteralPath (Join-Path $PSScriptRoot $dep) -Destination $fixtureScripts -Force
+    }
+    $newScript = Join-Path $fixtureScripts 'new-task-branch.ps1'
+
+    # The derived root is a SIBLING of the repo, so an in-repo recursive tool
+    # never walks another task's checkout.
+    $expectedRoot = Join-Path $tempRoot 'wt-work.worktrees'
+
+    # A configured threshold that is not the harness default: if the worktree
+    # loses harness.yml, the gates there silently fall back to 15 and this is the
+    # value that proves it did not happen.
+    Set-Content -LiteralPath (Join-Path $wtWork 'harness.yml') -Encoding UTF8 -Value @(
+        'baseBranch: main'
+        'task:'
+        '  worktree: true'
+        'gates:'
+        '  complexity:'
+        '    implement: 11'
+    )
+
+    # Uncommitted work in the main checkout. Worktree intake must not care - that
+    # serialisation is the whole reason worktrees are the default.
+    Set-Content -LiteralPath (Join-Path $wtWork 'scratch.txt') -Value 'work in progress'
+
+    $mainBranchBefore = (Invoke-Git $wtWork rev-parse --abbrev-ref HEAD).Trim()
+    $firstOutput = (& $newScript -Description 'Add upload retry' -Type feature -BaseBranch main -Remote origin 3>&1 6>&1 | Out-String)
+
+    $firstBranch = 'feature/add-upload-retry'
+    $firstPath = Join-Path $expectedRoot 'feature-add-upload-retry'
+
+    Assert-That 'worktree intake creates the worktree beside the repo, not inside it' `
+        (Test-Path -LiteralPath $firstPath) $firstOutput
+    Assert-That 'the new branch is checked out in the worktree' `
+        (((Invoke-Git $firstPath rev-parse --abbrev-ref HEAD).Trim()) -eq $firstBranch)
+    Assert-That 'worktree intake leaves the main checkout on its own branch' `
+        (((Invoke-Git $wtWork rev-parse --abbrev-ref HEAD).Trim()) -eq $mainBranchBefore)
+    Assert-That 'a dirty main checkout does not block worktree intake' `
+        ((Get-Content -LiteralPath (Join-Path $wtWork 'scratch.txt') -Raw).Trim() -eq 'work in progress')
+    Assert-That 'the branch is created from the remote base, not local HEAD' `
+        (((Invoke-Git $firstPath rev-parse HEAD).Trim()) -eq ((Invoke-Git $remote rev-parse refs/heads/main).Trim()))
+
+    # The silent-threshold-drift guard. harness.yml is gitignored, so git does not
+    # carry it into a worktree and every configured gate would quietly revert to
+    # the harness default.
+    $copiedConfig = Join-Path $firstPath 'harness.yml'
+    Assert-That 'gitignored harness.yml is copied into the worktree' `
+        (Test-Path -LiteralPath $copiedConfig) $firstOutput
+    if (Test-Path -LiteralPath $copiedConfig) {
+        Assert-That 'the copied harness.yml keeps the configured threshold' `
+            ((Get-Content -LiteralPath $copiedConfig -Raw) -match 'implement: 11')
+    }
+    Assert-That 'the worktree path is reported to the caller' `
+        ($firstOutput -match [regex]::Escape($firstPath)) $firstOutput
+
+    # Parallelism, stated as an assertion: a second task while the first is live.
+    $secondOutput = (& $newScript -Description 'Fix null ref' -Type bug -BaseBranch main -Remote origin 3>&1 6>&1 | Out-String)
+    $secondPath = Join-Path $expectedRoot 'bug-fix-null-ref'
+    Assert-That 'a second task gets its own worktree while the first still exists' `
+        ((Test-Path -LiteralPath $secondPath) -and (Test-Path -LiteralPath $firstPath)) $secondOutput
+    Assert-That 'the two worktrees hold different branches' `
+        (((Invoke-Git $secondPath rev-parse --abbrev-ref HEAD).Trim()) -eq 'bug/fix-null-ref')
+
+    # Both directions: reusing a name must refuse rather than adopt a stale tree.
+    $collisionError = ''
+    try { & $newScript -Description 'Add upload retry' -Type feature -BaseBranch main -Remote origin 3>&1 6>&1 | Out-Null }
+    catch { $collisionError = $_.Exception.Message }
+    Assert-That 'an existing branch name refuses instead of reusing a worktree' `
+        ($collisionError -match 'already exists') $collisionError
+
+    # -NoWorktree keeps the old contract, dirty-tree refusal included.
+    $dirtyError = ''
+    try { & $newScript -Description 'Switch in place' -Type feature -BaseBranch main -Remote origin -NoWorktree 3>&1 6>&1 | Out-Null }
+    catch { $dirtyError = $_.Exception.Message }
+    Assert-That '-NoWorktree still refuses a dirty working tree' `
+        ($dirtyError -match 'not clean') $dirtyError
+    Assert-That 'the refused in-place switch created no branch' `
+        (-not (Invoke-Git $wtWork branch --list 'feature/switch-in-place'))
+
+    Assert-That '-Worktree and -NoWorktree together are rejected' `
+        ((& {
+            try { & $newScript -Description 'Both flags' -Worktree -NoWorktree -BaseBranch main 2>&1 | Out-Null; return '' }
+            catch { return $_.Exception.Message }
+        }) -match 'not both')
+
+    # A missing harness.yml must SAY the worktree is on defaults. A silent
+    # fallback is indistinguishable from a correctly configured run.
+    Remove-Item -LiteralPath (Join-Path $wtWork 'harness.yml') -Force
+    $noConfigOutput = (& $newScript -Description 'No config here' -Type feature -BaseBranch main -Remote origin 3>&1 6>&1 | Out-String)
+    Assert-That 'a missing harness.yml is reported, not silently defaulted' `
+        ($noConfigOutput -match 'harness defaults') $noConfigOutput
 }
 finally {
     if (Test-Path -LiteralPath $tempRoot) {

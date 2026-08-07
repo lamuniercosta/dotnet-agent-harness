@@ -22,6 +22,8 @@ $script:HarnessSchema = @{
     'baseBranch'                                 = 'scalar'
     'tracker'                                    = 'scalar'
     'solution'                                   = 'scalar'
+    'task.worktree'                              = 'bool'
+    'task.worktreeRoot'                          = 'scalar'
     'gates.complexity.implement'                 = 'int'
     'gates.complexity.refactor'                  = 'int'
     'gates.mutation.threshold'                   = 'int'
@@ -48,6 +50,8 @@ function Get-HarnessDefaults {
         'baseBranch'                                 = $null   # resolved from git
         'tracker'                                    = 'github'
         'solution'                                   = $null   # globbed
+        'task.worktree'                              = $true
+        'task.worktreeRoot'                          = $null   # derived: <repo>.worktrees beside the repo
         'gates.complexity.implement'                 = 15
         'gates.complexity.refactor'                  = 6
         'gates.mutation.threshold'                   = 80

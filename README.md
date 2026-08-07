@@ -121,7 +121,7 @@ is generated from `globs:`, because the two have different semantics (`*.cs` mea
 ## The pipeline
 
 ```
-0  task             read the issue, branch off the default branch
+0  task             read the issue, branch off the default branch in a worktree
 1  grill-with-docs  MANDATORY alignment — settle vocabulary before any spec
 2  spec             specify → clarify → checklist → plan → tasks → analyze
 3  ── human gate 1 ──

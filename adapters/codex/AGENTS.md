@@ -179,6 +179,15 @@ Never skip the grill, and never route a failing gate to lowering its threshold.
 - Branch with `./scripts/new-task-branch.ps1 -Issue 142` (`-Type bug`, or
   `-Description "..." -Type feature`). Pattern: `{feature|bug|hotfix}/{issue}-{slug}`.
   `hotfix` is never inferred — it is always asked for explicitly.
+- That creates a **git worktree** at `<repo>.worktrees/{type}-{issue}-{slug}`, beside
+  the repo, and everything after intake happens in it: `cd` there and run
+  `dotnet tool restore`. One checkout serialises tasks, so a dirty main checkout does
+  not block intake. `-NoWorktree` switches this checkout instead and still refuses a
+  dirty tree. Never put a worktree inside the repo — git hides linked worktrees from
+  `git status`, but `dotnet build`, InspectCode, and recursive globs still walk them.
+  `harness.yml` is copied in for you (gitignored, so git will not); `.specify/` is not,
+  so run `specify init` there before any `$speckit-*` step. Clean up with
+  `git worktree remove <path>` after the merge.
 - Commit subjects carry the issue as a **suffix, never a prefix**:
   `Add dark mode toggle (#142)`. A leading `#` is stripped as a comment by git's
   editor path, silently losing the reference.

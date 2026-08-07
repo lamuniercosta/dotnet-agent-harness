@@ -33,6 +33,16 @@ Create branches from the **latest remote default branch** using:
 
 Type is inferred from the issue's labels (`bug`/`defect` → `bug`), defaulting to `feature`. **Hotfix is always an explicit human call** and is never inferred. Never branch from a stale local default branch — the script fetches first.
 
+## Worktree per task
+
+Each task gets its own git worktree at `<repo>.worktrees/{type}-{issue}-{slug}`, beside the repo. A single checkout serialises work: one branch at a time, and a dirty tree blocks intake. `cd` into the worktree the script prints and do the work there — the main checkout stays on its own branch.
+
+Never create a worktree inside the repo. Git excludes linked worktrees from `git status`, but `dotnet build`, InspectCode, and recursive globs still walk them, so one task's checkout contaminates another's gate results.
+
+A worktree does not inherit gitignored files. The script copies `harness.yml` (without it, configured thresholds silently revert to defaults) and warns when `.specify/` is missing — run `specify init` there before any `/speckit-*` step. Remove the worktree with `git worktree remove <path>` once the PR merges.
+
+`-NoWorktree` (or `task.worktree: false` in `harness.yml`) keeps the old switch-in-place behaviour, dirty-tree refusal included.
+
 ## After branching (mandatory)
 
 Immediately run `/grill-with-docs` — question the development, settle vocabulary in `CONTEXT.md` and ADRs, and write `specs/<feature>/brief.md`. Do this **before** `/speckit-specify` or any code; it is never skipped, though it scales down for a small change.
