@@ -8,8 +8,8 @@
 
   Blocks:
     Bash        - rm -rf of a root/home/glob target, deletion of a build output
-                  directory, force-push to a protected branch, an ambiguous bare
-                  force-with-lease push, git reset --hard to a remote ref, and
+                  directory, force-push to a protected or implicit destination,
+                  git reset --hard to a remote ref, and
                   `git checkout -- .` over a dirty tree.
     Edit/Write  - writes inside node_modules, bin, obj, or .git.
 
@@ -87,6 +87,164 @@ function Get-ApplyPatchPaths {
     return $paths
 }
 
+function Split-ShellSegments {
+    param([string]$Command)
+
+    $segments = [System.Collections.Generic.List[string]]::new()
+    $buffer = [System.Text.StringBuilder]::new()
+    $quote = [char]0
+    $escaped = $false
+
+    foreach ($character in $Command.ToCharArray()) {
+        if ($escaped) {
+            [void]$buffer.Append($character)
+            $escaped = $false
+            continue
+        }
+        if ($character -eq '\' -and $quote -ne "'") {
+            [void]$buffer.Append($character)
+            $escaped = $true
+            continue
+        }
+        if ($quote -ne [char]0) {
+            [void]$buffer.Append($character)
+            if ($character -eq $quote) { $quote = [char]0 }
+            continue
+        }
+        if ($character -in @("'", '"')) {
+            $quote = $character
+            [void]$buffer.Append($character)
+            continue
+        }
+        if ($character -in @(';', '&', '|', '(', ')', '<', '>', '`', "`r", "`n")) {
+            $segment = $buffer.ToString().Trim()
+            if ($character -in @('<', '>')) { $segment = $segment -replace '\s+\d+$', '' }
+            if ($segment) { $segments.Add($segment) }
+            [void]$buffer.Clear()
+            continue
+        }
+        [void]$buffer.Append($character)
+    }
+
+    $segment = $buffer.ToString().Trim()
+    if ($segment) { $segments.Add($segment) }
+    return $segments
+}
+
+function Split-ShellWords {
+    param([string]$Command)
+
+    $words = [System.Collections.Generic.List[string]]::new()
+    $buffer = [System.Text.StringBuilder]::new()
+    $quote = [char]0
+    $escaped = $false
+
+    foreach ($character in $Command.ToCharArray()) {
+        if ($escaped) {
+            [void]$buffer.Append($character)
+            $escaped = $false
+            continue
+        }
+        if ($character -eq '\' -and $quote -ne "'") {
+            $escaped = $true
+            continue
+        }
+        if ($quote -ne [char]0) {
+            if ($character -eq $quote) { $quote = [char]0 }
+            else { [void]$buffer.Append($character) }
+            continue
+        }
+        if ($character -in @("'", '"')) {
+            $quote = $character
+            continue
+        }
+        if ([char]::IsWhiteSpace($character)) {
+            if ($buffer.Length -gt 0) {
+                $words.Add($buffer.ToString())
+                [void]$buffer.Clear()
+            }
+            continue
+        }
+        [void]$buffer.Append($character)
+    }
+
+    if ($buffer.Length -gt 0) { $words.Add($buffer.ToString()) }
+    return $words
+}
+
+function Get-UnsafeForcePushReason {
+    param([string]$Command)
+
+    $protectedBranches = @('main', 'master', 'develop', 'development', 'qa', 'release', 'production')
+    $optionsWithValues = @('--repo', '--receive-pack', '--exec', '--push-option', '-o')
+
+    foreach ($segment in (Split-ShellSegments $Command)) {
+        $words = @(Split-ShellWords $segment)
+        for ($gitIndex = 0; $gitIndex -lt ($words.Count - 1); $gitIndex++) {
+            $gitCommand = ($words[$gitIndex] -replace '\\', '/').Split('/')[-1]
+            if ($gitCommand -notin @('git', 'git.exe') -or $words[$gitIndex + 1] -ne 'push') { continue }
+
+            $force = $false
+            $endOfOptions = $false
+            $skipOptionValue = $false
+            $repositoryNamed = $false
+            $positionals = [System.Collections.Generic.List[string]]::new()
+
+            for ($index = $gitIndex + 2; $index -lt $words.Count; $index++) {
+                $word = $words[$index]
+                if ($skipOptionValue) {
+                    $skipOptionValue = $false
+                    continue
+                }
+                if (-not $endOfOptions -and $word -eq '--') {
+                    $endOfOptions = $true
+                    continue
+                }
+                if (-not $endOfOptions -and $word.StartsWith('-')) {
+                    if ($word -eq '--force' -or $word -match '^--force-with-lease(?:=.*)?$' -or
+                        ($word -match '^-[^-]*f[^-]*$' -and $word -notmatch '^-o.+')) {
+                        $force = $true
+                    }
+                    if ($word -eq '--mirror') { $force = $true }
+                    if ($word -eq '--repo') { $repositoryNamed = $true }
+                    if ($word -like '--repo=*') { $repositoryNamed = $true }
+                    if ($word -in $optionsWithValues) { $skipOptionValue = $true }
+                    continue
+                }
+                $positionals.Add($word)
+            }
+
+            $refspecStart = if ($repositoryNamed) { 0 } else { 1 }
+            $hasExplicitDestination = $positionals.Count -gt $refspecStart
+            if ($hasExplicitDestination) {
+                $refspecs = $positionals.GetRange($refspecStart, $positionals.Count - $refspecStart)
+                if (@($refspecs | Where-Object { $_.StartsWith('+') }).Count -gt 0) { $force = $true }
+            }
+
+            if (-not $force) { continue }
+            if (-not $hasExplicitDestination) {
+                return 'force-push has no explicit destination. Name the remote and task ref (for example: origin HEAD:refs/heads/feature/123-fix).'
+            }
+
+            foreach ($refspec in $refspecs) {
+                $destination = $refspec.TrimStart('+')
+                $colon = $destination.LastIndexOf(':')
+                if ($colon -ge 0) { $destination = $destination.Substring($colon + 1) }
+                $destination = $destination -replace '^refs/heads/', ''
+
+                if ($destination -in $protectedBranches) {
+                    return 'force-push to a protected branch. Push a task branch and open a PR instead.'
+                }
+                if ($destination -in @('HEAD', '@') -or $destination.Contains('*')) {
+                    return 'force-push destination is still implicit or spans multiple refs. Name one explicit task branch destination.'
+                }
+            }
+        }
+    }
+
+    return $null
+}
+
 # Host schemas differ slightly between Cursor and Claude Code; accept either.
 $tool = Get-Prop $payload @('tool_name', 'toolName', 'name')
 if (-not $tool) { exit 0 }
@@ -113,20 +271,11 @@ switch -Regex ($tool) {
             Deny 'recursive delete of node_modules/bin/obj. Use `dotnet clean` or a fresh restore instead.'
         }
 
-        # Force-push to an integration branch. --force-with-lease reduces the
-        # race window but does not make rewriting a protected ref safe.
-        $isForcePush = $cmd -match 'git\s+push\b' -and
-            $cmd -match '(?<!\S)(?:--force(?:-with-lease(?:=\S+)?)?|-[a-zA-Z]*f[a-zA-Z]*)(?=\s|$)'
-        if ($isForcePush -and
-            $cmd -match '\b(main|master|develop|development|qa|release|production)\b') {
-            Deny 'force-push to a protected branch. Push a task branch and open a PR instead.'
-        }
-
-        # A bare lease push resolves through branch upstream + push.default.
-        # Its destination is invisible to this hook and may be a protected ref.
-        if ($cmd -match 'git\s+push\s+--force-with-lease(?:=[^\s;&|]+)?(?=\s*(?:$|[;&|]))') {
-            Deny 'bare force-with-lease has no visible destination. Push an explicit task ref (for example: origin HEAD:refs/heads/feature/123-fix).'
-        }
+        # Force pushes must expose their destination instead of resolving it
+        # through branch upstream + push.default. Lease protection reduces the
+        # race window but does not make an implicit or protected ref safe.
+        $unsafeForcePush = Get-UnsafeForcePushReason $cmd
+        if ($unsafeForcePush) { Deny $unsafeForcePush }
 
         # Hard reset to a remote ref silently discards local commits.
         if ($cmd -match 'git\s+reset\s+--hard\s+(origin|upstream)/') {
