@@ -247,11 +247,14 @@ function Get-UnsafePushReason {
                     }
                     if ($word -eq '--mirror') { $force = $true }
                     # A delete push is as destructive to a protected ref as a
-                    # force-push, so it earns the same treatment. --delete/-d marks
-                    # every refspec a deletion; the clustered short form (-fd) is
-                    # matched like -f, with the same -o<value> guard so `-od` (a
-                    # push-option) is not mistaken for a delete.
-                    if ($word -eq '--delete' -or
+                    # force-push, so it earns the same treatment. Git resolves any
+                    # unique prefix of --delete (--de through --delete) to the
+                    # option, so match the whole range; --d alone is ambiguous with
+                    # --dry-run and rejected by git, and the ^--de... anchor never
+                    # matches --dry-run or --no-delete. -d and the clustered short
+                    # form (-fd) are matched like -f, with the same -o<value> guard
+                    # so `-od` (a push-option) is not mistaken for a delete.
+                    if ($word -match '^--de(l(e(t(e)?)?)?)?$' -or
                         ($word -match '^-[^-]*d[^-]*$' -and $word -notmatch '^-o.+')) {
                         $delete = $true
                     }
