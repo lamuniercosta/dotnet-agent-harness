@@ -9,7 +9,7 @@ Three-axis review of the diff between `HEAD` and a fixed point the user supplies
 - **Standards** — does the code conform to this repo's documented coding standards?
 - **Spec** — does the code faithfully implement the originating issue / spec?
 
-Each axis runs as a **parallel sub-agent** so they don't pollute each other's context. Findings are then verified, ranked by severity, and reported through `ReportFindings`.
+Each axis runs in an isolated sub-agent when the host supports delegation, with parallel execution when available; otherwise the briefs run inline. Findings are then verified, ranked by severity, and published through the host's native review mechanism, with a Markdown fallback.
 
 ## Process
 
@@ -36,7 +36,7 @@ Carry this scoring into every sub-agent prompt: tell them which files are Critic
 
 ### 3. Roslyn pre-pass (before reading any file)
 
-If the `cwm-roslyn-navigator` MCP tools are available, run them first — the sub-agents should spend their effort on what Roslyn *can't* see. (These may be deferred; load them with `ToolSearch` first.)
+If the `cwm-roslyn-navigator` MCP tools are available, run them first — the sub-agents should spend their effort on what Roslyn *can't* see. If the tools are deferred, use the host's tool-discovery mechanism when one is available; otherwise skip this optional pre-pass and continue with the local tooling gate.
 
 ```
 detect_antipatterns(projectFilter: "<affected project>")   → async void, DateTime.Now, new HttpClient(), broad catch
@@ -87,9 +87,9 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 - **Middle Man** — a class that mostly just delegates onward. → cut it, call the real target direct. The canonical .NET forms: a repository that wraps the data-access driver one-to-one adding nothing, or a command handler that only forwards to a service.
 - **Refused Bequest** — a subclass or implementer that ignores or overrides most of what it inherits, or throws `NotImplementedException` on interface members. → drop the inheritance, use composition, or split the interface.
 
-### 6. Spawn the axis sub-agents in parallel
+### 6. Run the axis sub-agents in parallel
 
-Send a **single message** with all applicable `Task` calls. Route each axis to the agent that knows the domain:
+Start all applicable axes together when the host supports parallel delegation. Route each axis to the agent that knows the domain:
 
 | Axis | Agent | Fallback | Also spawn when |
 |---|---|---|---|
@@ -126,7 +126,9 @@ Cheap and worth it — a review that cries wolf gets ignored.
 
 ### 8. Report
 
-Call **`ReportFindings` once**, with every verified finding ranked most-severe first. Per finding set: `file`, `line`, `severity`-appropriate ordering, `category` (`risk` / `security` / `standards` / `spec`), `summary` (one sentence), `failure_scenario` (concrete inputs/state → consequence), `short_summary` (≤60 chars), and `verdict`. Pass an empty array if nothing survived verification. **Do not also print the findings as prose.**
+Publish every verified finding ranked most-severe first. Prefer the host's native structured-review or inline-comment mechanism when one is available. Each finding must include: `file`, `line`, severity-appropriate ordering, `category` (`risk` / `security` / `standards` / `spec`), `summary` (one sentence), `failure_scenario` (concrete inputs/state → consequence), `short_summary` (≤60 chars), and `verdict`.
+
+If the host has no structured review mechanism, emit the findings under a `## Findings` Markdown heading using the same fields. Say `No findings.` when nothing survives verification. Never suppress the findings merely because a host-specific reporting tool is unavailable.
 
 Then add a short text summary only — not a restatement of the findings:
 

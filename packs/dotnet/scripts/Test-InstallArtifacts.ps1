@@ -266,6 +266,18 @@ try {
     Assert-That 'no slash-style harness or Spec Kit invocation survives in Codex skills' `
         ($legacyCodexRefs.Count -eq 0) `
         (($legacyCodexRefs | ForEach-Object { "$($_.Path):$($_.LineNumber)" }) -join ', ')
+    $codexSkillFiles = @(Get-ChildItem -LiteralPath $codexSkillsPath -File -Recurse -Filter '*.md')
+    $hostControlPlaneRefs = @($codexSkillFiles |
+        Select-String -Pattern '\b(?:ToolSearch|ReportFindings)\b|`?Task`?\s+(?:tool|calls?)\b')
+    Assert-That 'generated Codex skills contain no host-specific control-plane APIs' `
+        ($hostControlPlaneRefs.Count -eq 0) `
+        (($hostControlPlaneRefs | ForEach-Object { "$($_.Path):$($_.LineNumber)" }) -join ', ')
+    $codexCodeReview = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'code-review/SKILL.md') -Raw
+    Assert-That 'Codex code review documents a Markdown findings fallback' `
+        (($codexCodeReview -match 'native structured-review or inline-comment mechanism') -and
+         ($codexCodeReview -match '## Findings') -and
+         ($codexCodeReview -match 'Never suppress the findings')) `
+        'a review must still return its findings when the host exposes no structured review tool'
     Assert-That 'the canonical Claude/Cursor skill copy keeps slash syntax' `
         (($claudeTask -match '/grill-with-docs') -and ($claudeTask -notmatch '\$grill-with-docs')) `
         'Codex adaptation must never rewrite the shared Claude/Cursor delivery'
