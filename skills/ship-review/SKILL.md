@@ -14,7 +14,11 @@ Inspired by the [addyosmani/agent-skills](https://github.com/addyosmani/agent-sk
 
 A consolidated readiness review to run **before opening a PR**. It feeds human gate 3; it does not replace it.
 
-Every agent below ships with this harness in `.claude/agents/` and is read natively by **both** Cursor and Claude Code. This gate deliberately depends on **no** external review service — nothing here is metered, and nothing requires a subscription beyond the editor itself.
+Cursor and Claude Code can route the roles below to the named profiles in
+`.claude/agents/`. Codex does not load those profiles; spawn general subagents
+with the table's briefs instead. If the host exposes no subagent mechanism, run
+the briefs inline and disclose that fallback. This gate depends on no external
+review service.
 
 ## When
 - After implementation + refactor are complete, before creating the PR
@@ -23,7 +27,10 @@ Every agent below ships with this harness in `.claude/agents/` and is read nativ
 ## Steps
 
 ### 1. Verify first (blocking)
-Run `/verify` (full pipeline), delegating the gate scripts to the **`gate-runner`** agent. If any critical phase FAILs, stop and fix — do not review broken code.
+Run `/verify` (full pipeline). Use the named **`gate-runner`** profile when the
+host loads it; otherwise give the same bounded gate-running brief to a general
+subagent or run it inline. If any critical phase FAILs, stop and fix — do not
+review broken code.
 
 ### 2. Parallel fan-out
 Dispatch all three in a **single message** so they run concurrently — they are independent, and running them in sequence wastes the main context on intermediate output.

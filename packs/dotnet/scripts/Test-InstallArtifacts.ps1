@@ -19,6 +19,7 @@ Set-StrictMode -Version Latest
 $harnessRoot = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $installer = Join-Path $harnessRoot 'install.ps1'
 $adapter = Join-Path $harnessRoot 'adapters/claude/CLAUDE.md'
+$skillsSource = Join-Path $harnessRoot 'skills'
 
 $checks = 0
 $failures = 0
@@ -236,6 +237,73 @@ try {
          ($codexHooks -match 'gate-nudge\.ps1')) `
         'the Codex adapter must wire every shared prompt and tool-use hook'
 
+    # ── Codex skills: generated from the canonical tree ─────────────────────
+    $sourceSkillNames = @(Get-ChildItem -LiteralPath $skillsSource -Directory | ForEach-Object { $_.Name })
+    $codexSkillsPath = Join-Path $repo '.agents/skills'
+    $installedSkillNames = if (Test-Path $codexSkillsPath) {
+        @(Get-ChildItem -LiteralPath $codexSkillsPath -Directory | ForEach-Object { $_.Name })
+    } else { @() }
+
+    Assert-That 'the default installs every canonical skill for Codex' `
+        (($sourceSkillNames.Count -eq 25) -and
+         (@($sourceSkillNames | Where-Object { $_ -notin $installedSkillNames }).Count -eq 0)) `
+        'a missing .agents/skills directory silently removes part of the workflow'
+    Assert-That 'the four pipeline entry skills are present for Codex' `
+        (@(@('task', 'grill-with-docs', 'verify', 'ship-review') |
+             Where-Object { $_ -notin $installedSkillNames }).Count -eq 0)
+
+    $codexTask = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'task/SKILL.md') -Raw
+    $claudeTask = Get-Content -LiteralPath (Join-Path $repo '.claude/skills/task/SKILL.md') -Raw
+    $codexPipeline = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'pipeline/SKILL.md') -Raw
+    Assert-That 'Codex skill handoffs use $name syntax' `
+        (($codexTask -match '\$grill-with-docs') -and ($codexTask -notmatch '/grill-with-docs')) `
+        'copying slash commands verbatim names commands Codex does not expose'
+    Assert-That 'Spec Kit handoffs use the Codex skill syntax too' `
+        (($codexPipeline -match '\$speckit-specify') -and ($codexPipeline -notmatch '/speckit-specify'))
+    $skillPattern = @($sourceSkillNames | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    $legacyCodexRefs = @(Get-ChildItem -LiteralPath $codexSkillsPath -File -Recurse -Filter '*.md' |
+        Select-String -Pattern ('(?<![A-Za-z0-9._-])/(?:' + $skillPattern + '|speckit-[A-Za-z0-9-]+)(?=$|[^A-Za-z0-9_-])'))
+    Assert-That 'no slash-style harness or Spec Kit invocation survives in Codex skills' `
+        ($legacyCodexRefs.Count -eq 0) `
+        (($legacyCodexRefs | ForEach-Object { "$($_.Path):$($_.LineNumber)" }) -join ', ')
+    Assert-That 'the canonical Claude/Cursor skill copy keeps slash syntax' `
+        (($claudeTask -match '/grill-with-docs') -and ($claudeTask -notmatch '\$grill-with-docs')) `
+        'Codex adaptation must never rewrite the shared Claude/Cursor delivery'
+    Assert-That 'the default install reports both host invocation syntaxes' `
+        (($output -match '(?m)^\s+/task <issue>') -and
+         ($output -match '(?m)^\s+\$task <issue>') -and
+         ($output -match 'specify integration install codex')) `
+        'the default serves all hosts and must not hide either next command'
+
+    # Copy-Tree refreshes harness-owned skill names but does not delete foreign
+    # project skills. Re-installation must preserve both properties.
+    $repo = New-TargetRepo
+    $repos += $repo
+    $foreignSkill = Join-Path $repo '.agents/skills/house-style/SKILL.md'
+    $ownedSkill = Join-Path $repo '.agents/skills/task/SKILL.md'
+    New-Item -ItemType Directory -Path (Split-Path $foreignSkill -Parent) -Force | Out-Null
+    New-Item -ItemType Directory -Path (Split-Path $ownedSkill -Parent) -Force | Out-Null
+    Set-Content -LiteralPath $foreignSkill -Value @(
+        '---'
+        'name: house-style'
+        'description: keep me'
+        '---'
+        'Our own /task and /speckit-plan wording must not be rewritten.'
+    ) -Encoding UTF8
+    Set-Content -LiteralPath $ownedSkill -Value 'stale harness task skill' -Encoding UTF8
+    $foreignBefore = [System.IO.File]::ReadAllBytes($foreignSkill)
+    Invoke-Install -Repo $repo -Platform 'codex' | Out-Null
+    $ownedAfterFirst = (Get-FileHash -LiteralPath $ownedSkill -Algorithm SHA256).Hash
+    Invoke-Install -Repo $repo -Platform 'codex' | Out-Null
+    $ownedAfterSecond = (Get-FileHash -LiteralPath $ownedSkill -Algorithm SHA256).Hash
+    $foreignAfter = [System.IO.File]::ReadAllBytes($foreignSkill)
+
+    Assert-That 'foreign .agents skills survive a Codex install byte-identical' `
+        ([System.Linq.Enumerable]::SequenceEqual($foreignBefore, $foreignAfter))
+    Assert-That 'a same-name harness skill is refreshed and re-installs deterministically' `
+        (($ownedAfterFirst -eq $ownedAfterSecond) -and
+         ((Get-Content -LiteralPath $ownedSkill -Raw) -match '\$grill-with-docs'))
+
     # ── Codex adapter: consumer-owned files already exist ────────────────────
     # Deliberately NOT the append treatment CLAUDE.md gets. Ten @import lines are a
     # small reversible addition; a whole ruleset dumped under a repo's own agent
@@ -282,15 +350,20 @@ try {
     # invocation silently changes what it installs.
     $repo = New-TargetRepo
     $repos += $repo
-    Invoke-Install -Repo $repo -Platform 'both' | Out-Null
+    $output = Invoke-Install -Repo $repo -Platform 'both'
 
-    Assert-That '-Platform both writes no Codex hooks, config, or AGENTS.md' `
+    Assert-That '-Platform both writes no Codex skills, hooks, config, or AGENTS.md' `
         ((-not (Test-Path (Join-Path $repo 'AGENTS.md'))) -and
+         (-not (Test-Path (Join-Path $repo '.agents/skills'))) -and
          (-not (Test-Path (Join-Path $repo '.codex/hooks.json'))) -and
          (-not (Test-Path (Join-Path $repo '.codex/config.toml')))) `
         'both means cursor + claude; widening it would change what a pinned flag does'
     Assert-That '-Platform both still writes the Claude adapter' `
         (Test-Path (Join-Path $repo 'CLAUDE.md'))
+    Assert-That '-Platform both reports slash syntax and no Codex next step' `
+        (($output -match '(?m)^\s+/task <issue>') -and
+         ($output -notmatch '(?m)^\s+\$task <issue>') -and
+         ($output -notmatch 'integration install codex'))
 }
 finally {
     foreach ($r in $repos) {
