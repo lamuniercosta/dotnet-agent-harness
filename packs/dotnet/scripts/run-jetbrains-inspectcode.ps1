@@ -1,6 +1,7 @@
 #!/usr/bin/env pwsh
 # Runs JetBrains InspectCode (same engine as Rider/ReSharper) on changed or specified C# files.
-# Exits 1 when WARNING+ inspections are found; 0 when clean; 2 (SKIPPED) when no files changed.
+# Exits 1 when WARNING+ inspections are found or analysis cannot complete; 0 when clean;
+# 2 (SKIPPED) when no files match the requested scope.
 # Exits 1 (without inspecting) when the jb tool is not in the manifest - see Assert-GateWired.
 #
 # These are ReSharper inspections, NOT Roslyn CA/IDE warnings - dotnet build will not catch them.
@@ -184,8 +185,9 @@ try {
     $inspectExit = $LASTEXITCODE
 
     if ($inspectExit -eq 3) {
-        Write-Host 'InspectCode: no matching files in solution scope.'
-        exit 0
+        Write-Host 'InspectCode: SKIPPED - no matching files in solution scope.'
+        Write-Host '  Nothing was verified. Check the requested files and solution scope.'
+        exit 2
     }
 
     if ($inspectExit -eq 4) {
@@ -197,8 +199,10 @@ try {
     }
 
     if (-not (Test-Path $reportPath)) {
-        Write-Host 'InspectCode: no report produced; assuming clean.'
-        exit 0
+        Write-Host 'GATE COULD NOT RUN: InspectCode exited successfully but produced no SARIF report.' -ForegroundColor Red
+        Write-Host "  Expected report: $reportPath"
+        Write-Host '  Retry the gate and inspect the JetBrains tool output if the report is still absent.'
+        exit 1
     }
 
     $sarif = Get-Content $reportPath -Raw | ConvertFrom-Json
