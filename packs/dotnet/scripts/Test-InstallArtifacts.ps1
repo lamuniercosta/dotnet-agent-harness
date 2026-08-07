@@ -228,14 +228,19 @@ try {
     # Deliberately NOT the append treatment CLAUDE.md gets. Ten @import lines are a
     # small reversible addition; a whole ruleset dumped under a repo's own agent
     # instructions is neither, and would contradict them silently.
-    $ownAgents = @('# House rules', '', 'Our own agent instructions.')
-    $repo = New-TargetRepo -AgentsMd $ownAgents
+    $repo = New-TargetRepo -AgentsMd @('# House rules', '', 'Our own agent instructions.')
     $repos += $repo
+    # Read from disk rather than rebuilt from the array passed in: Set-Content
+    # writes CRLF on Windows and LF elsewhere, so an expectation that hardcodes
+    # either one fails on the other platform for a reason that has nothing to do
+    # with what install.ps1 did. Compare the file against itself instead.
+    $agentsPath = Join-Path $repo 'AGENTS.md'
+    $before = Get-Content -LiteralPath $agentsPath -Raw
     $output = Invoke-Install -Repo $repo
-    $agents = Get-Content -LiteralPath (Join-Path $repo 'AGENTS.md') -Raw
+    $after = Get-Content -LiteralPath $agentsPath -Raw
 
     Assert-That 'an existing AGENTS.md is left byte-identical' `
-        ($agents -ceq (($ownAgents -join "`r`n") + "`r`n")) `
+        ($before -ceq $after) `
         'the repo''s own agent instructions were overwritten or appended to'
     Assert-That 'the untouched AGENTS.md is reported for a hand merge' `
         ($output -match 'AGENTS\.md' -and $output -match 'SKIPPED')
