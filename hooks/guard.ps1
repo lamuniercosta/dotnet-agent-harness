@@ -172,6 +172,39 @@ function Split-ShellWords {
     return $words
 }
 
+function Find-GitSubcommandIndex {
+    param([string[]]$Words, [int]$GitIndex)
+
+    $globalOptionsWithValues = @('-C', '-c', '--git-dir', '--work-tree', '--namespace', '--config-env')
+    $globalFlags = @('-p', '--paginate', '-P', '--no-pager', '--no-replace-objects', '--bare')
+    $index = $GitIndex + 1
+
+    while ($index -lt $Words.Count) {
+        $word = $Words[$index]
+        if ($word -eq '--') {
+            $index++
+            break
+        }
+        if ($word -in $globalOptionsWithValues) {
+            if (($index + 1) -ge $Words.Count) { return -1 }
+            $index += 2
+            continue
+        }
+        if ($word -match '^--(?:git-dir|work-tree|namespace|config-env|exec-path)=') {
+            $index++
+            continue
+        }
+        if ($word -in $globalFlags) {
+            $index++
+            continue
+        }
+        break
+    }
+
+    if ($index -ge $Words.Count) { return -1 }
+    return $index
+}
+
 function Get-UnsafeForcePushReason {
     param([string]$Command)
 
@@ -182,7 +215,9 @@ function Get-UnsafeForcePushReason {
         $words = @(Split-ShellWords $segment)
         for ($gitIndex = 0; $gitIndex -lt ($words.Count - 1); $gitIndex++) {
             $gitCommand = ($words[$gitIndex] -replace '\\', '/').Split('/')[-1]
-            if ($gitCommand -notin @('git', 'git.exe') -or $words[$gitIndex + 1] -ne 'push') { continue }
+            if ($gitCommand -notin @('git', 'git.exe')) { continue }
+            $subcommandIndex = Find-GitSubcommandIndex -Words $words -GitIndex $gitIndex
+            if ($subcommandIndex -lt 0 -or $words[$subcommandIndex] -ne 'push') { continue }
 
             $force = $false
             $endOfOptions = $false
@@ -190,7 +225,7 @@ function Get-UnsafeForcePushReason {
             $repositoryNamed = $false
             $positionals = [System.Collections.Generic.List[string]]::new()
 
-            for ($index = $gitIndex + 2; $index -lt $words.Count; $index++) {
+            for ($index = $subcommandIndex + 1; $index -lt $words.Count; $index++) {
                 $word = $words[$index]
                 if ($skipOptionValue) {
                     $skipOptionValue = $false
