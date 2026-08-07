@@ -73,6 +73,10 @@ Assert-Blocked 'force after --namespace='  (Bash 'git --namespace=tenant push --
 Assert-Blocked 'force after --config-env'  (Bash 'git --config-env core.editor=EDITOR push --force origin main')
 Assert-Blocked 'force after global flags'  (Bash 'git --no-pager --bare push --force origin main')
 Assert-Blocked 'force after exec-path='    (Bash 'git --exec-path=/opt/git push --force origin main')
+Assert-Blocked 'force after no optional locks' (Bash 'git --no-optional-locks push --force origin main')
+Assert-Blocked 'force after literal pathspecs' (Bash 'git --literal-pathspecs push -f origin')
+Assert-Blocked 'lease after glob pathspecs' (Bash 'git --glob-pathspecs push --force-with-lease origin')
+Assert-Blocked 'force after mixed global options' (Bash 'git -C sub -c k=v --no-optional-locks push -f origin')
 Assert-Blocked 'reset --hard origin'     (Bash 'git reset --hard origin/main')
 Assert-Blocked 'checkout -- .'           (Bash 'git checkout -- .')
 
@@ -113,6 +117,7 @@ Assert-Allowed 'explicit task ref with fd redirection' (Bash 'git push -f origin
 Assert-Allowed 'task ref after -C' (Bash 'git -C . push -f origin HEAD:refs/heads/feature/142-add-retry')
 Assert-Allowed 'task ref after -c' (Bash 'git -c push.default=upstream push --force origin HEAD:refs/heads/feature/142-add-retry')
 Assert-Allowed 'option value named push is not subcommand' (Bash 'git -C push status --short')
+Assert-Allowed 'task ref after unlisted global flag' (Bash 'git --literal-pathspecs push -f origin HEAD:refs/heads/feature/142-add-retry')
 Assert-Allowed 'reset --hard HEAD~1'  (Bash 'git reset --hard HEAD~1')
 Assert-Allowed 'restore one path'     (Bash 'git checkout -- src/Foo.cs')
 Assert-Allowed 'edit source'          (Edit '/repo/src/Api/Program.cs')
