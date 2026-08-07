@@ -84,11 +84,38 @@ function New-CleanRepo {
 }
 
 function Invoke-Gate {
-    param([string]$Repo, [string]$Script, [string[]]$GateArgs = @())
+    param(
+        [string]$Repo,
+        [string]$Script,
+        [string[]]$GateArgs = @(),
+        [switch]$NativeExitErrors
+    )
 
     $env:HARNESS_REPO_ROOT = $Repo
     try {
-        $out = & pwsh -NoProfile -File (Join-Path $Repo "scripts/$Script") @GateArgs 2>&1 | Out-String
+        $gateScript = Join-Path $Repo "scripts/$Script"
+        if ($NativeExitErrors) {
+            # CI enables native-exit promotion on some PowerShell/platform
+            # versions. Exercise process-result verdicts under that stricter
+            # mode without changing unrelated gates' established test setup.
+            $runner = Join-Path $Repo '.gate-exit-test-runner.ps1'
+            if (-not (Test-Path -LiteralPath $runner)) {
+                Set-Content -LiteralPath $runner -Encoding UTF8 -Value @(
+                    '[CmdletBinding(PositionalBinding = $false)]'
+                    'param('
+                    '    [string]$GateScript,'
+                    '    [Parameter(ValueFromRemainingArguments = $true)][string[]]$GateArgs'
+                    ')'
+                    '$PSNativeCommandUseErrorActionPreference = $true'
+                    '& $GateScript @GateArgs'
+                    'exit $LASTEXITCODE'
+                )
+            }
+            $out = & pwsh -NoProfile -File $runner -GateScript $gateScript @GateArgs 2>&1 | Out-String
+        }
+        else {
+            $out = & pwsh -NoProfile -File $gateScript @GateArgs 2>&1 | Out-String
+        }
         return [PSCustomObject]@{ Exit = $LASTEXITCODE; Output = $out }
     }
     finally {
@@ -215,14 +242,16 @@ try {
     $env:PATH = "$shimDir$([System.IO.Path]::PathSeparator)$originalPath"
     try {
         $env:HARNESS_INSPECTCODE_TEST_EXIT = '3'
-        $r = Invoke-Gate -Repo $repo -Script 'run-jetbrains-inspectcode.ps1' -GateArgs @('-All', '-NoBuild')
+        $r = Invoke-Gate -Repo $repo -Script 'run-jetbrains-inspectcode.ps1' `
+            -GateArgs @('-All', '-NoBuild') -NativeExitErrors
 
         Assert-That 'inspectcode: jb exit 3 is SKIPPED, not clean' `
             ($r.Exit -eq 2 -and $r.Output -match 'SKIPPED' -and $r.Output -match 'no matching files') `
             "exit $($r.Exit) - InspectCode matched nothing, so it did not earn a pass"
 
         $env:HARNESS_INSPECTCODE_TEST_EXIT = '0'
-        $r = Invoke-Gate -Repo $repo -Script 'run-jetbrains-inspectcode.ps1' -GateArgs @('-All', '-NoBuild')
+        $r = Invoke-Gate -Repo $repo -Script 'run-jetbrains-inspectcode.ps1' `
+            -GateArgs @('-All', '-NoBuild') -NativeExitErrors
 
         Assert-That 'inspectcode: a missing SARIF report fails closed' `
             ($r.Exit -eq 1 -and $r.Output -match 'GATE COULD NOT RUN' -and $r.Output -match 'no SARIF report') `

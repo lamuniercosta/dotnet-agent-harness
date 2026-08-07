@@ -181,8 +181,19 @@ try {
     }
 
     Write-Host 'InspectCode: running analysis (this may take a minute)...'
-    & dotnet @jbArgs
-    $inspectExit = $LASTEXITCODE
+    # InspectCode uses non-zero exits for classified outcomes (notably 3 for no
+    # matching files). PowerShell can promote those native exits to terminating
+    # errors when this preference is enabled, preventing the verdict mapping
+    # below from running at all. Capture the process exit explicitly instead.
+    $previousNativeErrorPreference = $PSNativeCommandUseErrorActionPreference
+    try {
+        $PSNativeCommandUseErrorActionPreference = $false
+        & dotnet @jbArgs
+        $inspectExit = $LASTEXITCODE
+    }
+    finally {
+        $PSNativeCommandUseErrorActionPreference = $previousNativeErrorPreference
+    }
 
     if ($inspectExit -eq 3) {
         Write-Host 'InspectCode: SKIPPED - no matching files in solution scope.'
