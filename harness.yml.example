@@ -47,7 +47,9 @@ task:
   # a sibling, deliberately NOT inside it. Git excludes linked worktrees from
   # `git status`, but nothing else does: an in-repo worktree is walked by
   # `dotnet build`, InspectCode, and every recursive glob, so one task's
-  # checkout shows up in another task's gate results.
+  # checkout shows up in another task's gate results. A relative value is
+  # resolved against the repo root. Either way, a value that lands inside the
+  # repo is rejected - the script refuses rather than produce that layout.
   worktreeRoot: null
 
 gates:
