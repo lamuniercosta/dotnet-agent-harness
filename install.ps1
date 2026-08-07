@@ -22,7 +22,8 @@
   Which agent platform(s) to wire: cursor, claude, codex, both, or all (default).
   `both` predates the Codex adapter and still means cursor + claude, so a pinned
   -Platform both keeps exactly the behaviour it always had.
-  Skills and agents are shared regardless; this only affects the adapters.
+  Shared assets are always installed. `codex` and `all` additionally generate
+  the `.agents/skills` discovery copy with Codex `$name` syntax.
 
 .EXAMPLE
   pwsh ./install.ps1 F:\Dev\MyApi -WhatIf
@@ -130,6 +131,37 @@ function Copy-Tree {
     Add-Result $Label 'SYNCED' "$count files"
 }
 
+function Convert-CodexSkillReferences {
+    <#
+    Codex exposes project skills as `$name`, while the same canonical Markdown
+    uses `/name` for Claude and Cursor. Adapt only the generated Codex copy.
+    #>
+    param([string]$SkillsSource, [string]$CodexSkills)
+
+    $skillNames = @(Get-ChildItem -LiteralPath $SkillsSource -Directory | ForEach-Object { $_.Name })
+    $namePattern = @($skillNames | ForEach-Object { [regex]::Escape($_) }) -join '|'
+    # The preceding character must not be part of a URL or path segment.
+    $pattern = '(?<![A-Za-z0-9._-])/(?:' + $namePattern + '|speckit-[A-Za-z0-9-]+)(?=$|[^A-Za-z0-9_-])'
+
+    if (-not (Test-Path -LiteralPath $CodexSkills)) { return }
+    if ($PSCmdlet.ShouldProcess($CodexSkills, 'adapt skill references for Codex')) {
+        foreach ($skillName in $skillNames) {
+            $ownedSkill = Join-Path $CodexSkills $skillName
+            if (-not (Test-Path -LiteralPath $ownedSkill)) { continue }
+            Get-ChildItem -LiteralPath $ownedSkill -File -Recurse -Filter '*.md' | ForEach-Object {
+                $original = Get-Content -LiteralPath $_.FullName -Raw
+                $adapted = [regex]::Replace($original, $pattern, {
+                        param($match)
+                        '$' + $match.Value.Substring(1)
+                    })
+                if ($adapted -cne $original) {
+                    Set-Content -LiteralPath $_.FullName -Value $adapted -Encoding UTF8 -NoNewline
+                }
+            }
+        }
+    }
+}
+
 # ── 1. harness.yml — the repo owns its settings, the harness owns the version ─
 $harnessVersion = (Get-Content -LiteralPath (Join-Path $harnessRoot 'VERSION') -Raw).Trim()
 $harnessFile = Join-Path $TargetRepo 'harness.yml'
@@ -172,25 +204,35 @@ else {
 # Read config from the TARGET repo (defaults apply when -WhatIf skipped the copy).
 $config = Get-HarnessConfig -RepoRoot $TargetRepo
 
-# ── 2. Shared assets — ONE copy of everything ────────────────────────────────
+# ── 2. Shared sources, delivered where each host discovers them ─────────────
 #
-# Nothing here is written twice. Two copies of a file inside a consumer repo is
-# the same drift this harness exists to end, just one level down: nothing stops
-# an edit to one from silently diverging from the other.
+# Each asset has one authored source in this harness. Most can also have one
+# installed home. Skills are the exception: Codex scans .agents/skills and uses
+# `$name`, while Cursor and Claude Code share .claude/skills and use `/name`.
+# Both installed trees are refreshed from skills/; .agents is then adapted
+# deterministically, so neither installed copy becomes an authored source.
 #
-# Skills and agents live under .claude/ because Cursor reads BOTH natively -
+# Skills live under .claude/ because Cursor reads BOTH natively -
 # its docs: "For compatibility, Cursor also loads skills from Claude and Codex
 # directories: .claude/skills/, .codex/skills/". Rules live under .cursor/
 # because only Cursor can auto-load them by glob; Claude reaches them through
 # CLAUDE.md @imports pointing at the same path.
 #
 # So a Claude-only install still has a .cursor/rules/ directory, and a
-# Cursor-only install still has .claude/skills/. Cosmetically odd, structurally
-# correct: one file, one home, no generated duplicates.
+# Cursor-only install still has .claude/skills/. Codex requires a generated
+# .agents/skills copy because it uses `$name` rather than `/name` commands.
+# Named .claude agents are intentionally not copied there: Codex does not load
+# them as named agents.
 
 Copy-Tree (Join-Path $harnessRoot 'skills') (Join-Path $TargetRepo '.claude/skills') 'skills -> .claude/skills (both platforms read this)'
 Copy-Tree (Join-Path $harnessRoot '.claude/agents') (Join-Path $TargetRepo '.claude/agents') 'agents -> .claude/agents (both platforms read this)'
 Copy-Tree (Join-Path $harnessRoot 'hooks') (Join-Path $TargetRepo 'scripts/hooks') 'hooks -> scripts/hooks'
+
+if ($Platform -in @('codex', 'all')) {
+    $codexSkills = Join-Path $TargetRepo '.agents/skills'
+    Copy-Tree (Join-Path $harnessRoot 'skills') $codexSkills 'skills -> .agents/skills (Codex `$name`)'
+    Convert-CodexSkillReferences -SkillsSource (Join-Path $harnessRoot 'skills') -CodexSkills $codexSkills
+}
 
 Copy-Tree (Join-Path $harnessRoot 'rules/pipeline') (Join-Path $TargetRepo '.cursor/rules') 'rules -> .cursor/rules (Claude @imports these)'
 
@@ -707,16 +749,31 @@ if ($needsAttention.Count -gt 0) {
 
 Write-Output 'Next:'
 Write-Output '  dotnet tool restore                       # provisions jb + stryker'
-Write-Output '  specify init --here --integration claude   # or --integration cursor-agent'
+if ($Platform -eq 'codex') {
+    Write-Output '  specify init --here --integration codex    # create Spec Kit commands for Codex'
+}
+elseif ($Platform -eq 'all') {
+    Write-Output '  specify init --here --integration claude   # or --integration cursor-agent'
+    Write-Output '  specify integration install codex          # add Codex Spec Kit skills too'
+}
+else {
+    Write-Output '  specify init --here --integration claude   # or --integration cursor-agent'
+}
 Write-Output '  ./scripts/run-roslyn-analyzers.ps1 -All    # audit the code you already have'
-Write-Output '  /task <issue>                             # start the pipeline'
+if ($Platform -eq 'codex') {
+    Write-Output '  $task <issue>                             # start the pipeline in Codex'
+}
+elseif ($Platform -eq 'all') {
+    Write-Output '  /task <issue>                             # Cursor / Claude Code'
+    Write-Output '  $task <issue>                             # Codex'
+}
+else {
+    Write-Output '  /task <issue>                             # start the pipeline'
+}
 Write-Output ''
-# The line above is a Cursor/Claude skill. Codex discovers skills from
-# .agents/skills and does not read .claude/skills, so none of them load there -
-# printing it unqualified to a Codex user names a command that does not exist.
 if ($Platform -in @('codex', 'all')) {
-    Write-Output 'On Codex: AGENTS.md carries the conventions, but harness SKILLS do not load'
-    Write-Output '(they live in .claude/skills; Codex reads .agents/skills). Trust the project'
+    Write-Output 'On Codex: harness skills are available from .agents/skills; use `$task` to'
+    Write-Output 'start the pipeline. Named .claude agents remain unavailable on Codex. Trust the project'
     Write-Output 'on first open or .codex/config.toml registers no MCP servers. .codex/hooks.json'
     Write-Output 'wires prompt and tool-use checks after you review and trust the harness. Codex'
     Write-Output 'has no file-read hook event, so a secret scan cannot run before file context loads.'

@@ -55,4 +55,4 @@ Use `$ARGUMENTS` to force a stage check on a specific feature path.
 
 Full pipeline: the `agent-pipeline` rule (`.cursor/rules/agent-pipeline.mdc`)
 
-Extension hooks: [.specify/extensions.yml](../../.specify/extensions.yml)
+Extension hooks: `.specify/extensions.yml` at the repository root

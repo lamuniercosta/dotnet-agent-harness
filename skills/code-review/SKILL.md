@@ -98,7 +98,11 @@ Send a **single message** with all applicable `Task` calls. Route each axis to t
 | Standards | `code-reviewer` (second call, Standards brief) | inline | always |
 | Spec | inline | — | a spec was found in step 4 |
 
-All agents named here ship with this harness in `.claude/agents/`, which **both Cursor and Claude Code read natively** — there is no plugin to install and no platform on which they are unavailable. If the host exposes no subagent mechanism at all, run each brief inline in sequence and say so in the final summary, so the reader knows the axes were not independent.
+Cursor and Claude Code can route these roles to the named profiles shipped in
+`.claude/agents/`. On Codex, spawn general subagents with the complete briefs
+below rather than assuming those Claude profiles load. If the host exposes no
+subagent mechanism, run each brief inline in sequence and say so in the final
+summary, so the reader knows the axes were not independent.
 
 Every prompt gets: the diff command, the commit list, the blast-radius table from step 2, and the relevant step-3 pre-pass results.
 

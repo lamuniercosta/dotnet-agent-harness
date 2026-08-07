@@ -158,8 +158,9 @@ on changed code. Run `./scripts/run-gherkin-mutation.ps1` only when
 
 ## Workflow
 
-The harness pipeline runs in fixed order. **In Codex these are phases you carry
-out, not commands you invoke** — see [Limitations](#limitations-under-codex).
+The harness pipeline runs in fixed order. In Codex, use the matching harness skill when
+available (`$name`, or implicit activation from a matching request); otherwise carry out
+the phase directly — see [Limitations](#limitations-under-codex).
 
 1. **Task intake** — read the issue, create the branch
 2. **Grill** — settle vocabulary and assumptions in `CONTEXT.md` + ADRs before any
@@ -239,13 +240,18 @@ recall it. `gitleaks` in CI covers only the commit-time half.
 Hooks are guardrails, not a complete enforcement boundary. Keep Codex's sandbox
 enabled and read approval prompts rather than approving reflexively.
 
-### Harness skills are not available
+### Skills are available; named Claude profiles are not
 
-The harness installs its skills to `.claude/skills/`. Codex discovers skills from
-`.agents/skills/` and does not read `.claude/skills/`, so **no harness skill loads
-in Codex** — there is no `task`, `grill-with-docs`, `verify`, or `ship-review` to
-invoke, by any prefix. Carry out the [Workflow](#workflow) phases directly. The
-`.claude/agents/` sub-agents are likewise unavailable; run that work inline.
+The harness installs its canonical `skills/` source to `.agents/skills/`, which Codex
+discovers; Cursor and Claude Code receive the same source under `.claude/skills/`.
+Invoke a harness skill as `$name`, or let Codex activate it implicitly when the request
+matches its description.
+For Spec Kit `0.8.14`, initialize Codex with `specify init --integration codex`; that
+provides the `$speckit-*` commands.
+
+Codex does not read the named `.claude/agents/` profiles. For their work, give a generic
+Codex subagent the profile's brief in the delegation prompt; when delegation is not
+appropriate, perform the work inline.
 
 ### MCP servers need the project trusted
 

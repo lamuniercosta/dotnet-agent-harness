@@ -2,9 +2,8 @@
 
 `v0.1.0`
 
-A gated, spec-driven development pipeline for AI coding agents — running identically on
-**Cursor** and **Claude Code**, on either platform's $20 plan, with no paid third-party
-service.
+A gated, spec-driven development pipeline for AI coding agents — for **Cursor**,
+**Claude Code**, and **Codex**, with no paid third-party service.
 
 Most agent configs are a pile of instructions asking the model to be careful. This one
 enforces a quality bar with scripts that exit non-zero, and proves in CI that those
@@ -23,8 +22,9 @@ scripts actually catch defects.
 | **Rules** | 10 + 8 | Authored always-on rules, plus vendored glob-scoped .NET guidance |
 | **Hooks** | 4 | Destructive-command guard, secret scan, format-on-edit, gate reminder |
 
-**Only 5 files differ between the two platforms** — the adapters. Everything else is one
-shared copy, because Cursor reads `.claude/skills/` and `.claude/agents/` natively.
+The adapters contain the host-specific wiring. The `skills/` tree is canonical;
+installation writes it to `.claude/skills/` for Cursor and Claude Code and generates
+Codex's syntax-adjusted `.agents/skills/` copy from the same source.
 
 ## The gates
 
@@ -93,11 +93,12 @@ which scaffolds a solution and then calls the same installer — one code path.
 
 ### What lands in your repo
 
-One copy of everything — no generated duplicates to drift apart:
+The canonical source plus host-specific delivery files:
 
 ```
-.claude/skills/         25 skills   ← both platforms read this path
-.claude/agents/          5 agents   ← both platforms read this path
+.claude/skills/         25 skill copies ← Cursor and Claude Code
+.agents/skills/         generated Codex copies ← invoke as `$name`
+.claude/agents/          5 named agent profiles ← Cursor and Claude Code
 .cursor/rules/          10 rules    ← Cursor globs them; CLAUDE.md @imports them
 .cursor/rules/vendor/    8 rules    ← glob-scoped, `globs:`  (Cursor)
 .claude/rules/vendor/    8 rules    ← glob-scoped, `paths:`  (Claude Code)
@@ -136,10 +137,13 @@ is generated from `globs:`, because the two have different semantics (`*.cs` mea
 Stage 1 is never skipped. An assumption backed by a documentation URL is settled; one
 backed by recall is not.
 
-## Agents
+## Skills and agents
 
-Five agents in `.claude/agents/`, read natively by **both** platforms — no plugin, no
-adapter, nothing metered.
+Cursor and Claude Code use the `.claude/skills/` delivery and the five named
+profiles in `.claude/agents/`. Codex receives generated copies of those skills in
+`.agents/skills/`: invoke one as `$name`, or let Codex activate it implicitly when the
+request matches its description. Codex does not load named `.claude/agents/` profiles;
+it can instead delegate an embedded brief to a generic subagent, or do the work inline.
 
 | Agent | Mode | Job |
 |---|---|---|
@@ -151,10 +155,11 @@ adapter, nothing metered.
 
 ## Cost
 
-Shipped defaults put every agent on `auto` / `inherit`, so the pipeline runs inside
-Cursor Pro's unlimited Auto mode and Claude Pro's limits without drawing on metered
-frontier-model usage. Agents declare a *tier*, never a model id, so pinning is one block
-in `harness.yml` and a model rename is a one-line fix:
+Shipped defaults put Cursor and Claude Code agent profiles on `auto` / `inherit`, so
+their pipelines stay within the host plan's included usage where available. Codex skills
+and generic subagents use the model selected for the Codex task. Profiles declare a
+*tier*, never a model id, so pinning is one block in `harness.yml` and a model rename is
+a one-line fix:
 
 ```yaml
 agents:
@@ -189,8 +194,8 @@ default would be the exact failure the gates exist to prevent.
 ## Layout
 
 ```
-skills/              25 SKILL.md — shared verbatim by both platforms
-.claude/agents/       5 agents — read natively by Cursor and Claude Code alike
+skills/              25 SKILL.md sources → host discovery directories on install
+.claude/agents/       5 named profiles for Cursor and Claude Code
 rules/pipeline/      10 authored always-on rules
 rules/vendor/         8 third-party .NET rules, isolated and attributed (see NOTICE)
 hooks/                4 hook scripts + 3 self-tests
@@ -203,6 +208,10 @@ new-project.sh        generator; scaffolds, then calls install.ps1
 harness.yml.example   every key, documented
 VERSION · CHANGELOG.md · CONTRIBUTING.md · SECURITY.md
 ```
+
+Spec Kit `0.8.14` integrates with Codex through
+`specify init --integration codex`; it supplies the `$speckit-*` skills alongside the
+harness skills.
 
 ## How it's verified
 

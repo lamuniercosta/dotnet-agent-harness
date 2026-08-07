@@ -87,7 +87,10 @@ dotnet format --verify-no-changes --verbosity quiet     # Phase 8
 dotnet stryker                                          # Phase 9 (pre-PR)
 ```
 
-Delegate the run to the **`gate-runner`** agent when the output would otherwise flood the conversation — it returns `file:line` plus a one-line cause per failure instead of raw tool output.
+When output would otherwise flood the conversation, use the named
+**`gate-runner`** profile if the host loads it; otherwise give its bounded brief
+to a general subagent. If neither is available, run inline and still summarize
+each failure as `file:line` plus a one-line cause rather than returning raw output.
 
 If `scripts/` is absent, the repo has not had the gates installed — run `./install.ps1 <repo>` from this harness. Do **not** silently fall back to plain `dotnet build` and call phases 2–4 passed; report them as SKIPPED with that remediation, since a skipped gate and a passed gate are not the same result.
 

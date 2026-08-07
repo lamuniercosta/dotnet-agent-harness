@@ -43,7 +43,12 @@ Task arrives
  └─ Pausing / resuming later ────────────────→ /handoff
 ```
 
-All names above are **bare** — every skill in the tree ships with this harness, on both Cursor and Claude Code. The one exception is `/speckit-*`, which comes from [Spec Kit](https://github.com/github/spec-kit) and only resolves in a repo where `specify init` has been run. Check before routing there.
+Every harness skill above ships on Cursor, Claude Code, and Codex. The installed
+Codex copy renders explicit invocations as `$name`; Cursor and Claude Code use
+`/name`. The `speckit-*` skills come from
+[Spec Kit](https://github.com/github/spec-kit), not this harness, and resolve only
+after the matching integration has been installed (`specify init --integration
+codex` for Codex). Check before routing there.
 
 ## Agents
 
@@ -55,6 +60,10 @@ Four stages produce enough tool output to swamp the conversation. Delegate them 
 | Writing tests inline on a large change | `test-writer` | Keeps fixture/spec churn out of the main context |
 | Reading Stryker's report | `mutation-analyst` | Survivor lists are long and mostly noise |
 | Reviewing a whole diff | `code-reviewer` · `security-reviewer` | Independent perspectives, run in parallel |
+
+The named profiles live in `.claude/agents/` for Cursor and Claude Code. Codex
+does not load those profiles; spawn general subagents with the briefs embedded in
+the calling skill, or run inline and disclose the fallback.
 
 ## Core operating behaviors (always on)
 
