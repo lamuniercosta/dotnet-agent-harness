@@ -105,6 +105,7 @@ scripts/                gate scripts + hooks/
 harness.yml             your thresholds + the harness version
 CONTEXT.md              your ubiquitous language, seeded once
 CLAUDE.md · .cursor/hooks.json · .claude/settings.json · .mcp.json
+AGENTS.md · .codex/config.toml · .codex/hooks.json
 ```
 
 A Claude-only install still writes `.cursor/rules/`, and vice versa. Cosmetically odd,
@@ -192,8 +193,8 @@ skills/              25 SKILL.md — shared verbatim by both platforms
 .claude/agents/       5 agents — read natively by Cursor and Claude Code alike
 rules/pipeline/      10 authored always-on rules
 rules/vendor/         8 third-party .NET rules, isolated and attributed (see NOTICE)
-hooks/                4 hook scripts + 2 self-tests
-adapters/             the only per-platform files: hook wiring, MCP, CLAUDE.md
+hooks/                4 hook scripts + 3 self-tests
+adapters/             the only per-platform files: hook wiring, MCP, agent instructions
 packs/dotnet/         gate scripts + the templates they install
 speckit/              extensions.yml — the entire coupling to Spec Kit
 fixtures/BadCode/     deliberate violations — the proof
@@ -255,6 +256,7 @@ check count — quoted here they only go stale, which has already happened twice
 ```bash
 pwsh ./hooks/Test-Guard.ps1                            # the guard hook
 pwsh ./hooks/Test-SecretScan.ps1                       # secret scanning, both directions
+pwsh ./hooks/Test-GateNudge.ps1                        # Codex advisory output contract
 pwsh ./packs/dotnet/scripts/Test-HarnessConfig.ps1     # harness.yml parsing
 pwsh ./packs/dotnet/scripts/Test-ThresholdDocs.ps1     # docs vs harness.yml
 pwsh ./packs/dotnet/scripts/Test-SpecKitExtension.ps1  # the Spec Kit coupling
@@ -276,9 +278,10 @@ See [`fixtures/BadCode/README.md`](fixtures/BadCode/README.md).
 
 ## What is deliberately absent
 
-- **Secret scanning is local + CI, no vendor.** `secret-scan.ps1` warns before content
-  reaches the model; gitleaks catches anything that reaches history. Replaces three
-  hooks lost when SonarQube was dropped.
+- **Secret scanning is local + CI, no vendor.** `secret-scan.ps1` warns before a
+  submitted prompt reaches the model; hosts with a file-read event scan that path too.
+  Codex exposes no file-read event, a gap its installed `AGENTS.md` calls out. Gitleaks
+  catches anything that reaches history. This replaces the hooks lost with SonarQube.
 - **No hosted code-review service.** No Bugbot, no PR bot. The pre-PR review is
   `/ship-review`, running this harness's own agents locally.
 - **No issue-tracker integration** beyond the `gh` CLI.
@@ -288,8 +291,8 @@ See [`fixtures/BadCode/README.md`](fixtures/BadCode/README.md).
   `packs/dotnet/templates/workflows/codeql.yml`. It is the optional post-PR half of the
   security story; the local gates are the blocking half.
 
-Every one of these is a deliberate choice to keep the harness free to run and identical
-on both platforms.
+Every one of these is a deliberate choice to keep the harness free to run without a
+hosted service dependency.
 
 ## Licence
 

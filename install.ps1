@@ -299,6 +299,17 @@ if ($Platform -in @('claude', 'both', 'all')) {
 }
 
 if ($Platform -in @('codex', 'all')) {
+    # Codex keeps its hook wiring beside its project config. Hooks are harness-
+    # owned and therefore refreshed on every install; config.toml is the repo's
+    # own integration point and remains a skip-if-present file below.
+    $codexDir = Join-Path $TargetRepo '.codex'
+    $codexHooks = Join-Path $codexDir 'hooks.json'
+    if ($PSCmdlet.ShouldProcess($codexHooks, 'install Codex hook wiring')) {
+        New-Item -ItemType Directory -Force -Path $codexDir | Out-Null
+        Copy-Item (Join-Path $harnessRoot 'adapters/codex/hooks.json') $codexHooks -Force
+    }
+    Add-Result '.codex/hooks.json' 'SYNCED' 'hook wiring'
+
     # Codex reads AGENTS.md from the repo ROOT and has no @import, so unlike
     # CLAUDE.md this adapter is a self-contained distillation of the same ten
     # rules rather than a list of pointers.
@@ -331,7 +342,9 @@ if ($Platform -in @('codex', 'all')) {
     }
     else {
         if ($PSCmdlet.ShouldProcess($codexConfig, 'install MCP config')) {
-            New-Item -ItemType Directory -Force -Path (Join-Path $TargetRepo '.codex') | Out-Null
+            # Do not rely on the separate hooks operation having been approved;
+            # ShouldProcess can be answered independently under -Confirm.
+            New-Item -ItemType Directory -Force -Path $codexDir | Out-Null
             Copy-Item (Join-Path $harnessRoot 'adapters/codex/config.toml') $codexConfig -Force
         }
         Add-Result '.codex/config.toml' 'ADDED' 'microsoft-learn + context7'
@@ -704,8 +717,9 @@ Write-Output ''
 if ($Platform -in @('codex', 'all')) {
     Write-Output 'On Codex: AGENTS.md carries the conventions, but harness SKILLS do not load'
     Write-Output '(they live in .claude/skills; Codex reads .agents/skills). Trust the project'
-    Write-Output 'on first open or .codex/config.toml registers no MCP servers. Hooks are not'
-    Write-Output 'wired either, so no secret-scan warning fires - see AGENTS.md.'
+    Write-Output 'on first open or .codex/config.toml registers no MCP servers. .codex/hooks.json'
+    Write-Output 'wires prompt and tool-use checks after you review and trust the harness. Codex'
+    Write-Output 'has no file-read hook event, so a secret scan cannot run before file context loads.'
     Write-Output ''
 }
 # The gates analyse files changed against the base branch. Installing changes no

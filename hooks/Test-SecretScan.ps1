@@ -22,9 +22,9 @@ $failures = 0
 $checks = 0
 
 function Invoke-Scan {
-    param([string]$Json)
-    $Json | & pwsh -NoProfile -File $hook 2>&1 | Out-Null
-    return $LASTEXITCODE
+    param([string]$Json, [string]$OutputContract = 'Legacy')
+    $output = $Json | & pwsh -NoProfile -File $hook -OutputContract $OutputContract 2>&1
+    return @{ ExitCode = $LASTEXITCODE; Output = ($output -join "`n") }
 }
 
 function Prompt-Payload {
@@ -35,14 +35,14 @@ function Prompt-Payload {
 function Assert-Flags {
     param([string]$Name, [string]$Text)
     $script:checks++
-    if ((Invoke-Scan (Prompt-Payload $Text)) -eq 2) { Write-Host "  ok       flagged: $Name" }
+    if ((Invoke-Scan (Prompt-Payload $Text)).ExitCode -eq 2) { Write-Host "  ok       flagged: $Name" }
     else { Write-Host "  FAIL     missed:  $Name" -ForegroundColor Red; $script:failures++ }
 }
 
 function Assert-Quiet {
     param([string]$Name, [string]$Text)
     $script:checks++
-    if ((Invoke-Scan (Prompt-Payload $Text)) -eq 0) { Write-Host "  ok       quiet:   $Name" }
+    if ((Invoke-Scan (Prompt-Payload $Text)).ExitCode -eq 0) { Write-Host "  ok       quiet:   $Name" }
     else { Write-Host "  FAIL     false positive: $Name" -ForegroundColor Red; $script:failures++ }
 }
 
@@ -96,8 +96,25 @@ Assert-Quiet 'empty payload'         ''
 Write-Host ''
 Write-Host 'Malformed input never wedges the session:'
 $checks++
-if ((Invoke-Scan 'not json at all') -eq 0) { Write-Host '  ok       quiet:   unparseable payload' }
+if ((Invoke-Scan 'not json at all').ExitCode -eq 0) { Write-Host '  ok       quiet:   unparseable payload' }
 else { Write-Host '  FAIL     unparseable payload did not exit 0' -ForegroundColor Red; $failures++ }
+
+Write-Host ''
+Write-Host 'Codex output contract remains warn-only:'
+$checks++
+$secret = $p.ghToken
+$result = Invoke-Scan (Prompt-Payload "GH_TOKEN=$secret") 'Codex'
+try { $json = $result.Output | ConvertFrom-Json -ErrorAction Stop } catch { $json = $null }
+if ($result.ExitCode -eq 0 -and $json -and
+    $json.hookSpecificOutput.hookEventName -eq 'UserPromptSubmit' -and
+    $json.systemMessage -and
+    $json.hookSpecificOutput.additionalContext -and
+    -not ($json.PSObject.Properties.Name -contains 'decision') -and
+    $result.Output -notmatch [regex]::Escape($secret)) {
+    Write-Host '  ok       Codex warning JSON is nonblocking and redacted'
+} else {
+    Write-Host '  FAIL     Codex warning JSON contract' -ForegroundColor Red; $failures++
+}
 
 Write-Host ''
 if ($failures -gt 0) {

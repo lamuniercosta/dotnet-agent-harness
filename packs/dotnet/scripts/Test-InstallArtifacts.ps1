@@ -210,11 +210,11 @@ try {
 
     if (Test-Path $agentsPath) {
         $agents = Get-Content -LiteralPath $agentsPath -Raw
-        # The distillation is worthless if the honest part is what went missing:
-        # a Codex session runs with no secret-scan hook and must say so.
-        Assert-That 'AGENTS.md carries the missing-tripwire warning' `
-            ($agents -match 'Never paste a live credential') `
-            'the one limitation a user must read before their first session'
+        # Hooks are present, but Codex requires review and trust before they run
+        # and exposes no lifecycle event for scanning file reads.
+        Assert-That 'AGENTS.md carries the Codex hook trust and file-read limitation' `
+            (($agents -match 'reviewed and trusted') -and ($agents -match 'no file-read lifecycle event')) `
+            'the user must know both when hooks run and the gap they cannot cover'
         Assert-That 'AGENTS.md carries the gate exit contract' `
             ($agents -match 'Exit 0 = pass, 1 = fail, 2 = SKIPPED')
     }
@@ -224,7 +224,19 @@ try {
          ((Get-Content -LiteralPath (Join-Path $repo '.codex/config.toml') -Raw) -match 'mcp_servers\.microsoft-learn') -and
          ((Get-Content -LiteralPath (Join-Path $repo '.codex/config.toml') -Raw) -match 'mcp_servers\.context7'))
 
-    # ── Codex adapter: AGENTS.md exists ──────────────────────────────────────
+    $codexHooksPath = Join-Path $repo '.codex/hooks.json'
+    $codexHooks = if (Test-Path $codexHooksPath) { Get-Content -LiteralPath $codexHooksPath -Raw } else { '' }
+    Assert-That 'the default (-Platform all) installs the Codex hook events and scripts' `
+        (($codexHooks -match 'UserPromptSubmit') -and
+         ($codexHooks -match 'PreToolUse') -and
+         ($codexHooks -match 'PostToolUse') -and
+         ($codexHooks -match 'secret-scan\.ps1') -and
+         ($codexHooks -match 'guard\.ps1') -and
+         ($codexHooks -match 'format-on-edit\.ps1') -and
+         ($codexHooks -match 'gate-nudge\.ps1')) `
+        'the Codex adapter must wire every shared prompt and tool-use hook'
+
+    # ── Codex adapter: consumer-owned files already exist ────────────────────
     # Deliberately NOT the append treatment CLAUDE.md gets. Ten @import lines are a
     # small reversible addition; a whole ruleset dumped under a repo's own agent
     # instructions is neither, and would contradict them silently.
@@ -245,6 +257,26 @@ try {
     Assert-That 'the untouched AGENTS.md is reported for a hand merge' `
         ($output -match 'AGENTS\.md' -and $output -match 'SKIPPED')
 
+    # config.toml remains consumer-owned, while hooks.json remains harness-owned.
+    # This also proves .codex is created for hooks even when config.toml prevented
+    # the config-install branch from creating that directory.
+    $repo = New-TargetRepo
+    $repos += $repo
+    $codexDir = Join-Path $repo '.codex'
+    New-Item -ItemType Directory -Path $codexDir -Force | Out-Null
+    $codexConfigPath = Join-Path $codexDir 'config.toml'
+    Set-Content -LiteralPath $codexConfigPath -Value @('[mcp_servers.house-rules]', 'command = "keep-me"') -Encoding UTF8
+    $before = [System.IO.File]::ReadAllBytes($codexConfigPath)
+    $output = Invoke-Install -Repo $repo -Platform 'all'
+    $after = [System.IO.File]::ReadAllBytes($codexConfigPath)
+
+    Assert-That 'an existing Codex config.toml is byte-identical while hooks install' `
+        (([System.Linq.Enumerable]::SequenceEqual($before, $after)) -and
+         (Test-Path (Join-Path $codexDir 'hooks.json'))) `
+        'config.toml is consumer-owned; hooks.json must still be synchronized'
+    Assert-That 'the existing Codex config is reported as SKIPPED' `
+        ($output -match 'config\.toml' -and $output -match 'SKIPPED')
+
     # ── -Platform both keeps its original meaning ────────────────────────────
     # `both` predates Codex. It must still mean cursor + claude, or every pinned
     # invocation silently changes what it installs.
@@ -252,8 +284,9 @@ try {
     $repos += $repo
     Invoke-Install -Repo $repo -Platform 'both' | Out-Null
 
-    Assert-That '-Platform both writes no Codex adapter' `
+    Assert-That '-Platform both writes no Codex hooks, config, or AGENTS.md' `
         ((-not (Test-Path (Join-Path $repo 'AGENTS.md'))) -and
+         (-not (Test-Path (Join-Path $repo '.codex/hooks.json'))) -and
          (-not (Test-Path (Join-Path $repo '.codex/config.toml')))) `
         'both means cursor + claude; widening it would change what a pinned flag does'
     Assert-That '-Platform both still writes the Claude adapter' `

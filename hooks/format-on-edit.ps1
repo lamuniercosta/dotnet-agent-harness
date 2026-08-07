@@ -29,32 +29,58 @@ function Get-Prop {
     return $null
 }
 
-$toolInput = Get-Prop $payload @('tool_input', 'toolInput', 'input', 'arguments')
-$file = Get-Prop $toolInput @('file_path', 'filePath', 'path', 'target_file')
+function Get-EditedFiles {
+    param($Payload, $ToolInput)
+    $direct = Get-Prop $ToolInput @('file_path', 'filePath', 'path', 'target_file')
+    if (-not [string]::IsNullOrWhiteSpace($direct)) { return @($direct) }
 
-if ([string]::IsNullOrWhiteSpace($file)) { exit 0 }
-if (-not (Test-Path -LiteralPath $file)) { exit 0 }
-if ([System.IO.Path]::GetExtension($file) -ne '.cs') { exit 0 }
+    $command = Get-Prop $ToolInput @('command', 'cmd')
+    if ([string]::IsNullOrWhiteSpace($command)) { return @() }
 
-# Never format generated or vendored output.
-if (($file -replace '\\', '/') -match '/(bin|obj|node_modules)/') { exit 0 }
-
-if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { exit 0 }
-
-# `dotnet format` needs a project or solution; find the nearest one upward.
-$dir = Split-Path -LiteralPath $file -Parent
-$project = $null
-while ($dir -and -not $project) {
-    $found = @(Get-ChildItem -LiteralPath $dir -Filter '*.csproj' -File -ErrorAction SilentlyContinue)
-    if ($found.Count -gt 0) { $project = $found[0].FullName; break }
-    $parent = Split-Path -LiteralPath $dir -Parent
-    if ($parent -eq $dir) { break }
-    $dir = $parent
+    $paths = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in ($command -split "`r?`n")) {
+        if ($line -match '^\*\*\*\s+(?:Add|Update|Delete) File:\s*(.+?)\s*$' -or
+            $line -match '^\*\*\*\s+Move to:\s*(.+?)\s*$') {
+            [void]$paths.Add($Matches[1])
+        }
+    }
+    return $paths
 }
-if (-not $project) { exit 0 }
 
-# --include scopes the run to the single edited file; formatting the whole
-# project on every keystroke would be unusably slow on a large solution.
-& dotnet format $project --include $file --verbosity quiet 2>&1 | Out-Null
+function Resolve-HookPath {
+    param([string]$Path, $Payload, $ToolInput)
+    if ([System.IO.Path]::IsPathRooted($Path)) { return $Path }
+    $cwd = Get-Prop $Payload @('cwd', 'working_directory', 'workingDirectory')
+    if (-not $cwd) { $cwd = Get-Prop $ToolInput @('cwd', 'working_directory', 'workingDirectory') }
+    if (-not $cwd) { return $Path }
+    return [System.IO.Path]::GetFullPath($Path, $cwd)
+}
+
+$toolInput = Get-Prop $payload @('tool_input', 'toolInput', 'input', 'arguments')
+foreach ($candidate in (Get-EditedFiles $payload $toolInput)) {
+    $file = Resolve-HookPath $candidate $payload $toolInput
+    if (-not (Test-Path -LiteralPath $file)) { continue }
+    if ([System.IO.Path]::GetExtension($file) -ne '.cs') { continue }
+
+    # Never format generated or vendored output.
+    if (($file -replace '\\', '/') -match '/(bin|obj|node_modules)/') { continue }
+    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) { continue }
+
+    # `dotnet format` needs a project or solution; find the nearest one upward.
+    $dir = Split-Path -LiteralPath $file -Parent
+    $project = $null
+    while ($dir -and -not $project) {
+        $found = @(Get-ChildItem -LiteralPath $dir -Filter '*.csproj' -File -ErrorAction SilentlyContinue)
+        if ($found.Count -gt 0) { $project = $found[0].FullName; break }
+        $parent = Split-Path -LiteralPath $dir -Parent
+        if ($parent -eq $dir) { break }
+        $dir = $parent
+    }
+    if (-not $project) { continue }
+
+    # --include scopes the run to the single edited file; formatting the whole
+    # project on every keystroke would be unusably slow on a large solution.
+    & dotnet format $project --include $file --verbosity quiet 2>&1 | Out-Null
+}
 
 exit 0

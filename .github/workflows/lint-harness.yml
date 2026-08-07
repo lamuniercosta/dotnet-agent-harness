@@ -145,6 +145,10 @@ jobs:
         shell: pwsh
         run: ./hooks/Test-SecretScan.ps1
 
+      - name: Codex gate nudge remains advisory
+        shell: pwsh
+        run: ./hooks/Test-GateNudge.ps1
+
       - name: harness.yml parser rejects malformed config
         shell: pwsh
         run: ./packs/dotnet/scripts/Test-HarnessConfig.ps1

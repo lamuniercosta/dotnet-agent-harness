@@ -37,6 +37,7 @@ function Assert-Allowed {
 
 function Bash { param([string]$Cmd) (@{ tool_name = 'Bash'; tool_input = @{ command = $Cmd } } | ConvertTo-Json -Compress -Depth 5) }
 function Edit { param([string]$Path) (@{ tool_name = 'Edit'; tool_input = @{ file_path = $Path } } | ConvertTo-Json -Compress -Depth 5) }
+function Apply-Patch { param([string]$Command) (@{ tool_name = 'apply_patch'; tool_input = @{ command = $Command } } | ConvertTo-Json -Compress -Depth 5) }
 
 Write-Host 'Destructive commands are blocked:'
 Assert-Blocked 'rm -rf /'                (Bash 'rm -rf /')
@@ -61,6 +62,10 @@ Write-Host 'Protected paths are blocked:'
 Assert-Blocked 'write node_modules' (Edit '/repo/node_modules/pkg/index.js')
 Assert-Blocked 'write obj'          (Edit 'C:\repo\src\obj\Debug\gen.cs')
 Assert-Blocked 'write .git'         (Edit '/repo/.git/config')
+Assert-Blocked 'patch Add bin'       (Apply-Patch "*** Begin Patch`n*** Add File: src/bin/Generated.cs`n*** End Patch")
+Assert-Blocked 'patch Update obj'    (Apply-Patch "*** Begin Patch`n*** Update File: src/obj/Generated.cs`n*** End Patch")
+Assert-Blocked 'patch Delete node_modules' (Apply-Patch "*** Begin Patch`n*** Delete File: node_modules/pkg/index.js`n*** End Patch")
+Assert-Blocked 'patch Move to .git'  (Apply-Patch "*** Begin Patch`n*** Update File: src/Config.cs`n*** Move to: .git/config`n*** End Patch")
 
 Write-Host ''
 Write-Host 'Ordinary work is allowed:'
@@ -72,6 +77,7 @@ Assert-Allowed 'reset --hard HEAD~1'  (Bash 'git reset --hard HEAD~1')
 Assert-Allowed 'restore one path'     (Bash 'git checkout -- src/Foo.cs')
 Assert-Allowed 'edit source'          (Edit '/repo/src/Api/Program.cs')
 Assert-Allowed 'edit a file named bing.cs' (Edit '/repo/src/bing.cs')
+Assert-Allowed 'patch source'         (Apply-Patch "*** Begin Patch`n*** Update File: src/Api/Program.cs`n*** End Patch")
 Assert-Allowed 'unparseable payload'  'not json at all'
 
 Write-Host ''

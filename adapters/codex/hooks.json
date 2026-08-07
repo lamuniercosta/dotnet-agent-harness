@@ -1,0 +1,53 @@
+{
+  "description": "Codex lifecycle hooks for dotnet-agent-harness.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File \"$(git rev-parse --show-toplevel)/scripts/hooks/secret-scan.ps1\" -OutputContract Codex",
+            "commandWindows": "pwsh -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path (git rev-parse --show-toplevel) 'scripts/hooks/secret-scan.ps1') -OutputContract Codex\"",
+            "timeout": 15,
+            "statusMessage": "Scanning prompt for credential shapes"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File \"$(git rev-parse --show-toplevel)/scripts/hooks/guard.ps1\"",
+            "commandWindows": "pwsh -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path (git rev-parse --show-toplevel) 'scripts/hooks/guard.ps1')\"",
+            "timeout": 15,
+            "statusMessage": "Checking repository safety rules"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File \"$(git rev-parse --show-toplevel)/scripts/hooks/format-on-edit.ps1\"",
+            "commandWindows": "pwsh -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path (git rev-parse --show-toplevel) 'scripts/hooks/format-on-edit.ps1')\"",
+            "timeout": 60,
+            "statusMessage": "Formatting edited C# files"
+          },
+          {
+            "type": "command",
+            "command": "pwsh -NoProfile -File \"$(git rev-parse --show-toplevel)/scripts/hooks/gate-nudge.ps1\" -OutputContract Codex",
+            "commandWindows": "pwsh -NoProfile -ExecutionPolicy Bypass -Command \"& (Join-Path (git rev-parse --show-toplevel) 'scripts/hooks/gate-nudge.ps1') -OutputContract Codex\"",
+            "timeout": 15,
+            "statusMessage": "Tracking pending verification"
+          }
+        ]
+      }
+    ]
+  }
+}
