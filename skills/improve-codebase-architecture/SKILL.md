@@ -30,12 +30,10 @@ This command is _informed_ by the project's domain model and built on a shared d
 
 Read the project's domain glossary (`CONTEXT.md`) and any ADRs in the area you're touching first.
 
-Then walk the codebase. Delegate this to a **read-only agent** when the host
-provides one. Cursor and Claude Code can use the harness's `code-reviewer`
-profile; Codex can spawn a general read-only subagent with the same brief.
-Otherwise explore inline. Either way, don't follow rigid heuristics — explore
-organically and note where you experience friction. The .NET-flavoured versions
-of the usual suspects:
+Then walk the codebase. Delegate this to the generated read-only `code-reviewer`
+profile when the host provides subagents; otherwise explore inline. Either way,
+don't follow rigid heuristics — explore organically and note where you experience
+friction. The .NET-flavoured versions of the usual suspects:
 
 - Where does understanding one concept require bouncing between many small classes — the `IFooService` / `FooService` / `FooRepository` / `FooDto` / `FooMapper` parade for what is conceptually one operation?
 - Where are modules **shallow** — interfaces with one implementation and no test double, repositories that wrap the data-access driver one-to-one adding nothing, handlers that only forward to a service?

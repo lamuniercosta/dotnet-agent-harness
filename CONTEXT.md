@@ -45,3 +45,25 @@ _Avoid_: Self-install
 **Ownership manifest**:
 The local record of discovery copies created by the self-development bootstrap. Only recorded entries are eligible for refresh or cleanup.
 _Avoid_: Directory ownership
+
+## Agent delegation
+
+**Agent tier**:
+A named cost and capability class assigned to an agent profile according to the cost of a silent miss, not the apparent difficulty of its work.
+_Avoid_: Model tier, difficulty level
+
+**Canonical agent profile**:
+The authoritative, host-neutral definition of a specialized agent from which host discovery copies are produced.
+_Avoid_: Claude agent, source profile
+
+**Agent discovery copy**:
+A host-readable projection of a canonical agent profile. It is generated and disposable, never edited as an authored source.
+_Avoid_: Agent clone, host-specific source
+
+**Cheap errand**:
+A fully specified, one-shot delegated unit of work whose returned answer is much smaller than its input and whose failure is retried inline by the parent.
+_Avoid_: Generic subtask, delegation by default
+
+**Writable errand**:
+A cheap errand that applies one specified transformation to an explicit set of files exclusively owned by that errand until it returns.
+_Avoid_: Open-ended implementation, overlapping edit

@@ -1,0 +1,55 @@
+---
+description: Cost-aware delegation for small mechanical errands inside any pipeline stage
+alwaysApply: true
+---
+
+# Cost-aware delegation
+
+Agent tiers reflect the cost of a silent miss, not apparent task difficulty.
+Use a `fast` agent for a cheap errand only when all four conditions hold:
+
+1. The parent needs a compact answer, not source material it will quote, edit, or
+   reason over line by line.
+2. The material to inspect is much larger than the returned answer.
+3. The brief is short and complete without replaying accumulated conversation.
+4. The work is one-shot and should not need clarification.
+
+Keep the work inline when any one of these is true:
+
+- the parent needs the file contents afterward;
+- the brief is longer than the work or transfers substantial context;
+- trusting the result requires the parent to re-read the source; or
+- one tool call answers the question.
+
+The governing asymmetry is: **delegate conclusions; keep required content
+inline.** There is no numeric threshold for this judgment.
+
+## Safety boundaries
+
+- A cheap errand may gather evidence but may not make a semantic verdict. It
+  cannot decide whether a finding is real, a mutant is equivalent, a design is
+  sound, or tool evidence should be overruled.
+- `gate-runner` has one narrow mechanical exception: it may translate a reported
+  command and exit code into `Pass`, `Failure`, `Skipped`, or `Could not run`.
+- Cheap errands do not feed human gates or `/grill-with-docs`; those are
+  conversations, not compressible errands.
+- No unspecified writes. If any part of an edit still needs deciding, keep it
+  with the parent.
+
+## Writable errands
+
+Delegate to `edit-applier` only when the brief gives one exact transformation,
+an explicit file set, and an objective check. Those files are exclusively owned
+by the errand until it returns: the parent does not edit them concurrently, and
+parallel writable errands must have disjoint file sets. Review the diff after
+the agent returns.
+
+If the errand encounters ambiguity after partial edits, it stops and reports
+the changed files and unfinished point. The parent reviews the current diff and
+finishes inline; do not roll back automatically.
+
+## One strike
+
+If an errand returns ambiguity, a partial answer, or a result the parent cannot
+trust without re-reading the source, do the work inline. Do not re-brief the
+cheap agent: the second round trip has already spent the saving.

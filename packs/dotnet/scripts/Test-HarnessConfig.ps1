@@ -50,6 +50,7 @@ Assert-Throws 'list'             "gates:`n  - one"
 Assert-Throws 'duplicate key'    "tracker: github`ntracker: none"
 Assert-Throws 'tab indent'       "gates:`n`tmutation: x"
 Assert-Throws 'garbage line'     "this is not yaml"
+Assert-Throws 'legacy scalar agent tier' "agents:`n  tiers:`n    fast:`n      claude: inherit"
 
 Write-Host ''
 Write-Host 'Accepts valid input:'
@@ -62,6 +63,18 @@ Assert-Equal 'gates.complexity.implement' 20     $parsed['gates.complexity.imple
 Assert-Equal 'gates.complexity.refactor'  4      $parsed['gates.complexity.refactor']
 Assert-Equal 'gates.mutation.threshold'   90     $parsed['gates.mutation.threshold']
 Assert-Equal 'key count'                  4      $parsed.Count
+
+$tiers = ConvertFrom-HarnessYaml -Lines (
+    "agents:`n  tiers:`n    fast:`n      codex:`n        model: gpt-5.6-terra`n        effort: low" -split "`n"
+) -Path 'test.yml'
+Assert-Equal 'nested agent model'  'gpt-5.6-terra' $tiers['agents.tiers.fast.codex.model']
+Assert-Equal 'nested agent effort' 'low'           $tiers['agents.tiers.fast.codex.effort']
+
+$defaults = Get-HarnessDefaults
+Assert-Equal 'fast Claude default model'  'claude-haiku-4-5-20251001' $defaults['agents.tiers.fast.claude.model']
+Assert-Equal 'fast Cursor default model'  'gpt-5.6-luna'               $defaults['agents.tiers.fast.cursor.model']
+Assert-Equal 'fast Codex default model'   'gpt-5.6-terra'              $defaults['agents.tiers.fast.codex.model']
+Assert-Equal 'balanced model inherits'    'inherit'                    $defaults['agents.tiers.balanced.codex.model']
 
 Write-Host ''
 Write-Host 'Parses the shipped example:'

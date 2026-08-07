@@ -9,11 +9,11 @@ This doubles as the architecture tour. If you only read one section, read
 harness.yml.example   every setting, documented. The ONLY place thresholds live
 VERSION               stamped into a consumer's harness.yml on install
 install.ps1           adopt-first installer; new-project.sh calls it too
-skills/               25 SKILL.md — shared verbatim by both platforms
-.claude/agents/       5 agents — read natively by Cursor AND Claude Code
-rules/pipeline/       10 authored always-on rules
+skills/               25 SKILL.md — canonical source for host discovery copies
+.claude/agents/       7 canonical agents — rendered for all three hosts
+rules/pipeline/       11 authored always-on rules
 rules/vendor/         8 third-party .NET rules, glob-scoped (see NOTICE)
-hooks/                3 hook scripts + a self-test
+hooks/                4 hook scripts + self-tests
 adapters/             the only per-platform files
 packs/dotnet/         gate scripts + the templates they install
 speckit/              extensions.yml — the entire coupling to Spec Kit
@@ -35,13 +35,15 @@ Prose may quote the number, but only alongside its key — `≤ 6
 (gates.complexity.refactor in harness.yml)`. CI fails if a quoted number and the
 example disagree.
 
-**3. One file, one home.**
-Skills and agents live under `.claude/` because Cursor reads those paths
-natively. Rules live under `.cursor/rules/` because only Cursor can auto-load
-them, and `CLAUDE.md` `@import`s them from there.
+**3. One authored source, generated host projections.**
+Skills live under `skills/`; agents live under `.claude/agents/` as their
+canonical source. Installation generates the host discovery copies, including
+syntax changes, without turning any installed copy into another source. Rules
+live under `.cursor/rules/` because only Cursor can auto-load them, and
+`CLAUDE.md` `@import`s them from there.
 
-The single exception is `rules/vendor/`, written to both trees — Cursor does not
-read `.claude/rules/`, and the two use different frontmatter keys with different
+Vendored rules are written to two trees because Cursor does not read
+`.claude/rules/`, and the hosts use different frontmatter keys with different
 semantics. That asymmetry is documented in `rules/vendor/README.md`.
 
 ## Adding things
@@ -52,6 +54,13 @@ or nobody will find it.
 
 **A rule** — `rules/pipeline/<name>.mdc` with `alwaysApply: true`, and add an
 `@import` line to `adapters/claude/CLAUDE.md`. CI checks every import resolves.
+If the rule must reach Codex, distil its full behavior into
+`adapters/codex/AGENTS.md`; Codex has no `@import`.
+
+**An agent** — add one canonical `.claude/agents/<name>.md` profile with a valid
+`tier`, `readonly`, and `tools` field. Do not add host copies. Extend
+`install.ps1` only when a new canonical field needs host-specific projection;
+`Test-InstallArtifacts.ps1` must prove all three rendered formats.
 
 **A gate** — a script in `packs/dotnet/scripts/` that dot-sources
 `_gate-common.ps1`, honours the 0/1/2 contract, reads its threshold via
@@ -97,24 +106,15 @@ the session. It is gitignored and harmless; restart the session to clear it.
 
 ## Pre-publish checklist
 
-One thing cannot be verified from a script, and it is load-bearing.
+Generated syntax is structurally tested, but host discovery still needs a real
+smoke test before tagging. Install into a throwaway repo and open Claude Code,
+Cursor, and Codex. Confirm:
 
-**Agent frontmatter carries a key each platform does not document.** Every file
-in `.claude/agents/` has `readonly:` (Cursor's field) *and* `tools:` (Claude
-Code's). Neither vendor documents ignoring the other's key, and Claude Code is
-known to reject some malformed frontmatter outright. If either rejects it,
-agents silently fail to load on that platform.
-
-Before tagging a release, open **both** editors on a repo with the harness
-installed and confirm:
-
-1. All five agents appear in the agent list.
-2. `gate-runner` and `code-reviewer` refuse to edit a file when asked.
-
-If one platform rejects the other's key, the fallback is to split agents into
-`.cursor/agents/` (`readonly` only) and `.claude/agents/` (`tools` only) in
-`install.ps1`. That reintroduces a duplicated artifact, which is why it is the
-fallback and not the default.
+1. All seven agents appear in every host's agent list.
+2. `gate-runner` and `code-reviewer` use the host's read-only control.
+3. `edit-applier` can edit only when explicitly delegated writable work.
+4. A fast agent shows the configured cheap model and low effort, while a
+   balanced agent inherits.
 
 Also confirm before a release:
 

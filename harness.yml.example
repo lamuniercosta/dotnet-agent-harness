@@ -16,8 +16,8 @@
 # Which version of the harness produced this file. Written by install.ps1 and
 # updated on every run - don't edit it by hand. Its job is to answer "what am I
 # on?" after an install changes behaviour, and to let the installer report
-# 0.1.0 -> 0.2.0 rather than overwriting silently.
-harnessVersion: 0.2.0
+# 0.2.0 -> 0.3.0 rather than overwriting silently.
+harnessVersion: 0.3.0
 
 # Which language pack's gates to run. Only `dotnet` ships today.
 pack: dotnet
@@ -95,16 +95,38 @@ agents:
   # Agents declare a tier (fast / balanced / deep), never a model id, so a model
   # rename is a one-line fix here rather than an edit across every agent file.
   #
-  # Defaults are `inherit` (Claude Code) and `auto` (Cursor) so a fresh install
-  # runs inside Cursor Pro's unlimited Auto mode and Claude Pro's limits without
-  # drawing on metered frontier-model usage. Pin only if you want to pay for it.
+  # Only fast is pinned by default, because its work is mechanically checkable.
+  # Balanced and deep inherit the active host/session model. Set both fields to
+  # inherit to undo a pin; inherited fields are omitted where the host supports
+  # that fallback.
   tiers:
     fast:
-      claude: inherit
-      cursor: auto
+      claude:
+        model: claude-haiku-4-5-20251001
+        effort: low
+      cursor:
+        model: gpt-5.6-luna
+        effort: low
+      codex:
+        model: gpt-5.6-terra
+        effort: low
     balanced:
-      claude: inherit
-      cursor: auto
+      claude:
+        model: inherit
+        effort: inherit
+      cursor:
+        model: inherit
+        effort: inherit
+      codex:
+        model: inherit
+        effort: inherit
     deep:
-      claude: inherit
-      cursor: auto
+      claude:
+        model: inherit
+        effort: inherit
+      cursor:
+        model: inherit
+        effort: inherit
+      codex:
+        model: inherit
+        effort: inherit

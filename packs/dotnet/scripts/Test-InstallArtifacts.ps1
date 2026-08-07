@@ -90,6 +90,94 @@ try {
     Invoke-Install -Repo $repo | Out-Null
     $claude = Get-Content -LiteralPath (Join-Path $repo 'CLAUDE.md') -Raw
 
+    # ── Generated named agents: all hosts, native syntax ────────────────────
+    $expectedAgentNames = @(Get-ChildItem -LiteralPath (Join-Path $harnessRoot '.claude/agents') `
+        -File -Filter '*.md' | ForEach-Object { $_.BaseName } | Sort-Object)
+    $claudeAgentNames = @(Get-ChildItem -LiteralPath (Join-Path $repo '.claude/agents') `
+        -File -Filter '*.md' | ForEach-Object { $_.BaseName } | Sort-Object)
+    $cursorAgentNames = @(Get-ChildItem -LiteralPath (Join-Path $repo '.cursor/agents') `
+        -File -Filter '*.md' | ForEach-Object { $_.BaseName } | Sort-Object)
+    $codexAgentNames = @(Get-ChildItem -LiteralPath (Join-Path $repo '.codex/agents') `
+        -File -Filter '*.toml' | ForEach-Object { $_.BaseName } | Sort-Object)
+
+    Assert-That 'all seven canonical agent names reach Claude Code' `
+        (($expectedAgentNames -join ',') -eq ($claudeAgentNames -join ','))
+    Assert-That 'all seven canonical agent names reach Cursor' `
+        (($expectedAgentNames -join ',') -eq ($cursorAgentNames -join ','))
+    Assert-That 'all seven canonical agent names reach Codex' `
+        (($expectedAgentNames -join ',') -eq ($codexAgentNames -join ','))
+
+    foreach ($agentName in $expectedAgentNames) {
+        $sourceAgent = Get-Content -LiteralPath (Join-Path $harnessRoot ".claude/agents/$agentName.md")
+        $tier = (($sourceAgent | Where-Object { $_ -match '^tier: ' } | Select-Object -First 1) -replace '^tier:\s*', '')
+        $claudeRendered = Get-Content -LiteralPath (Join-Path $repo ".claude/agents/$agentName.md") -Raw
+        $cursorRendered = Get-Content -LiteralPath (Join-Path $repo ".cursor/agents/$agentName.md") -Raw
+        $codexRendered = Get-Content -LiteralPath (Join-Path $repo ".codex/agents/$agentName.toml") -Raw
+        $matchesTier = if ($tier -eq 'fast') {
+            ($claudeRendered -match '(?m)^model: claude-haiku-4-5-20251001$') -and
+            ($cursorRendered -match '(?m)^model: gpt-5\.6-luna\[effort=low\]$') -and
+            ($codexRendered -match '(?m)^model = "gpt-5\.6-terra"$')
+        }
+        else {
+            ($claudeRendered -notmatch '(?m)^model:') -and
+            ($cursorRendered -match '(?m)^model: inherit$') -and
+            ($codexRendered -notmatch '(?m)^model =')
+        }
+        Assert-That "tier '$tier' renders on every host for $agentName" $matchesTier
+    }
+
+    $claudeFast = Get-Content -LiteralPath (Join-Path $repo '.claude/agents/gate-runner.md') -Raw
+    $cursorFast = Get-Content -LiteralPath (Join-Path $repo '.cursor/agents/gate-runner.md') -Raw
+    $codexFast = Get-Content -LiteralPath (Join-Path $repo '.codex/agents/gate-runner.toml') -Raw
+    Assert-That 'fast tier renders Claude model, effort, and plan permission' `
+        (($claudeFast -match '(?m)^model: claude-haiku-4-5-20251001$') -and
+         ($claudeFast -match '(?m)^effort: low$') -and
+         ($claudeFast -match '(?m)^permissionMode: plan$'))
+    Assert-That 'fast tier renders Cursor combined model syntax and readonly' `
+        (($cursorFast -match '(?m)^model: gpt-5\.6-luna\[effort=low\]$') -and
+         ($cursorFast -match '(?m)^readonly: true$'))
+    Assert-That 'fast tier renders Codex model, effort, and sandbox' `
+        (($codexFast -match '(?m)^model = "gpt-5\.6-terra"$') -and
+         ($codexFast -match '(?m)^model_reasoning_effort = "low"$') -and
+         ($codexFast -match '(?m)^sandbox_mode = "read-only"$'))
+
+    $claudeBalanced = Get-Content -LiteralPath (Join-Path $repo '.claude/agents/code-reviewer.md') -Raw
+    $cursorBalanced = Get-Content -LiteralPath (Join-Path $repo '.cursor/agents/code-reviewer.md') -Raw
+    $codexBalanced = Get-Content -LiteralPath (Join-Path $repo '.codex/agents/code-reviewer.toml') -Raw
+    Assert-That 'balanced Claude profile omits inherited model and effort' `
+        (($claudeBalanced -notmatch '(?m)^(?:model|effort):') -and
+         ($claudeBalanced -match '(?m)^permissionMode: plan$'))
+    Assert-That 'balanced Cursor profile renders model inherit without effort' `
+        (($cursorBalanced -match '(?m)^model: inherit$') -and
+         ($cursorBalanced -notmatch '\[effort='))
+    Assert-That 'balanced Codex profile omits inherited model and effort' `
+        (($codexBalanced -notmatch '(?m)^model =') -and
+         ($codexBalanced -notmatch '(?m)^model_reasoning_effort ='))
+
+    $claudeWritable = Get-Content -LiteralPath (Join-Path $repo '.claude/agents/edit-applier.md') -Raw
+    $cursorWritable = Get-Content -LiteralPath (Join-Path $repo '.cursor/agents/edit-applier.md') -Raw
+    $codexWritable = Get-Content -LiteralPath (Join-Path $repo '.codex/agents/edit-applier.toml') -Raw
+    Assert-That 'writable agents do not receive read-only host controls' `
+        (($claudeWritable -notmatch '(?m)^permissionMode:') -and
+         ($cursorWritable -match '(?m)^readonly: false$') -and
+         ($codexWritable -notmatch '(?m)^sandbox_mode ='))
+    Assert-That 'every generated profile carries a harness ownership marker' `
+        (($claudeFast -match '(?m)^harnessGenerated: true$') -and
+         ($cursorFast -match '(?m)^harnessGenerated: true$') -and
+         ($codexFast -match '(?m)^# dotnet-agent-harness: generated agent$'))
+
+    $codexTestWriter = Get-Content -LiteralPath (Join-Path $repo '.codex/agents/test-writer.toml') -Raw
+    Assert-That 'Codex agent instructions adapt slash-style skill references' `
+        (($codexTestWriter -match '\$convention-learner') -and
+         ($codexTestWriter -notmatch '/convention-learner'))
+    $agentSkillNames = @(Get-ChildItem -LiteralPath $skillsSource -Directory | ForEach-Object { [regex]::Escape($_.Name) })
+    $agentSkillPattern = $agentSkillNames -join '|'
+    $legacyCodexAgentRefs = @(Get-ChildItem -LiteralPath (Join-Path $repo '.codex/agents') -File -Filter '*.toml' |
+        Select-String -Pattern ('(?<![A-Za-z0-9._-])/(?:' + $agentSkillPattern + '|speckit-[A-Za-z0-9-]+)(?=$|[^A-Za-z0-9_-])'))
+    Assert-That 'no slash-style skill invocation survives in any Codex agent field' `
+        ($legacyCodexAgentRefs.Count -eq 0) `
+        (($legacyCodexAgentRefs | ForEach-Object { "$($_.Path):$($_.LineNumber)" }) -join ', ')
+
     Assert-That 'absent CLAUDE.md is created with every import' `
         (@([regex]::Matches($claude, '(?m)^@\.cursor/rules/')).Count -eq $expectedImports)
 
@@ -218,6 +306,13 @@ try {
             'the user must know both when hooks run and the gap they cannot cover'
         Assert-That 'AGENTS.md carries the gate exit contract' `
             ($agents -match 'Exit 0 = pass, 1 = fail, 2 = SKIPPED')
+        Assert-That 'AGENTS.md distils the cost-aware delegation rule in full' `
+            (($agents -match 'delegate\s+conclusions; keep required content inline') -and
+             ($agents -match 'edit-applier') -and
+             ($agents -match 'do not\s+re-brief the cheap agent')) `
+            'Codex cannot import delegation.mdc, so a pointer would silently omit the rule'
+        Assert-That 'AGENTS.md documents generated Codex named agents' `
+            (($agents -match '\.codex/agents/') -and ($agents -match 'seven named profiles'))
     }
 
     Assert-That '.codex/config.toml registers both documentation servers' `
@@ -315,9 +410,109 @@ try {
     Assert-That 'a same-name harness skill is refreshed and re-installs deterministically' `
         (($ownedAfterFirst -eq $ownedAfterSecond) -and
          ((Get-Content -LiteralPath $ownedSkill -Raw) -match '\$grill-with-docs'))
+    Assert-That '-Platform codex generates only the Codex agent discovery tree' `
+        ((@(Get-ChildItem -LiteralPath (Join-Path $repo '.codex/agents') -File -Filter '*.toml').Count -eq 7) -and
+         (-not (Test-Path (Join-Path $repo '.claude/agents'))) -and
+         (-not (Test-Path (Join-Path $repo '.cursor/agents'))))
+
+    # Generated agents use per-file ownership rather than Copy-Tree. Foreign
+    # same-name files are collisions, not permission to overwrite a directory.
+    $repo = New-TargetRepo
+    $repos += $repo
+    $foreignAgents = @(
+        (Join-Path $repo '.claude/agents/gate-runner.md')
+        (Join-Path $repo '.cursor/agents/code-scout.md')
+        (Join-Path $repo '.codex/agents/edit-applier.toml')
+    )
+    foreach ($path in $foreignAgents) {
+        New-Item -ItemType Directory -Path (Split-Path $path -Parent) -Force | Out-Null
+        Set-Content -LiteralPath $path -Value "consumer-owned: $([IO.Path]::GetFileName($path))" -Encoding UTF8
+    }
+    Set-Content -LiteralPath $foreignAgents[0] -Encoding UTF8 -Value @(
+        '---'
+        'name: gate-runner'
+        '---'
+        'Documentation may mention harnessGenerated: true without granting ownership.'
+    )
+    $foreignBefore = @($foreignAgents | ForEach-Object { ,([IO.File]::ReadAllBytes($_)) })
+    $output = Invoke-Install -Repo $repo -Platform 'all'
+    for ($i = 0; $i -lt $foreignAgents.Count; $i++) {
+        Assert-That "unmarked agent collision $($i + 1) stays byte-identical" `
+            ([System.Linq.Enumerable]::SequenceEqual($foreignBefore[$i], [IO.File]::ReadAllBytes($foreignAgents[$i])))
+    }
+    Assert-That 'agent collisions are reported without blocking other profiles' `
+        (($output -match 'COLLISION') -and
+         (Test-Path (Join-Path $repo '.claude/agents/code-scout.md')) -and
+         (Test-Path (Join-Path $repo '.cursor/agents/gate-runner.md')) -and
+         (Test-Path (Join-Path $repo '.codex/agents/code-scout.toml')))
+
+    # An exact 0.2.0 profile is the sole unmarked migration exception.
+    $repo = New-TargetRepo
+    $repos += $repo
+    $legacyPath = Join-Path $repo '.claude/agents/code-reviewer.md'
+    New-Item -ItemType Directory -Path (Split-Path $legacyPath -Parent) -Force | Out-Null
+    $legacy = Get-Content -LiteralPath (Join-Path $harnessRoot '.claude/agents/code-reviewer.md') -Raw
+    $legacy = $legacy -replace '(?m)^tier: balanced$', 'model: inherit'
+    [IO.File]::WriteAllText($legacyPath, $legacy, [Text.UTF8Encoding]::new($false))
+    $output = Invoke-Install -Repo $repo -Platform 'claude'
+    $adopted = Get-Content -LiteralPath $legacyPath -Raw
+    Assert-That 'exact v0.2.0 Claude profile is adopted and marked' `
+        (($output -match 'ADOPTED') -and ($adopted -match '(?m)^harnessGenerated: true$'))
+
+    $repo = New-TargetRepo
+    $repos += $repo
+    $modifiedLegacyPath = Join-Path $repo '.claude/agents/code-reviewer.md'
+    New-Item -ItemType Directory -Path (Split-Path $modifiedLegacyPath -Parent) -Force | Out-Null
+    [IO.File]::WriteAllText($modifiedLegacyPath, $legacy + "`nconsumer change`n", [Text.UTF8Encoding]::new($false))
+    $before = [IO.File]::ReadAllBytes($modifiedLegacyPath)
+    $output = Invoke-Install -Repo $repo -Platform 'claude'
+    Assert-That 'modified v0.2.0 profile remains consumer-owned' `
+        (($output -match 'COLLISION') -and
+         [System.Linq.Enumerable]::SequenceEqual($before, [IO.File]::ReadAllBytes($modifiedLegacyPath)))
+
+    # Consumer tier overrides render through every selected host.
+    $repo = New-TargetRepo
+    $repos += $repo
+    Set-Content -LiteralPath (Join-Path $repo 'harness.yml') -Encoding UTF8 -Value @(
+        'agents:'
+        '  tiers:'
+        '    fast:'
+        '      claude:'
+        '        model: custom-claude'
+        '        effort: high'
+        '      cursor:'
+        '        model: custom-cursor'
+        '        effort: medium'
+        '      codex:'
+        '        model: custom-codex'
+        '        effort: xhigh'
+    )
+    Invoke-Install -Repo $repo -Platform 'all' | Out-Null
+    Assert-That 'configured fast tier renders into all host copies' `
+        (((Get-Content -LiteralPath (Join-Path $repo '.claude/agents/gate-runner.md') -Raw) -match '(?m)^model: custom-claude$') -and
+         ((Get-Content -LiteralPath (Join-Path $repo '.cursor/agents/gate-runner.md') -Raw) -match '(?m)^model: custom-cursor\[effort=medium\]$') -and
+         ((Get-Content -LiteralPath (Join-Path $repo '.codex/agents/gate-runner.toml') -Raw) -match '(?m)^model = "custom-codex"$'))
+
+    $repo = New-TargetRepo
+    $repos += $repo
+    $legacyConfigPath = Join-Path $repo 'harness.yml'
+    Set-Content -LiteralPath $legacyConfigPath -Encoding UTF8 -Value @(
+        'harnessVersion: 0.2.0'
+        'agents:'
+        '  tiers:'
+        '    fast:'
+        '      claude: inherit'
+    )
+    $output = Invoke-Install -Repo $repo -Platform 'claude'
+    $legacyConfig = Get-Content -LiteralPath $legacyConfigPath -Raw
+    Assert-That 'legacy scalar config fails with migration guidance before version stamping' `
+        (($output -match 'legacy scalar agent tier') -and
+         ($output -match "nest 'model:' and 'effort:'") -and
+         ($legacyConfig -match '(?m)^harnessVersion: 0\.2\.0\r?$') -and
+         ($legacyConfig -notmatch '(?m)^harnessVersion: 0\.3\.0\r?$'))
 
     # ── Codex adapter: consumer-owned files already exist ────────────────────
-    # Deliberately NOT the append treatment CLAUDE.md gets. Ten @import lines are a
+    # Deliberately NOT the append treatment CLAUDE.md gets. Eleven @import lines are a
     # small reversible addition; a whole ruleset dumped under a repo's own agent
     # instructions is neither, and would contradict them silently.
     $repo = New-TargetRepo -AgentsMd @('# House rules', '', 'Our own agent instructions.')
@@ -367,9 +562,13 @@ try {
     Assert-That '-Platform both writes no Codex skills, hooks, config, or AGENTS.md' `
         ((-not (Test-Path (Join-Path $repo 'AGENTS.md'))) -and
          (-not (Test-Path (Join-Path $repo '.agents/skills'))) -and
+         (-not (Test-Path (Join-Path $repo '.codex/agents'))) -and
          (-not (Test-Path (Join-Path $repo '.codex/hooks.json'))) -and
          (-not (Test-Path (Join-Path $repo '.codex/config.toml')))) `
         'both means cursor + claude; widening it would change what a pinned flag does'
+    Assert-That '-Platform both generates Claude and Cursor agent profiles' `
+        ((@(Get-ChildItem -LiteralPath (Join-Path $repo '.claude/agents') -File -Filter '*.md').Count -eq 7) -and
+         (@(Get-ChildItem -LiteralPath (Join-Path $repo '.cursor/agents') -File -Filter '*.md').Count -eq 7))
     Assert-That '-Platform both still writes the Claude adapter' `
         (Test-Path (Join-Path $repo 'CLAUDE.md'))
     Assert-That '-Platform both reports slash syntax and no Codex next step' `

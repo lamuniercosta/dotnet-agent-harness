@@ -5,6 +5,7 @@ name: Lint harness
 #   - third-party agent invocations creeping back in (Bugbot, plugin agents)
 #   - a skill or rule referencing a script that does not exist
 #   - the harness.yml example drifting from the parser's schema
+#   - an agent tier missing, invalid, or rendered into the wrong host model
 #   - the guard hook regressing to a bypassable state
 #   - constitution placeholders shipping unsubstituted
 
@@ -56,6 +57,29 @@ jobs:
             [ "$dir" = "$declared" ] || { echo "::error file=$f::name '$declared' != directory '$dir'"; fail=1; }
           done
           [ "$fail" -eq 0 ] && echo "All $(ls -d skills/*/ | wc -l) skills valid."
+          exit $fail
+
+      # ---- every canonical agent has a valid tier -----------------------
+      # The installer renders host models from this field. A profile without a
+      # tier silently falls back to nothing unless the source itself is linted.
+      - name: Agents declare a valid tier
+        run: |
+          fail=0
+          for f in .claude/agents/*.md; do
+            count=$(grep -cE '^tier: (fast|balanced|deep)$' "$f" || true)
+            if [ "$count" -ne 1 ]; then
+              echo "::error file=$f::expected exactly one tier: fast|balanced|deep"
+              fail=1
+            fi
+            name=$(basename "$f" .md)
+            case "$name" in
+              default|worker|explorer)
+                echo "::error file=$f::agent name overrides a Codex built-in"
+                fail=1
+                ;;
+            esac
+          done
+          [ "$fail" -eq 0 ] && echo "All $(ls .claude/agents/*.md | wc -l) agents have valid tiers."
           exit $fail
 
       # ---- referenced gate scripts exist --------------------------------
@@ -168,7 +192,7 @@ jobs:
       # rules in .cursor/rules. Both repos that adopted the harness had their own
       # CLAUDE.md, so the imports were never added and no rule loaded at all -
       # silently, because a missing import is indistinguishable from a quiet rule.
-      - name: CLAUDE.md imports and constitution are installed, not just described
+      - name: Host agents, CLAUDE.md imports, and constitution are rendered, not just described
         shell: pwsh
         run: ./packs/dotnet/scripts/Test-InstallArtifacts.ps1
 

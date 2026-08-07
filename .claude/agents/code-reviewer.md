@@ -1,7 +1,7 @@
 ---
 name: code-reviewer
 description: Reviews a diff along one named axis — Risk, Standards, or Spec — and reports findings as file:line plus a concrete failure scenario. Read-only; it reports, it never edits. Use during /code-review or the /ship-review fan-out, or when asked to review a branch or PR.
-model: inherit
+tier: balanced
 readonly: true
 tools: Read, Bash, Grep, Glob
 ---

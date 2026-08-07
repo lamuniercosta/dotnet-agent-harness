@@ -92,7 +92,7 @@ When output would otherwise flood the conversation, use the named
 to a general subagent. If neither is available, run inline and still summarize
 each failure as `file:line` plus a one-line cause rather than returning raw output.
 
-If `scripts/` is absent, the repo has not had the gates installed — run `./install.ps1 <repo>` from this harness. Do **not** silently fall back to plain `dotnet build` and call phases 2–4 passed; report them as SKIPPED with that remediation, since a skipped gate and a passed gate are not the same result.
+If `scripts/` is absent, the repo has not had the gates installed — run `./install.ps1 <repo>` from this harness. Do **not** silently fall back to plain `dotnet build` and call phases 2–4 passed; report them as **Could not run** with that remediation. Reserve **Skipped** for a gate command that ran and returned exit 2.
 
 Phase 7 also reviews changed files for hardcoded secrets/connection strings, raw SQL without parameterization, missing authorization, and permissive CORS. Phase 10 reviews `git diff` for stray `bin/`/`obj/`/secrets, debug leftovers (`Console.WriteLine`, `#if DEBUG`), unresolved TODO/HACK/FIXME, and scope mismatch.
 
@@ -124,7 +124,7 @@ Verdict: READY FOR REVIEW (1 non-blocking warning)
 
 Verdicts: **READY FOR REVIEW** (all PASS or only non-blocking WARN) or **NEEDS FIXES** (any FAIL, with remediation). For pre-PR runs, include the table in the PR description.
 
-Report a gate that could not run as **SKIP** with the reason, never as PASS. A gate reporting PASS must have actually executed its analyzer.
+Report a gate that could not run as **Could not run** with the reason, never as **Pass**. A gate reporting **Pass** must have actually executed its analyzer.
 
 ## Related
 

@@ -14,11 +14,9 @@ Inspired by the [addyosmani/agent-skills](https://github.com/addyosmani/agent-sk
 
 A consolidated readiness review to run **before opening a PR**. It feeds human gate 3; it does not replace it.
 
-Cursor and Claude Code can route the roles below to the named profiles in
-`.claude/agents/`. Codex does not load those profiles; spawn general subagents
-with the table's briefs instead. If the host exposes no subagent mechanism, run
-the briefs inline and disclose that fallback. This gate depends on no external
-review service.
+Claude Code, Cursor, and Codex can route the roles below to their generated named
+profiles. If the host exposes no subagent mechanism, run the briefs inline and
+disclose that fallback. This gate depends on no external review service.
 
 ## When
 - After implementation + refactor are complete, before creating the PR
@@ -66,7 +64,7 @@ Verify: READY / NEEDS FIXES
 - Do not open or push a PR automatically.
 - Do not skip `/verify`.
 - Keep findings actionable: source, `file:line`, concrete fix.
-- If a reviewer could not run, report it as **SKIP** with the reason — never fold a missing axis into a clean verdict.
+- If a reviewer could not run, report **Could not run** with the reason — never fold a missing axis into a clean verdict.
 
 ## Related
 - `/verify` — the blocking gate this runs first
