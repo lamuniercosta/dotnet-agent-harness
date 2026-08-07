@@ -26,3 +26,13 @@ inspectcode-report.xml
 *.swp
 .DS_Store
 Thumbs.db
+
+# Repo-local self-development skill projections. The tracked start-issue
+# directories are authored overrides; every other entry is generated.
+/.claude/skills/*
+!/.claude/skills/start-issue/
+!/.claude/skills/start-issue/**
+/.agents/skills/*
+!/.agents/skills/start-issue/
+!/.agents/skills/start-issue/**
+/scripts/local/.self-skills-manifest.json

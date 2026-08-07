@@ -259,18 +259,21 @@ pass would be lying at the one moment it matters — the first run in a repo tha
 adopted it. Both blocks are verbatim from real runs; only the trailing absolute project
 path is elided.
 
-Eight self-tests guard the pieces that could fail silently. Each prints its own
+Repository self-tests guard the pieces that could fail silently. Each prints its own
 check count — quoted here they only go stale, which has already happened twice:
 
 ```bash
 pwsh ./hooks/Test-Guard.ps1                            # the guard hook
 pwsh ./hooks/Test-SecretScan.ps1                       # secret scanning, both directions
 pwsh ./hooks/Test-GateNudge.ps1                        # Codex advisory output contract
+pwsh ./scripts/local/Test-JsonProperty.ps1             # repo-local issue helper JSON
+pwsh ./scripts/local/Test-SelfSkills.ps1               # self-development skill delivery
 pwsh ./packs/dotnet/scripts/Test-HarnessConfig.ps1     # harness.yml parsing
 pwsh ./packs/dotnet/scripts/Test-ThresholdDocs.ps1     # docs vs harness.yml
 pwsh ./packs/dotnet/scripts/Test-SpecKitExtension.ps1  # the Spec Kit coupling
 pwsh ./packs/dotnet/scripts/Test-InstallArtifacts.ps1  # CLAUDE.md imports, constitution
 pwsh ./packs/dotnet/scripts/Test-GherkinMutation.ps1   # feature-file reassembly
+pwsh ./packs/dotnet/scripts/Test-TaskBranchScripts.ps1 # task branch and worktree safety
 pwsh ./packs/dotnet/scripts/Test-GateExitContract.ps1  # 0 / 1 / 2, both directions
 ```
 

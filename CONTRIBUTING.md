@@ -74,7 +74,9 @@ rule to root-level files.
 
 ```bash
 pwsh ./hooks/Test-Guard.ps1
+pwsh ./scripts/local/Test-SelfSkills.ps1
 pwsh ./packs/dotnet/scripts/Test-HarnessConfig.ps1
+pwsh ./packs/dotnet/scripts/Test-InstallArtifacts.ps1
 pwsh ./packs/dotnet/scripts/Sync-VendorRulePaths.ps1 -Check
 ```
 

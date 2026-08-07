@@ -139,6 +139,10 @@ jobs:
         shell: pwsh
         run: ./scripts/local/Test-JsonProperty.ps1
 
+      - name: Self-development skills match consumer delivery
+        shell: pwsh
+        run: ./scripts/local/Test-SelfSkills.ps1
+
       # Both directions. A scanner that matches nothing looks exactly like a
       # clean codebase, and one that matches everything gets switched off.
       - name: Secret scanner fires, and stays quiet on look-alikes

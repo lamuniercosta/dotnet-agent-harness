@@ -28,22 +28,36 @@ It is **not** shipped by `install.ps1`. Consumers keep using `$task`.
 
 Requires `gh` with the project scope: `gh auth refresh -s project`.
 
-## Harness skills do not resolve as `$name` here
+## Bootstrap canonical skills for self-development
 
-Consumers receive the canonical `skills/` tree copied to `.agents/skills/`
-([ADR 0003](docs/adr/0003-codex-skills-use-a-generated-agents-copy.md)). This
-repository is the *source* of that tree, not a consumer of it, so it carries no
-generated copy: `$task`, `$verify`, `$grill-with-docs` and the rest do **not**
-resolve as commands here.
+The repository tracks only the canonical `skills/` sources and the repo-local
+`start-issue` authored overrides. Generate the ignored host discovery copies
+when you need to invoke the rest of the harness surface while developing it:
 
-Read the canonical file directly instead — `skills/<name>/SKILL.md`, e.g.
-`skills/verify/SKILL.md` — and treat the `/name` references inside skill text as
-file paths under `skills/`, not as invocable commands.
+```powershell
+pwsh ./scripts/local/Sync-SelfSkills.ps1
+```
 
-Do not generate `.agents/skills/` copies of the canonical tree in this repo. That
-would create a second authored copy of every skill, which is the drift the
-harness exists to prevent. `.agents/skills/start-issue/` is the one deliberate
-exception, because that skill exists only here and has no canonical source.
+The command projects the Claude form into `.claude/skills/` and the Codex form
+into `.agents/skills/` using the same renderer as consumer installation. It
+refreshes and removes only names recorded in its ignored ownership manifest;
+`start-issue` and foreign skills are never owned. An unowned same-name collision
+fails before mutation instead of silently replacing a local skill.
+
+Codex does not reload project skills during a running session. Restart or reload
+Codex after sync before expecting `$verify`, `$implement`, or another newly
+generated command to resolve. Use this repository's `$start-issue`, not `$task`,
+for GitHub issue intake so project status handling remains active.
+
+To remove the generated discovery copies without touching authored or foreign
+skills:
+
+```powershell
+pwsh ./scripts/local/Sync-SelfSkills.ps1 -Clean
+```
+
+This bootstrap does not relax `install.ps1`'s full self-install refusal and does
+not install gates, hooks, templates, or consumer configuration into this repo.
 
 ## Always-on rules are not auto-loaded here either
 
