@@ -19,3 +19,29 @@ _Avoid_: Pass, clean
 **Could not run**:
 A gate attempted verification but could not produce the evidence required for a trustworthy verdict.
 _Avoid_: Skipped, pass
+
+## Skill delivery
+
+**Canonical skill**:
+The authoritative, host-neutral definition of a harness workflow from which host discovery copies are produced.
+_Avoid_: Source skill, master copy
+
+**Discovery copy**:
+A host-readable projection of a canonical skill. It is generated and disposable, never edited as an authored source.
+_Avoid_: Skill clone, second source
+
+**Authored override**:
+A repository-specific skill maintained by hand because its behavior intentionally differs from the canonical workflow.
+_Avoid_: Generated exception
+
+**Foreign skill**:
+A host discovery entry authored outside the harness bootstrap and therefore ineligible for harness refresh or cleanup.
+_Avoid_: Unowned generated skill
+
+**Self-development bootstrap**:
+The repo-local operation that creates discovery copies for working on the harness without installing the harness into itself.
+_Avoid_: Self-install
+
+**Ownership manifest**:
+The local record of discovery copies created by the self-development bootstrap. Only recorded entries are eligible for refresh or cleanup.
+_Avoid_: Directory ownership

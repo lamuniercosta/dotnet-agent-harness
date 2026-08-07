@@ -51,6 +51,7 @@ if ($Help) {
 $harnessRoot = $PSScriptRoot
 $packScripts = Join-Path $harnessRoot 'packs/dotnet/scripts'
 $packTemplates = Join-Path $harnessRoot 'packs/dotnet/templates'
+. (Join-Path $harnessRoot 'scripts/_skill-rendering.ps1')
 
 # _gate-common.ps1, not _harness-config.ps1 directly: config resolution falls
 # back to Resolve-BaseRef when harness.yml omits baseBranch, and that lives in
@@ -131,37 +132,6 @@ function Copy-Tree {
     Add-Result $Label 'SYNCED' "$count files"
 }
 
-function Convert-CodexSkillReferences {
-    <#
-    Codex exposes project skills as `$name`, while the same canonical Markdown
-    uses `/name` for Claude and Cursor. Adapt only the generated Codex copy.
-    #>
-    param([string]$SkillsSource, [string]$CodexSkills)
-
-    $skillNames = @(Get-ChildItem -LiteralPath $SkillsSource -Directory | ForEach-Object { $_.Name })
-    $namePattern = @($skillNames | ForEach-Object { [regex]::Escape($_) }) -join '|'
-    # The preceding character must not be part of a URL or path segment.
-    $pattern = '(?<![A-Za-z0-9._-])/(?:' + $namePattern + '|speckit-[A-Za-z0-9-]+)(?=$|[^A-Za-z0-9_-])'
-
-    if (-not (Test-Path -LiteralPath $CodexSkills)) { return }
-    if ($PSCmdlet.ShouldProcess($CodexSkills, 'adapt skill references for Codex')) {
-        foreach ($skillName in $skillNames) {
-            $ownedSkill = Join-Path $CodexSkills $skillName
-            if (-not (Test-Path -LiteralPath $ownedSkill)) { continue }
-            Get-ChildItem -LiteralPath $ownedSkill -File -Recurse -Filter '*.md' | ForEach-Object {
-                $original = Get-Content -LiteralPath $_.FullName -Raw
-                $adapted = [regex]::Replace($original, $pattern, {
-                        param($match)
-                        '$' + $match.Value.Substring(1)
-                    })
-                if ($adapted -cne $original) {
-                    Set-Content -LiteralPath $_.FullName -Value $adapted -Encoding UTF8 -NoNewline
-                }
-            }
-        }
-    }
-}
-
 # ── 1. harness.yml — the repo owns its settings, the harness owns the version ─
 $harnessVersion = (Get-Content -LiteralPath (Join-Path $harnessRoot 'VERSION') -Raw).Trim()
 $harnessFile = Join-Path $TargetRepo 'harness.yml'
@@ -231,7 +201,9 @@ Copy-Tree (Join-Path $harnessRoot 'hooks') (Join-Path $TargetRepo 'scripts/hooks
 if ($Platform -in @('codex', 'all')) {
     $codexSkills = Join-Path $TargetRepo '.agents/skills'
     Copy-Tree (Join-Path $harnessRoot 'skills') $codexSkills 'skills -> .agents/skills (Codex `$name`)'
-    Convert-CodexSkillReferences -SkillsSource (Join-Path $harnessRoot 'skills') -CodexSkills $codexSkills
+    if ($PSCmdlet.ShouldProcess($codexSkills, 'adapt skill references for Codex')) {
+        Convert-CodexSkillReferences -SkillsSource (Join-Path $harnessRoot 'skills') -CodexSkills $codexSkills
+    }
 }
 
 Copy-Tree (Join-Path $harnessRoot 'rules/pipeline') (Join-Path $TargetRepo '.cursor/rules') 'rules -> .cursor/rules (Claude @imports these)'
