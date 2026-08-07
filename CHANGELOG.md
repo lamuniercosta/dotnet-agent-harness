@@ -8,6 +8,32 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [semantic versioning](https://semver.org/), where a **major** bump
 means a consuming repo's gates may start failing on code that previously passed.
 
+## [0.4.0] — 2026-08-07
+
+### Breaking
+
+- **Solution resolution now requires a unique repo-root candidate when multiple
+  solutions exist.** A repo with solutions only at depth > 0 and no unique
+  root-level `.sln`/`.slnx` (e.g. `src/App.sln` + `tools/Other.sln`) previously
+  built `src/App.sln` silently in the analyzer and complexity gates; it now
+  refuses with remediation. Fix: `solution: src/App.sln` in `harness.yml`.
+
+### Fixed
+
+- **All gates and callers now use one solution resolver (`Resolve-Solution`).**
+  Three functions previously resolved solutions independently with different
+  policies. `Resolve-BuildTarget` picked the shallowest candidate silently;
+  `Get-TestProjects` refused on ambiguity; `Get-HarnessConfig` refused on
+  ambiguity eagerly at config load, breaking `new-task-branch.ps1` and
+  `install.ps1` in any repo with multiple solutions and no `solution:` set —
+  even though neither command needs a solution.
+- **`solution:` in `harness.yml` is now honoured by every gate.** The analyzer,
+  complexity, and InspectCode gates previously ignored it, using their own
+  discovery instead.
+- **Candidate scans now exclude `bin/`, `obj/`, `node_modules/`, and
+  `artifacts/` everywhere.** `Get-HarnessConfig`'s glob previously lacked this
+  filter, so a stale `.sln` copied into `artifacts/` could trip it.
+
 ## [0.3.0] — 2026-08-07
 
 ### Breaking

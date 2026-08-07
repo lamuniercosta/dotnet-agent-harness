@@ -30,7 +30,8 @@ baseBranch: main
 # branches are named from a description you pass directly.
 tracker: github
 
-# Path to the solution. Omit to glob for a single *.sln / *.slnx.
+# Path to the solution. Omit to auto-resolve: the sole candidate wins; with
+# multiple candidates, the unique repo-root solution wins; otherwise set this.
 solution: null
 
 task:

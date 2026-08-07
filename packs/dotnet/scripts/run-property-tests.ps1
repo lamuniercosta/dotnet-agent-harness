@@ -44,19 +44,7 @@ EXAMPLES:
 
 $repoRoot = Get-RepoRoot
 
-# Config resolution can itself refuse to answer - two solutions in the repo, for
-# one - and that arrives as a PowerShell exception carrying a perfectly good
-# remediation. Caught so it reaches the user as a gate verdict rather than a
-# stack trace, because an unreadable configuration is "could not run", not a
-# crash the caller should have to interpret.
-try {
-    $propertyTestsEnabled = Get-HarnessValue 'gates.propertyTests.enabled' -RepoRoot $repoRoot
-}
-catch {
-    Write-Host 'GATE COULD NOT RUN: could not determine what to run.' -ForegroundColor Red
-    Write-Host "  $($_.Exception.Message)"
-    exit 1
-}
+$propertyTestsEnabled = Get-HarnessValue 'gates.propertyTests.enabled' -RepoRoot $repoRoot
 
 if (-not $propertyTestsEnabled) {
     Write-Host 'Property tests: SKIPPED - disabled in harness.yml (gates.propertyTests.enabled: false).'
@@ -100,10 +88,8 @@ $targets = @(if ($Project) {
     Resolve-BuildTarget -RepoRoot $repoRoot -Explicit $Project
 }
 else {
-    # Discovery throws when it cannot tell which solution defines the tests -
-    # two .sln files, or one that will not list. Surfaced as a gate verdict
-    # rather than a raw PowerShell error, because "I could not work out what to
-    # run" is exactly what exit 1 with remediation is for.
+    # Resolve-Solution throws when multiple candidates have no unique root.
+    # Surfaced as a gate verdict rather than a raw PowerShell error.
     try {
         Get-TestProjects -RepoRoot $repoRoot
     }

@@ -61,7 +61,7 @@ function Get-HarnessDefaults {
         'pack'                                       = 'dotnet'
         'baseBranch'                                 = $null   # resolved from git
         'tracker'                                    = 'github'
-        'solution'                                   = $null   # globbed
+        'solution'                                   = $null   # declared only; discovery is in Resolve-Solution
         'task.worktree'                              = $true
         'task.worktreeRoot'                          = $null   # derived: <repo>.worktrees beside the repo
         'gates.complexity.implement'                 = 15
@@ -185,9 +185,10 @@ function ConvertFrom-HarnessYaml {
 
 function Get-HarnessConfig {
     <#
-      Loads harness.yml from the repo root layered over the defaults, resolving
-      the discoverable values (base branch, solution) once so every caller
-      agrees. Returns a flat hashtable keyed by dotted path.
+      Loads harness.yml from the repo root layered over the defaults. Validates
+      declared values (baseBranch, solution) but does NOT discover undeclared
+      ones — discovery belongs in the caller that needs it (Resolve-Solution,
+      Resolve-BaseRef). Returns a flat hashtable keyed by dotted path.
     #>
     param([string]$RepoRoot)
 
@@ -213,15 +214,12 @@ function Get-HarnessConfig {
         $config['baseBranch'] = (Resolve-BaseRef -RepoRoot $RepoRoot -Explicit '') -replace '^origin/', ''
     }
 
-    if (-not $config['solution']) {
-        $found = @(Get-ChildItem -LiteralPath $RepoRoot -Recurse -Depth 2 -Include '*.sln', '*.slnx' -File -ErrorAction SilentlyContinue)
-        if ($found.Count -eq 1) {
-            $config['solution'] = $found[0].FullName
+    if ($config['solution']) {
+        $p = if ([System.IO.Path]::IsPathRooted($config['solution'])) { $config['solution'] } else { Join-Path $RepoRoot $config['solution'] }
+        if (-not (Test-Path $p)) {
+            throw "harness.yml names a solution that does not exist: $($config['solution'])"
         }
-        elseif ($found.Count -gt 1) {
-            $names = ($found | ForEach-Object { $_.Name }) -join ', '
-            throw "Found $($found.Count) solutions ($names). Set 'solution:' in harness.yml to disambiguate."
-        }
+        $config['solution'] = (Resolve-Path $p).Path
     }
 
     $script:HarnessConfigCache = $config
@@ -244,4 +242,47 @@ function Get-HarnessValue {
     }
 
     return (Get-HarnessConfig -RepoRoot $RepoRoot)[$Key]
+}
+
+function Resolve-Solution {
+    <#
+      The single entry point for solution resolution.
+      Precedence: declared (Explicit param, then harness.yml solution:),
+      else the sole candidate, else the unique repo-root candidate, else throw.
+      Returns $null when the repo has no solution at all.
+    #>
+    param(
+        [string]$RepoRoot,
+        [string]$Explicit
+    )
+
+    if (-not $RepoRoot) { $RepoRoot = Get-RepoRoot }
+
+    if ($Explicit) {
+        $path = if ([System.IO.Path]::IsPathRooted($Explicit)) { $Explicit } else { Join-Path $RepoRoot $Explicit }
+        if (-not (Test-Path $path)) {
+            throw "Solution not found: $Explicit"
+        }
+        return (Resolve-Path $path).Path
+    }
+
+    $declared = $null
+    try { $declared = Get-HarnessValue 'solution' -RepoRoot $RepoRoot } catch { throw }
+    if ($declared) { return $declared }
+
+    $candidates = @(
+        Get-ChildItem -Path $RepoRoot -Include '*.slnx', '*.sln' -File -Depth 2 -Recurse -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -notmatch '[\\/](bin|obj|node_modules|artifacts)[\\/]' }
+    )
+
+    if ($candidates.Count -eq 0) { return $null }
+
+    if ($candidates.Count -eq 1) { return $candidates[0].FullName }
+
+    $atRoot = @($candidates | Where-Object { $_.DirectoryName -eq $RepoRoot })
+
+    if ($atRoot.Count -eq 1) { return $atRoot[0].FullName }
+
+    $list = ($candidates | ForEach-Object { '  ' + [System.IO.Path]::GetRelativePath($RepoRoot, $_.FullName) }) -join "`n"
+    throw "Multiple candidate solutions found. Set 'solution:' in harness.yml to pick one:`n$list"
 }

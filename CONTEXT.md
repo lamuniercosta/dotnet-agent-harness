@@ -67,3 +67,21 @@ _Avoid_: Generic subtask, delegation by default
 **Writable errand**:
 A cheap errand that applies one specified transformation to an explicit set of files exclusively owned by that errand until it returns.
 _Avoid_: Open-ended implementation, overlapping edit
+
+## Solution resolution
+
+**Declared solution**:
+The solution a human named: the `-Solution` parameter, or `solution:` in `harness.yml` when no parameter is given. Never discovered; a missing path is a hard error.
+_Avoid_: Configured solution, explicit solution
+
+**Candidate solution**:
+A `.sln` or `.slnx` file the filesystem scan finds when nothing was declared, before any policy applies.
+_Avoid_: Found solution, detected solution
+
+**Solution resolution**:
+Deciding which single solution a command operates on: declared, else the sole candidate, else the unique repo-root candidate, else refuse. Returns `$null` when the repo has no solution at all.
+_Avoid_: Solution discovery, auto-detect
+
+**Build target**:
+The path handed to `dotnet build`: the resolved solution, or a lone project when the repo has none.
+_Avoid_: Solution (when a `.csproj` may be meant)

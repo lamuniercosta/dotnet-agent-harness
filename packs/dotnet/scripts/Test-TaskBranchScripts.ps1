@@ -298,6 +298,18 @@ try {
     $noConfigOutput = (& $newScript -Description 'No config here' -Type feature -BaseBranch main -Remote origin 3>&1 6>&1 | Out-String)
     Assert-That 'a missing harness.yml is reported, not silently defaulted' `
         ($noConfigOutput -match 'harness defaults') $noConfigOutput
+
+    # Two solutions, no harness.yml. Branch creation must not depend on solution
+    # discovery — Get-HarnessConfig validates what was declared but does not
+    # discover, so this succeeds where it previously threw.
+    foreach ($s in 'Root.sln', 'Other.sln') {
+        Set-Content -LiteralPath (Join-Path $wtWork $s) -Encoding UTF8 `
+            -Value 'Microsoft Visual Studio Solution File, Format Version 12.00'
+    }
+    $twoSlnOutput = (& $newScript -Description 'Two solutions present' -Type feature -BaseBranch main -Remote origin 3>&1 6>&1 | Out-String)
+    $twoSlnPath = Join-Path $expectedRoot 'feature-two-solutions-present'
+    Assert-That 'two solutions do not block branch creation' `
+        (Test-Path -LiteralPath $twoSlnPath) $twoSlnOutput
 }
 finally {
     if (Test-Path -LiteralPath $tempRoot) {
