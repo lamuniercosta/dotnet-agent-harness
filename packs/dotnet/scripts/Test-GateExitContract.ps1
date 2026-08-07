@@ -516,17 +516,14 @@ try {
         "exit $($r.Exit) - a silent fallback to the whole solution is how the masking returns"
 
     # Last, because it changes what discovery sees in this repo. Two solutions
-    # make scope unknowable, and the throw from discovery has to arrive as a gate
-    # verdict with remediation rather than a raw PowerShell error.
+    # at the root make scope unknowable, and the throw from Resolve-Solution has
+    # to arrive as a gate verdict with remediation rather than a stack trace.
     foreach ($s in 'One.sln', 'Two.sln') {
         Set-Content -LiteralPath (Join-Path $repo $s) -Encoding UTF8 `
             -Value 'Microsoft Visual Studio Solution File, Format Version 12.00'
     }
     $r = Invoke-Gate -Repo $repo -Script 'run-property-tests.ps1'
 
-    # Asserts the remediation reaches the user, not just that something failed.
-    # Config resolution refuses ambiguous solutions before discovery is even
-    # reached, and that refusal used to arrive as a PowerShell stack trace.
     Assert-That 'property gate: ambiguous scope is a gate verdict, not a crash' `
         ($r.Exit -eq 1 -and $r.Output -match 'GATE COULD NOT RUN' -and $r.Output -match "Set 'solution:'") `
         "exit $($r.Exit) - the user needs the remediation, not a stack trace"

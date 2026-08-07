@@ -83,42 +83,17 @@ function Resolve-AnalysisScope {
 function Resolve-BuildTarget {
     <#
       Finds the thing to hand to `dotnet build` / `jb inspectcode`.
-      Order: explicit -Solution, then *.slnx/*.sln at repo root, then src/,
-      then anywhere at depth <= 3, then a lone *.csproj.
-      Throws with an actionable message when ambiguous or absent.
+      Delegates to Resolve-Solution; when no solution exists, falls back to a
+      lone *.csproj. Throws with an actionable message when ambiguous or absent.
     #>
     param(
         [string]$RepoRoot,
         [string]$Explicit
     )
 
-    if ($Explicit) {
-        $path = if ([System.IO.Path]::IsPathRooted($Explicit)) { $Explicit } else { Join-Path $RepoRoot $Explicit }
-        if (-not (Test-Path $path)) {
-            throw "Solution not found: $Explicit"
-        }
-        return (Resolve-Path $path).Path
-    }
+    $solution = Resolve-Solution -RepoRoot $RepoRoot -Explicit $Explicit
+    if ($solution) { return $solution }
 
-    $found = @()
-    foreach ($depth in 1, 2, 3) {
-        $found = @(
-            Get-ChildItem -Path $RepoRoot -Include '*.slnx', '*.sln' -File -Depth ($depth - 1) -Recurse -ErrorAction SilentlyContinue |
-                Where-Object { $_.FullName -notmatch '[\\/](bin|obj|node_modules|artifacts)[\\/]' }
-        )
-        if ($found.Count -gt 0) { break }
-    }
-
-    if ($found.Count -eq 1) {
-        return $found[0].FullName
-    }
-
-    if ($found.Count -gt 1) {
-        $list = ($found | ForEach-Object { '  ' + [System.IO.Path]::GetRelativePath($RepoRoot, $_.FullName) }) -join "`n"
-        throw "Multiple solutions found; pass -Solution <path> to pick one:`n$list"
-    }
-
-    # No solution - fall back to a single project.
     $projects = @(
         Get-ChildItem -Path $RepoRoot -Include '*.csproj' -File -Depth 2 -Recurse -ErrorAction SilentlyContinue |
             Where-Object { $_.FullName -notmatch '[\\/](bin|obj|node_modules|artifacts)[\\/]' }
@@ -147,52 +122,13 @@ function Get-TestProjects {
     #>
     param([string]$RepoRoot)
 
-    # Scope to the active solution when there is one.
-    #
-    # A repo-wide sweep would run every test project it can find, including an
-    # orphan tools/ or scratch/ one that is not part of the product. One of those
-    # failing to restore would fail this gate while the solution's own property
-    # tests were green - the same objection that makes `-Project <solution>` a
-    # rejection rather than a repo-wide expansion.
-    #
-    # `dotnet sln list` is the authority on membership, so no .sln/.slnx parser
-    # is written here. Only lines ending in .csproj are taken, which sidesteps
-    # the localised header the command prints first.
-    # "No solution exists" and "which solution is unclear" are different answers
-    # and must not share a code path. Falling back to a repo-wide sweep whenever
-    # resolution failed reopened the very hole this scoping closed: a repo with
-    # two .sln files silently ran an orphan test project belonging to neither.
-    #
-    # So the sweep is reserved for a repo that genuinely has no solution, and
-    # every other failure throws with remediation. Callers turn that into GATE
-    # COULD NOT RUN, which is the honest answer when scope cannot be determined.
-    $configured = $null
-    try { $configured = Get-HarnessValue 'solution' -RepoRoot $RepoRoot } catch { $configured = $null }
-
-    $solutions = @(
-        Get-ChildItem -Path $RepoRoot -Include '*.slnx', '*.sln' -File -Depth 2 -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '[\\/](bin|obj|node_modules|artifacts)[\\/]' } |
-            Select-Object -ExpandProperty FullName
-    )
-
-    $solution = if ($configured) {
-        $p = if ([System.IO.Path]::IsPathRooted($configured)) { $configured } else { Join-Path $RepoRoot $configured }
-        if (-not (Test-Path $p)) { throw "harness.yml names a solution that does not exist: $configured" }
-        (Resolve-Path $p).Path
-    }
-    elseif ($solutions.Count -eq 1) { $solutions[0] }
-    elseif ($solutions.Count -gt 1) {
-        throw ("Cannot tell which solution defines the test projects - $($solutions.Count) were found. " +
-               "Set `solution:` in harness.yml, or pass -Project <test.csproj>. Running every test " +
-               "project in the repo would include ones outside the solution under test.")
-    }
-    else { $null }
+    # Resolve-Solution handles declared → sole candidate → unique root candidate
+    # → throw on ambiguity → $null when none exist. The sweep is reserved for
+    # $null: a repo that genuinely has no solution file.
+    $solution = Resolve-Solution -RepoRoot $RepoRoot
 
     $candidates = @()
     if ($solution -and $solution -match '\.slnx?$') {
-        # `dotnet sln list` is the authority on membership, so no .sln/.slnx
-        # parser is written here. Only lines ending in .csproj are taken, which
-        # sidesteps the localised header the command prints first.
         $listed = & dotnet sln $solution list 2>&1 | ForEach-Object { $_.ToString() }
         if ($LASTEXITCODE -ne 0) {
             throw ("Could not list the projects in $solution - dotnet sln list failed. " +
@@ -213,8 +149,6 @@ function Get-TestProjects {
         $candidates = @($solution)
     }
     else {
-        # Genuinely no solution file: the sweep is the only thing to go on, and
-        # there is no solution boundary for an orphan to sit outside of.
         $candidates = @(
             Get-ChildItem -Path $RepoRoot -Filter '*.csproj' -File -Recurse -ErrorAction SilentlyContinue |
                 Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' } |

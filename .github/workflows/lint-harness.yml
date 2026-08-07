@@ -181,6 +181,10 @@ jobs:
         shell: pwsh
         run: ./packs/dotnet/scripts/Test-HarnessConfig.ps1
 
+      - name: Solution resolver applies one policy everywhere
+        shell: pwsh
+        run: ./packs/dotnet/scripts/Test-SolutionResolver.ps1
+
       # Both directions again. Overwriting extensions.yml unconditionally
       # disables any registered Spec Kit extension silently, and refusing to
       # write it at all means the pipeline chaining never installs.

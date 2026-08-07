@@ -57,7 +57,8 @@ if ($null -eq $IncludeTransitive) {
 $order = @{ 'low' = 0; 'moderate' = 1; 'high' = 2; 'critical' = 3 }
 $floor = if ($Severity) { $order[$Severity.ToLowerInvariant()] } else { -1 }
 
-$target = if ($config['solution']) { $config['solution'] } else { $repoRoot }
+$target = Resolve-Solution -RepoRoot $repoRoot
+if (-not $target) { $target = $repoRoot }
 
 # Test seam: HARNESS_VULN_FIXTURE points at a canned `dotnet list package
 # --vulnerable --format json` document, so CI can prove this gate's parsing and
