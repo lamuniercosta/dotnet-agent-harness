@@ -16,6 +16,11 @@
   than the work itself; the agent decides when to spend that time.
 #>
 
+param(
+    [ValidateSet('Legacy', 'Codex')]
+    [string]$OutputContract = 'Legacy'
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'SilentlyContinue'
 
@@ -37,17 +42,46 @@ function Get-Prop {
     return $null
 }
 
+function Get-EditedFiles {
+    param($Payload, $ToolInput)
+    $direct = Get-Prop $ToolInput @('file_path', 'filePath', 'path', 'target_file')
+    if (-not [string]::IsNullOrWhiteSpace($direct)) { return @($direct) }
+
+    $command = Get-Prop $ToolInput @('command', 'cmd')
+    if ([string]::IsNullOrWhiteSpace($command)) { return @() }
+
+    $paths = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in ($command -split "`r?`n")) {
+        if ($line -match '^\*\*\*\s+(?:Add|Update|Delete) File:\s*(.+?)\s*$' -or
+            $line -match '^\*\*\*\s+Move to:\s*(.+?)\s*$') {
+            [void]$paths.Add($Matches[1])
+        }
+    }
+    return $paths
+}
+
+function Resolve-HookPath {
+    param([string]$Path, $Payload, $ToolInput)
+    if ([System.IO.Path]::IsPathRooted($Path)) { return $Path }
+    $cwd = Get-Prop $Payload @('cwd', 'working_directory', 'workingDirectory')
+    if (-not $cwd) { $cwd = Get-Prop $ToolInput @('cwd', 'working_directory', 'workingDirectory') }
+    if (-not $cwd) { return $Path }
+    return [System.IO.Path]::GetFullPath($Path, $cwd)
+}
+
 $toolInput = Get-Prop $payload @('tool_input', 'toolInput', 'input', 'arguments')
-$file = Get-Prop $toolInput @('file_path', 'filePath', 'path', 'target_file')
-
-if ([string]::IsNullOrWhiteSpace($file)) { exit 0 }
-if ([System.IO.Path]::GetExtension($file) -ne '.cs') { exit 0 }
-
-$normalized = $file -replace '\\', '/'
-if ($normalized -match '/(bin|obj|node_modules)/') { exit 0 }
-
-# Tests are exercised by `dotnet test`; the analyzer gates target production code.
-if ($normalized -match '/tests?/' -or $normalized -match '\.Tests?\.cs$') { exit 0 }
+$file = $null
+foreach ($candidate in (Get-EditedFiles $payload $toolInput)) {
+    $resolved = Resolve-HookPath $candidate $payload $toolInput
+    if ([System.IO.Path]::GetExtension($resolved) -ne '.cs') { continue }
+    $normalized = $resolved -replace '\\', '/'
+    if ($normalized -match '/(bin|obj|node_modules)/') { continue }
+    # Tests are exercised by `dotnet test`; the analyzer gates target production code.
+    if ($normalized -match '/tests?/' -or $normalized -match '\.Tests?\.cs$') { continue }
+    $file = $resolved
+    break
+}
+if (-not $file) { exit 0 }
 
 # Throttle per repository so a multi-file edit produces one nudge, not twenty.
 $repo = (git -C (Split-Path -LiteralPath $file -Parent) rev-parse --show-toplevel 2>$null)
@@ -63,15 +97,27 @@ if (Test-Path -LiteralPath $stamp) {
 }
 Set-Content -LiteralPath $stamp -Value (Get-Date -Format 'o')
 
-[Console]::Error.WriteLine(@'
+$nudge = @'
 gate-nudge: C# changed - the static-analysis gates have not run for this change.
 
   ./scripts/run-roslyn-analyzers.ps1
   ./scripts/run-cyclomatic-complexity.ps1
 
-Delegate to the `gate-runner` agent to keep the output out of this conversation.
-A change is not done until the gates are green - `dotnet build` alone surfaces
-none of what they catch.
-'@)
+Run them before reporting the change complete. `dotnet build` alone surfaces none
+of what they catch.
+'@
+
+if ($OutputContract -eq 'Codex') {
+    @{
+        systemMessage = $nudge
+        hookSpecificOutput = @{
+            hookEventName = 'PostToolUse'
+            additionalContext = $nudge
+        }
+    } | ConvertTo-Json -Compress -Depth 5
+    exit 0
+}
+
+[Console]::Error.WriteLine($nudge)
 
 exit 2

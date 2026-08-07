@@ -59,6 +59,33 @@ function Get-Prop {
     return $null
 }
 
+function Deny-ProtectedPath {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+
+    $normalized = $Path.Trim() -replace '\\', '/'
+    if ($normalized -match '(^|/)(node_modules|bin|obj)(/|$)') {
+        Deny "writing into a build output or dependency directory ($Path). Edit the source instead."
+    }
+    if ($normalized -match '(^|/)\.git(/|$)') {
+        Deny 'writing inside .git. Use git commands rather than editing repository internals.'
+    }
+}
+
+function Get-ApplyPatchPaths {
+    param([string]$Command)
+    if ([string]::IsNullOrWhiteSpace($Command)) { return @() }
+
+    $paths = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in ($Command -split "`r?`n")) {
+        if ($line -match '^\*\*\*\s+(?:Add|Update|Delete) File:\s*(.+?)\s*$' -or
+            $line -match '^\*\*\*\s+Move to:\s*(.+?)\s*$') {
+            [void]$paths.Add($Matches[1])
+        }
+    }
+    return $paths
+}
+
 # Host schemas differ slightly between Cursor and Claude Code; accept either.
 $tool = Get-Prop $payload @('tool_name', 'toolName', 'name')
 if (-not $tool) { exit 0 }
@@ -108,15 +135,15 @@ switch -Regex ($tool) {
     '^(Edit|Write|MultiEdit|create_file|edit_file|search_replace)$' {
         $file = Get-Prop $toolInput @('file_path', 'filePath', 'path', 'target_file')
         if ([string]::IsNullOrWhiteSpace($file)) { exit 0 }
+        Deny-ProtectedPath $file
+        exit 0
+    }
 
-        $normalized = $file -replace '\\', '/'
-        if ($normalized -match '/(node_modules|bin|obj)/') {
-            Deny "writing into a build output or dependency directory ($file). Edit the source instead."
+    '^apply_patch$' {
+        $cmd = Get-Prop $toolInput @('command', 'cmd')
+        foreach ($file in (Get-ApplyPatchPaths $cmd)) {
+            Deny-ProtectedPath $file
         }
-        if ($normalized -match '/\.git/') {
-            Deny 'writing inside .git. Use git commands rather than editing repository internals.'
-        }
-
         exit 0
     }
 

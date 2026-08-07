@@ -10,7 +10,7 @@ live in `.cursor/rules/*.mdc`; if the two ever disagree, those files are the
 source and this one is stale — say so rather than picking one silently.
 
 Read [Limitations under Codex](#limitations-under-codex) before your first
-session. Two harness safety nets do not run here.
+session. Project hooks must be reviewed before their safety nets run.
 
 ## Non-negotiables
 
@@ -215,31 +215,29 @@ These are current gaps in the **harness's** Codex support, not defects in Codex.
 They are listed because each one is silent, and a safety net you believe in but
 do not have is worse than one you know is missing.
 
-### No secret-scan tripwire, and no destructive-action guard
+### Lifecycle hooks require trust, and cannot scan file reads
 
-The harness ships two protective hooks — `scripts/hooks/secret-scan.ps1` (warns
-when a credential shape is about to reach the model) and `scripts/hooks/guard.ps1`
-(blocks `rm -rf` of a root or glob target, force-pushes to protected branches,
-`git reset --hard` to a remote ref, and writes into `.git`, `bin`, `obj`, or
-`node_modules`) — plus formatting and gate-nudge hooks.
+The harness installs `.codex/hooks.json` with four protections:
 
-Codex supports lifecycle hooks and would run these. **The harness does not yet
-ship Codex hook wiring**, so in a Codex session none of them fire.
+- `secret-scan.ps1` warns when a submitted prompt contains a credential shape;
+- `guard.ps1` blocks the narrow set of destructive shell commands and protected
+  file writes listed under [Non-negotiables](#non-negotiables);
+- `format-on-edit.ps1` formats edited C# files; and
+- `gate-nudge.ps1` reminds the agent that analyzer gates remain pending.
 
-Consequences, in order of how much they should change your behaviour:
+Project-local hooks run only after the project is trusted **and each exact hook
+definition has been reviewed and trusted**. Open `/hooks` when Codex reports
+unreviewed hooks. A changed hook is skipped until its new definition is reviewed,
+so do not assume these protections are active merely because the files exist.
 
-1. **Never paste a live credential into a Codex prompt, and never ask Codex to
-   read a file containing one.** In Cursor and Claude Code a scan warns you. Here
-   nothing does. A secret that reaches a model provider has left this machine and
-   no later commit hook can recall it — rotate it instead.
-2. **Destructive shell commands are not intercepted.** Codex's own sandbox and
-   approval prompts are the only thing between a bad command and your working
-   tree. Read them rather than approving reflexively.
-3. Formatting is not applied on edit, so run the format step before shipping
-   rather than discovering it at the verify phase.
+Codex currently exposes no file-read lifecycle event. The prompt scanner can warn
+before submitted text leaves the machine, but it cannot inspect a credential that
+Codex reads from a file. **Never ask Codex to read a file containing a live
+credential.** If one reaches a model provider, rotate it; no later commit hook can
+recall it. `gitleaks` in CI covers only the commit-time half.
 
-`gitleaks` in CI still covers the commit-time half. It does not cover the half
-that matters here, which is content leaving the machine in a prompt.
+Hooks are guardrails, not a complete enforcement boundary. Keep Codex's sandbox
+enabled and read approval prompts rather than approving reflexively.
 
 ### Harness skills are not available
 

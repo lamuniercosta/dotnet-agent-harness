@@ -16,8 +16,15 @@
   gets switched off within a day, and a disabled hook protects nothing. Only
   guard.ps1 blocks, and only on things that are hard to undo.
 
-  Exit 2 surfaces the warning to the agent. Exit 0 is silence.
+  The default exit-2 contract surfaces the warning to legacy hosts. The explicit
+  Codex contract emits warning JSON and exits 0 so UserPromptSubmit stays
+  warn-only.
 #>
+
+param(
+    [ValidateSet('Legacy', 'Codex')]
+    [string]$OutputContract = 'Legacy'
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'SilentlyContinue'
@@ -95,7 +102,7 @@ if ($hits.Count -eq 0) { exit 0 }
 
 $where = if ($file) { $file } else { 'the submitted prompt' }
 
-[Console]::Error.WriteLine(@"
+$warning = @"
 secret-scan: possible credential in $where
 
 $($hits -join "`n")
@@ -109,6 +116,19 @@ already left this machine and cannot be recalled by a later commit hook.
 If a fixture or false positive: continue. This hook warns and never blocks,
 because a scanner that halts work on a guess gets disabled, and a disabled
 scanner protects nothing.
-"@)
+"@
+
+if ($OutputContract -eq 'Codex') {
+    @{
+        systemMessage = $warning
+        hookSpecificOutput = @{
+            hookEventName = 'UserPromptSubmit'
+            additionalContext = $warning
+        }
+    } | ConvertTo-Json -Compress -Depth 5
+    exit 0
+}
+
+[Console]::Error.WriteLine($warning)
 
 exit 2

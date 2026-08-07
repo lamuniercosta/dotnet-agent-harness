@@ -1,4 +1,8 @@
-# Codex adapter distils the rules, and deliberately ships no hook wiring
+# Codex adapter distils the rules, and initially shipped no hook wiring
+
+The hook portion of this decision is superseded by
+[ADR 0002](./0002-codex-hooks-preserve-advisory-semantics.md). The `AGENTS.md`
+and project-local configuration decisions remain current.
 
 Codex reads `AGENTS.md` from the repo root but has no `@import`, so the ten
 always-on rules cannot be referenced the way `CLAUDE.md` references
@@ -26,16 +30,14 @@ no pre-prompt hook. It does: hooks are enabled by default, work on Windows, and
 (`prompt`, `tool_name`, `tool_input`) and already signal through its exit-2
 contract, so wiring is close to authoring one JSON file.
 
-It was rejected because the semantics do not survive the move. On Cursor and
-Claude Code these hooks are wired `failClosed: false`, and `secret-scan` is
+It was rejected because the semantics do not survive the move. `secret-scan` is
 deliberately warn-only — "a hook that blocks work on a guess gets switched off
 within a day, and a disabled hook protects nothing". On Codex, exit 2 from
 `UserPromptSubmit` **blocks the prompt**. Naive wiring would silently convert a
 warning into a block and reproduce exactly the failure its author designed
-against. Preserving warn-only means emitting Codex's
-`{"decision": ...}` JSON, which is a design change to the shared scripts and
-deserves its own slice. Until then `AGENTS.md` states plainly that no tripwire
-fires in a Codex session.
+against. Preserving warn-only requires a successful JSON warning/context response
+with no block decision, which is a design change to the shared scripts and
+deserved its own slice. ADR 0002 records the implemented contract.
 
 **A project-local `.codex/config.toml` over the global `~/.codex/config.toml`.**
 The global file holds the user's own auth, plugins, and marketplaces; an
