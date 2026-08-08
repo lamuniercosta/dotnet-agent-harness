@@ -78,10 +78,18 @@ ignored are findings, and are recorded as deviations rather than suppressed.
 
 The host axis is open in the route map and closed in `agents.tiers`.
 `install.ps1` validates hosts against `claude`, `cursor`, and `codex`, so a host
-outside that set — Junie, Gemini — can appear in a route and receive host-level
-advice, but has no tier to resolve and therefore no model. Extending the closed
-set is a packaged, consumer-facing schema change and is deliberately not part of
-this work.
+outside that set — `antigravity`, `junie` — can appear in a route and receive
+host-level advice, but has no tier to resolve and therefore no model. Extending
+the closed set is a packaged, consumer-facing schema change and is deliberately
+not part of this work. It is tracked in #76, where the metered-versus-flat-rate
+distinction those hosts introduce is the open schema question.
+
+That openness turned out to be load-bearing rather than theoretical. The spike
+routed two hosts the closed set could not have expressed, and one of them —
+`antigravity` — did not exist under that name when this decision was taken: it
+replaced the standalone Gemini CLI, which was deprecated mid-flight. A closed
+host axis would have required a packaged schema change to record a fact that
+changed within a week.
 
 Issue #26's note that `agents.tiers` is "schema-validated but not consumed" is
 stale. `install.ps1` consumes it today to stamp `model` and `effort` into

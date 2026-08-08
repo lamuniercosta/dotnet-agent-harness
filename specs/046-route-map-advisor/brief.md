@@ -50,11 +50,24 @@ nothing else.
   consulted.
 
 Also in scope: a timeboxed spike on Junie (Rider) and Gemini, both already paid
-for and unused. It establishes whether each has a scriptable entry point, what
-its allowance actually permits, and where it sits in a chain relative to the
-floor. A tool reachable only through an IDE tab can be useful by hand but cannot
-be routed to, and that finding is a valid outcome. Two evening sessions, with
-"what we know so far" acceptable at the end.
+for and unused. It establishes what each one's allowance actually permits and
+where it sits in a chain relative to the floor. Two evening sessions, with "what
+we know so far" acceptable at the end.
+
+**Concluded — see `spike-findings.md`.** Both are routed, as reserve hosts above
+the floor: `antigravity` (which replaced the deprecated standalone Gemini CLI)
+and `junie`. Neither is a quality step down, since both reach Claude Opus and
+Sonnet; their position is a billing order.
+
+Two corrections the spike forced, recorded because they change how later work
+should read this brief:
+
+- **Scriptable entry points do not gate a route.** The advisor prints for a
+  human, so an interactive-only tool is routable. Headless capability gates #26,
+  which launches processes, and is recorded there rather than here.
+- **A host may hold several billing pools.** Antigravity meters Gemini models
+  and Claude/GPT models separately, so exhausting one need not block the other.
+  Tier choice therefore selects a pool, not only a capability.
 
 The PowerShell implementation is disposable. The route map is not: it is the
 artifact this work exists to produce, and it ports to #26 as data if the .NET
@@ -96,8 +109,9 @@ orchestrator is built.
   rather than an error.
 - The advisor runs from a checkout with no `harness.yml` without failing.
 - The packaged tree is unchanged; `install.ps1` output is byte-identical.
-- The spike concludes with a written finding per tool: scriptable entry point
-  yes or no, allowance, and placement relative to the floor.
+- The spike concludes with a written finding per tool: allowance, placement
+  relative to the floor, and scriptable entry point where known (recorded for
+  #26; it does not gate a route here).
 
 ## Not in scope
 

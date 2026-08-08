@@ -82,6 +82,18 @@ _Avoid_: Assignment, routing decision
 The lowest option in a route that still does the work without losing quality. Below it the honest answer is that the work waits, not that it proceeds on what remains.
 _Avoid_: Minimum tier, last resort
 
+**Primary host**:
+A host whose capacity is flat-rate: already paid for whether or not it is used, so a stronger model costs nothing extra until the periodic limit is reached. Spent before any reserve.
+_Avoid_: Best host, default host
+
+**Reserve host**:
+A host whose capacity is metered and drawn down by use. Held back until the primaries are spent. Its position below them is a billing order, never a claim that its work is worse.
+_Avoid_: Fallback host, cheaper host, downgrade
+
+**Billing pool**:
+The allowance an option draws down when it runs. One host may hold several, so exhausting the pool behind one tier need not block another.
+_Avoid_: Quota, budget, credits
+
 **Deviation**:
 An occasion where a human ran a command on an option other than the head of its route. Evidence about an authored judgment, not an error.
 _Avoid_: Override, violation
