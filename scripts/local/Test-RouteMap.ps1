@@ -104,6 +104,17 @@ Assert-That "'fast' is pinned by shipped default even with no harness.yml" ($nul
 
 Assert-That 'resolving an unknown command returns null' ($null -eq (Resolve-RouteChain -Command '/does-not-exist' -Map $map -RepoRoot $unpinnedRoot))
 
+# A host outside agents.tiers (Junie, Gemini, ...) must degrade to host-level
+# advice, never throw — that's what keeps the route map's host axis open while
+# agents.tiers stays a closed, packaged schema.
+$junieEntry = $resolvedUnpinned.Chain | Where-Object { $_.Host -eq 'junie' } | Select-Object -First 1
+Assert-That "a host outside agents.tiers resolves without error" ($null -ne $junieEntry)
+Assert-That "a host outside agents.tiers is flagged KnownHost=false" ($null -ne $junieEntry -and $junieEntry.KnownHost -eq $false)
+Assert-That "a host outside agents.tiers carries no model" ($null -ne $junieEntry -and $null -eq $junieEntry.Model)
+
+$claudeKnown = $resolvedUnpinned.Chain | Where-Object { $_.Host -eq 'claude' } | Select-Object -First 1
+Assert-That "a host inside agents.tiers is flagged KnownHost=true" ($claudeKnown.KnownHost -eq $true)
+
 # From here on, every CLI invocation touches the REAL route-log.jsonl (it has
 # no -LogPath parameter — the log path is fixed beside the script). Back it up
 # once and restore it in one top-level finally so no code path can leak a
