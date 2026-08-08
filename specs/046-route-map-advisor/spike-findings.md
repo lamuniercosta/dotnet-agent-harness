@@ -137,8 +137,57 @@ actually launches processes. It is recorded here for that reason, but it does no
 gate a row in `route-map.json`.
 
 Antigravity is therefore routed on the strength of working, entitled, and largely
-unused quota. Whether it exposes a non-interactive flag remains open and matters
-only to #26.
+unused quota.
+
+### Antigravity is fully orchestratable — the binary is `agy`
+
+The command is **`agy`**, not `antigravity`
+(`C:\Users\lamun\AppData\Local\agy\bin\agy.exe`). `agy --help` answers the #26
+question decisively — and more completely than the epic assumed it would have to
+build against.
+
+| Capability | Flag | Matters to |
+| --- | --- | --- |
+| Non-interactive prompt | `-p` / `--print` / `--prompt` | #26 dispatch |
+| **NDJSON output** | `--output-format stream-json` (also `text`, `json`) | #31/#32 adapters |
+| Enforced structured output | `--json-schema <schema-or-path>` | typed envelopes |
+| Session resume | `--conversation <ID>`, `--continue` / `-c` | #33 run store |
+| Model + effort | `--model`, `--effort low\|medium\|high` | #76, `agents.tiers` |
+| Execution mode | `--mode accept-edits\|plan` | writer vs reader nodes |
+| Workspace scoping | `--add-dir` (repeatable) | #35 write scopes |
+| Sandbox | `--sandbox` (terminal restrictions) | isolation |
+| Capability probe | `agy models`, `agy agents` | #30 probes |
+| Print-mode timeout | `--print-timeout` (default 5m) | per-node budgets |
+
+`--output-format stream-json` is the NDJSON contract #26 specifies, and
+`--effort low|medium|high` matches the harness's existing effort field exactly.
+On this evidence `agy` may be the *cheapest* adapter in the epic to build, not
+the hardest.
+
+Two cautions for #35: **`--dangerously-skip-permissions`** auto-approves every
+tool permission request and must stay off for any writer node, and
+`--disable-slash-commands` exists because slash expansion is otherwise live in
+print mode.
+
+### Model inventory — corrects an earlier claim
+
+`agy models` returns eleven entries, with effort baked into the id alongside the
+separate `--effort` flag:
+
+- **Gemini pool:** `gemini-3.6-flash-{high,medium,low}`,
+  `gemini-3.5-flash-{high,medium,low}`, `gemini-3.1-pro-{high,low}`
+- **Claude/GPT pool:** `claude-sonnet-4-6`, `claude-opus-4-6-thinking`,
+  `gpt-oss-120b-medium`
+
+Earlier notes here said both reserve hosts "reach Claude Opus and Sonnet,"
+implying parity with the `claude` host. That was too loose. Antigravity tops out
+at **Opus 4.6 / Sonnet 4.6**, a generation behind Junie's **Opus 5 / Sonnet 5**,
+and its GPT option is the open-weights `gpt-oss-120b`, not GPT-5.x.
+
+That is why the two reserves are ordered antigravity-then-junie rather than by
+raw capability: both clear the floor, so the plentiful weekly pool is spent
+before the scarce 10-20 monthly credits, and junie is reached past antigravity
+only when the work genuinely wants the newer generation.
 
 ### Junie runs the same top-tier models — corrects the routing rationale
 
