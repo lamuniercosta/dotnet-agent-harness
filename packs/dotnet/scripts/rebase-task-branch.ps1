@@ -52,16 +52,16 @@ if ($dirty) {
     throw "Working tree is not clean. Commit or stash changes before rebasing."
 }
 
-# Record what this checkout last knew the remote task ref to be, and the local tip,
-# BEFORE fetching. The fetch below advances the remote-tracking ref onto whatever
-# the remote now holds; capturing after it cannot tell "the remote still holds the
-# commit I pushed" from "someone advanced the remote while I wasn't looking", and a
-# force in the second case silently deletes their work. Reading the value first
-# keeps that distinction: the remote is only unsafe to force over if it CHANGED
-# from what we knew to a commit this checkout never had.
+# Record the local tip BEFORE fetching/rebasing. The remote-tracking ref is only a
+# fetch cache: a prior IDE auto-fetch or manual `git fetch` can already hold a
+# peer's commit, so neither its bare value nor "did it change during our fetch"
+# proves we own what it points at. Ancestry of the remote tip against this
+# pre-rebase local HEAD is the actual proof. Known limitation: a guidance-only
+# (no -Push) run rebases local in place, so a later -Push sees a pre-rebase HEAD
+# that no longer contains the originally-pushed commit and will refuse (safe
+# false-refuse; the reconcile message applies). Carrying provenance across
+# invocations explicitly is out of scope here.
 $remoteTaskRef = "refs/remotes/$Remote/$current"
-$knownRemoteTip = (git rev-parse --verify --quiet $remoteTaskRef)
-if ($knownRemoteTip) { $knownRemoteTip = $knownRemoteTip.Trim() }
 $preFetchHead = (git rev-parse --verify HEAD).Trim()
 
 Write-Host "Fetching $Remote..."
@@ -90,30 +90,25 @@ if ($currentRemoteTip) { $currentRemoteTip = $currentRemoteTip.Trim() }
 
 $needsLease = $false
 if ($remoteRefExists) {
-    # A first push has no remote branch to overwrite, and a fast-forward needs no
-    # force; either way this stays a plain push. A force is needed only when the
-    # rebase left local history no longer a fast-forward of the remote tip.
-    if ($currentRemoteTip -ne $knownRemoteTip) {
-        # The remote moved since we last knew it. Safe to force over only if that
-        # new tip is something this checkout already had (e.g. our own push seen
-        # from another angle); if it is not in our pre-fetch history, another actor
-        # advanced the branch and forcing would delete their commits. Refuse.
-        git merge-base --is-ancestor $currentRemoteTip $preFetchHead 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            throw @"
-Refusing to push '$current': $Remote/$current advanced to a commit this checkout never had, so it is ahead or has diverged independently. Forcing would delete it.
+    # The remote tip is safe to force over only if it is already contained in this
+    # checkout's pre-rebase history. The remote-tracking ref is a fetch cache, so
+    # neither its bare value nor "did it change during our fetch" proves provenance:
+    # any prior fetch (IDE auto-fetch, manual `git fetch`) can have pulled a peer's
+    # commit into it. Ancestry against the pre-rebase local tip is the actual proof.
+    git merge-base --is-ancestor $currentRemoteTip $preFetchHead 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        throw @"
+Refusing to push '$current': $Remote/$current holds a commit not in this checkout's local history, so a peer advanced it (possibly seen via an earlier fetch). Forcing would delete it.
 Reconcile first, then re-run:
   git fetch $Remote
   git rebase $Remote/$current      # replay your work on top of theirs
 Inspect what is there with: git log --oneline HEAD..$Remote/$current
 "@
-        }
     }
     git merge-base --is-ancestor $currentRemoteTip HEAD 2>$null
-    # Exit 0: the remote tip is an ancestor of HEAD, so the push fast-forwards and
-    # no force is needed. Non-zero: the rebase rewrote history the remote holds, so
-    # a lease force is required - safe now the remote tip is known to be either what
-    # we pushed or a commit already in local history.
+    # Exit 0: remote tip is an ancestor of HEAD, push fast-forwards, no force needed.
+    # Non-zero: the rebase rewrote history the remote holds — lease force required,
+    # safe now the tip is proven to be in local history.
     $needsLease = ($LASTEXITCODE -ne 0)
 }
 $lease = if ($needsLease) { "--force-with-lease=$destinationRef" } else { $null }

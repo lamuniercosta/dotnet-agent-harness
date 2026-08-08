@@ -25,10 +25,12 @@ means a consuming repo's gates may start failing on code that previously passed.
   advanced independently.** When another actor had pushed a commit this checkout
   never had, the helper's own `git fetch` moved the remote-tracking ref onto that
   commit, so an implicit `--force-with-lease` still succeeded and silently deleted
-  it. The helper now records what it last knew the remote task ref to be *before*
-  fetching, and refuses with reconcile guidance when the remote has moved to a
-  commit not already in local history — forcing only over history this checkout
-  had itself.
+  it. The guard is containment-based: the remote tip must be an ancestor of this
+  checkout's pre-rebase local HEAD (`git merge-base --is-ancestor`), not a
+  change-detection check against the remote-tracking ref (which is only a fetch
+  cache a prior IDE auto-fetch or manual `git fetch` can already pollute). Refuses
+  with reconcile guidance when the tip is not in local history — forcing only over
+  history this checkout already contained.
 
 ## [0.4.0] — 2026-08-08
 
