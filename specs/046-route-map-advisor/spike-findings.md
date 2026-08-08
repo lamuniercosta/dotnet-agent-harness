@@ -79,3 +79,47 @@ that the licence authorises it.
 Per Rule 2, `NOT FOUND` is not permission to act. **No Gemini rows enter the route
 map until an actual `gemini -p` call is observed succeeding under this account.**
 That is a one-command check and the cheapest way to close open questions 3 and 4.
+
+#### Attempt 1 — inconclusive, environment fault
+
+`gemini --version` failed on `SyntaxError: 'node:events' does not provide an
+export named 'addAbortListener'` under **Node.js v18.16.0**. `addAbortListener`
+was added in Node v20.5.0, so the CLI crashes at module load, before reaching
+authentication.
+
+This says nothing about entitlement. The question stays open until the runtime is
+upgraded to Node 20+ and the call is retried.
+
+### Junie runs the same top-tier models — corrects the routing rationale
+
+Junie's model picker (`/model`) lists 22 models, all with provider **JetBrains AI**,
+with per-model pricing and an effort control:
+
+| Model | Input / Output (per Mtok) |
+| --- | --- |
+| Gemini 3.1 Flash Lite / 3.5 Flash Lite | $0.25 / $1.50 |
+| GPT-5.6-LUNA | $0.20 / $1.20 |
+| Gemini 3 Flash Preview *(default)* | $0.50 / $3.00 |
+| Gemini 3.6 Flash | $0.75 / $3.75 |
+| Gemini 3.1 Pro Preview, GPT-5.6-TERRA | $2.00 / $12.00 |
+| Claude Sonnet 5 | $2.00 / $10.00 |
+| Claude Sonnet 4.6 | $3.00 / $15.00 |
+| **Claude Opus 5**, Opus 4.6/4.7/4.8 | $5.00 / $25.00 |
+| GPT-5.5, GPT-5.6-SOL | $5.00 / $30.00 |
+| Claude Fable 5 | $10.00 / $50.00 |
+| Grok 4.3 | $1.25 / $2.50 |
+
+Two corrections follow.
+
+**Junie is not a quality step down.** It reaches Claude Opus 5 and Sonnet 5 —
+the same models the `claude` host runs. Its position below `claude` and `cursor`
+in every route is a **billing** decision, not a quality one: flat-rate capacity is
+already paid for whether used or not, so it is spent first, and metered credits are
+held in reserve. This is also what justifies Junie sitting *above* the floor —
+reaching for equal-quality metered capacity beats dropping a tier.
+
+**Cost is metered, so the tier matters more here than elsewhere.** On Claude Pro or
+Cursor Pro, picking a stronger model costs nothing extra until the periodic limit
+is hit. On Junie every token is priced, so `junie:deep` on Opus-class models drains
+a 10-20 credit budget quickly while `junie:fast` on Flash Lite or GPT-5.6-LUNA
+stretches it by roughly 20x on input.
