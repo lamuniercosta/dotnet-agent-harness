@@ -134,6 +134,13 @@ try {
     & $advisor -Command '/not-a-real-command' -RepoRoot $unpinnedRoot 2>$null | Out-Null
     Assert-That 'advisor exits non-zero for an unknown command' ($LASTEXITCODE -ne 0)
 
+    # -Help must stand alone. Its own parameter set is what stops Command's
+    # (and Ran's) mandatory check from failing the call before help prints.
+    & $advisor -Help 6>&1 | Out-Null
+    Assert-That 'Get-ModelRoute.ps1 -Help exits 0 with no other args' ($LASTEXITCODE -eq 0)
+    & $deviation -Help 6>&1 | Out-Null
+    Assert-That 'Add-RouteDeviation.ps1 -Help exits 0 with no other args' ($LASTEXITCODE -eq 0)
+
     # A repo with no harness.yml at all must still resolve — the shipped
     # defaults are a complete config, so absence is not an error.
     $bareRoot = New-TemporaryRepoRoot

@@ -1,6 +1,6 @@
 # Research: Junie and Gemini CLI capability
 
-Fact-finding only. Research date: **8 August 2026**.  
+Fact-finding only. Research date: **8 August 2026**.
 Sources older than ~12 months are flagged in Notes as possibly stale.
 
 ## Findings
