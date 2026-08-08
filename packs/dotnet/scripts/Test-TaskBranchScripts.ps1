@@ -159,9 +159,9 @@ try {
     finally {
         Pop-Location
     }
-    $expectedLease = "git push --force-with-lease=refs/heads/$taskBranch --set-upstream -- origin HEAD:refs/heads/$taskBranch"
-    Assert-That 'a genuine post-rebase rewrite forces with lease in the guidance' `
-        ($rewriteGuidance -match [regex]::Escape($expectedLease)) $rewriteGuidance
+    $expectedLeasePattern = "git push --force-with-lease=refs/heads/$([regex]::Escape($taskBranch)):[0-9a-f]{7,40} --set-upstream -- origin HEAD:refs/heads/$([regex]::Escape($taskBranch))"
+    Assert-That 'a genuine post-rebase rewrite emits an explicit lease pinned to the remote SHA' `
+        ($rewriteGuidance -match $expectedLeasePattern) $rewriteGuidance
 
     $remoteBeforeRewrite = (Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()
     # Guidance-only already rebased local in place, so the originally-pushed tip is
@@ -257,6 +257,51 @@ try {
         ($pushError -notmatch 'someone|concurrent') $pushError
     Assert-That 'rejected force push leaves the remote task ref unchanged' `
         (((Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()) -eq $remoteBeforeReject) $remoteBeforeReject
+
+    # ── Round 3: the PRINTED guidance command must stay pinned across a later fetch
+    # The emitted force command is run by a human afterward. An implicit lease would
+    # re-read the tracking ref at that point and delete a peer commit fetched in the
+    # meantime; the explicit :SHA pin must make the emitted command refuse instead.
+    Invoke-Git $work fetch origin | Out-Null
+    Invoke-Git $work reset --hard "origin/$taskBranch" | Out-Null
+    Set-Content -LiteralPath (Join-Path $seed 'base-advance-3.txt') -Value 'fourth base change'
+    Invoke-Git $seed add base-advance-3.txt | Out-Null
+    Invoke-Git $seed commit -m 'Advance main for pin test' | Out-Null
+    Invoke-Git $seed push origin main | Out-Null
+
+    Push-Location $work
+    try {
+        $pinGuidance = (& $rebaseScript -BaseBranch main -Remote origin 6>&1 | Out-String)
+    }
+    finally { Pop-Location }
+    $emitted = ($pinGuidance -split "`n" | Where-Object { $_ -match 'git push --force-with-lease' } | Select-Object -First 1).Trim()
+    Assert-That 'guidance emits an explicit lease pinned to a SHA' `
+        ($emitted -match "--force-with-lease=refs/heads/$([regex]::Escape($taskBranch)):[0-9a-f]{7,40}") $emitted
+
+    # A peer advances the branch AFTER guidance printed; local then auto-fetches.
+    $peerClone = Join-Path $tempRoot 'peer-pin'
+    Invoke-Git $tempRoot clone $remote $peerClone | Out-Null
+    Invoke-Git $peerClone config user.email 'harness-tests@example.invalid' | Out-Null
+    Invoke-Git $peerClone config user.name 'Harness Tests' | Out-Null
+    Invoke-Git $peerClone switch $taskBranch | Out-Null
+    Set-Content -LiteralPath (Join-Path $peerClone 'peer-pin.txt') -Value 'peer work after guidance'
+    Invoke-Git $peerClone add peer-pin.txt | Out-Null
+    Invoke-Git $peerClone commit -m 'Peer commit after guidance' | Out-Null
+    Invoke-Git $peerClone push origin $taskBranch | Out-Null
+    $peerPinTip = (Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()
+    Invoke-Git $work fetch origin | Out-Null   # simulates IDE auto-fetch after the print
+
+    $emittedExit = 0
+    Push-Location $work
+    try {
+        Invoke-Expression $emitted 2>&1 | Out-Null
+        $emittedExit = $LASTEXITCODE
+    }
+    finally { Pop-Location }
+    Assert-That 'the emitted pinned command refuses after a post-guidance peer push' `
+        ($emittedExit -ne 0) "exit=$emittedExit"
+    Assert-That 'the post-guidance peer commit is preserved' `
+        (((Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()) -eq $peerPinTip) $peerPinTip
 
     # Capture remote main now: the fixture advanced it legitimately above, so the
     # baseline for "the refusal changed nothing" is its current value, not the

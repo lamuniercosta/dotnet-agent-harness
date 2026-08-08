@@ -111,7 +111,10 @@ Inspect what is there with: git log --oneline HEAD..$Remote/$current
     # safe now the tip is proven to be in local history.
     $needsLease = ($LASTEXITCODE -ne 0)
 }
-$lease = if ($needsLease) { "--force-with-lease=$destinationRef" } else { $null }
+# Pin the lease to the exact tip we validated as contained in local history. The
+# implicit form re-reads the remote-tracking ref at push time, so a fetch between
+# printing the guidance and running it could widen the lease onto a peer commit.
+$lease = if ($needsLease) { "--force-with-lease=${destinationRef}:$currentRemoteTip" } else { $null }
 
 if ($Push) {
     if ($needsLease) {
@@ -131,7 +134,7 @@ else {
     Write-Output ""
     Write-Output "Next: push the rebased branch, then open the PR:"
     if ($needsLease) {
-        Write-Output "  git push --force-with-lease=refs/heads/$current --set-upstream -- $Remote HEAD:refs/heads/$current"
+        Write-Output "  git push --force-with-lease=refs/heads/${current}:$currentRemoteTip --set-upstream -- $Remote HEAD:refs/heads/$current"
     }
     else {
         Write-Output "  git push --set-upstream -- $Remote HEAD:refs/heads/$current"
