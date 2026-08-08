@@ -21,6 +21,14 @@ means a consuming repo's gates may start failing on code that previously passed.
   helper now forces only when the remote task ref already exists **and** the rebase
   left local history diverged from it; a first push, and a re-push that
   fast-forwards, are plain `--set-upstream` pushes.
+- **`rebase-task-branch.ps1` refuses to force over a remote task branch that
+  advanced independently.** When another actor had pushed a commit this checkout
+  never had, the helper's own `git fetch` moved the remote-tracking ref onto that
+  commit, so an implicit `--force-with-lease` still succeeded and silently deleted
+  it. The helper now records what it last knew the remote task ref to be *before*
+  fetching, and refuses with reconcile guidance when the remote has moved to a
+  commit not already in local history — forcing only over history this checkout
+  had itself.
 
 ## [0.4.0] — 2026-08-08
 
