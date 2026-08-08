@@ -67,7 +67,7 @@ Always rebase onto the latest default branch first, so recently merged work is i
 ./scripts/rebase-task-branch.ps1 -Push
 ```
 
-Resolve any conflicts (`git rebase --continue` / `--abort`), then push with `--force-with-lease`. Do **not** open a PR until the branch is cleanly rebased.
+Resolve any conflicts (`git rebase --continue` / `--abort`), then re-run. The script forces with `--force-with-lease` only when the rebase rewrote already-pushed history; a first push is a plain `--set-upstream` push. Do **not** open a PR until the branch is cleanly rebased.
 
 Never open or push a PR automatically — that is a human decision at gate 3.
 
