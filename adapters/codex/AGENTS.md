@@ -223,8 +223,9 @@ Never skip the grill, and never route a failing gate to lowering its threshold.
 - Commit subjects carry the issue as a **suffix, never a prefix**:
   `Add dark mode toggle (#142)`. A leading `#` is stripped as a comment by git's
   editor path, silently losing the reference.
-- Rebase before a PR: `./scripts/rebase-task-branch.ps1 -Push`. Push with
-  `--force-with-lease`.
+- Rebase before a PR: `./scripts/rebase-task-branch.ps1 -Push`. It forces with
+  `--force-with-lease` only when the rebase rewrote already-pushed history; a
+  first push is a plain `--set-upstream` push.
 - Only commit when asked. Never open or push a PR on your own initiative.
 
 ## README maintenance

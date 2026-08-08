@@ -88,6 +88,22 @@ try {
     $upstreamBefore = (Invoke-Git $work rev-parse --abbrev-ref --symbolic-full-name '@{upstream}').Trim()
     $mainBefore = (Invoke-Git $remote rev-parse refs/heads/main).Trim()
 
+    # First push: no remote branch of this name exists yet, so the guidance must be
+    # a plain set-upstream push. A --force-with-lease here overwrites nothing and is
+    # rejected by cruder push guards - the whole point of #78.
+    Push-Location $work
+    try {
+        $firstPushGuidance = (& $rebaseScript -BaseBranch main -Remote origin 6>&1 | Out-String)
+    }
+    finally {
+        Pop-Location
+    }
+    $expectedFirstPush = "git push --set-upstream -- origin HEAD:refs/heads/$taskBranch"
+    Assert-That 'first-push guidance is a plain set-upstream push' `
+        ($firstPushGuidance -match [regex]::Escape($expectedFirstPush)) $firstPushGuidance
+    Assert-That 'first-push guidance does not force with lease' `
+        ($firstPushGuidance -notmatch 'force-with-lease') $firstPushGuidance
+
     Push-Location $work
     try {
         $pushOutput = (& $rebaseScript -BaseBranch main -Remote origin -Push 6>&1 | Out-String)
@@ -119,17 +135,93 @@ try {
     finally {
         Pop-Location
     }
-    $expectedCommand = "git push --force-with-lease=refs/heads/$taskBranch --set-upstream -- origin HEAD:refs/heads/$taskBranch"
-    Assert-That 'no-push guidance prints the same explicit safe refspec' `
+    # The push above created origin/$taskBranch at local HEAD, so a re-push
+    # fast-forwards and needs no force: the guidance stays a plain push.
+    $expectedCommand = "git push --set-upstream -- origin HEAD:refs/heads/$taskBranch"
+    Assert-That 'guidance stays plain when the remote task ref matches local HEAD' `
         ($guidance -match [regex]::Escape($expectedCommand)) $guidance
+    Assert-That 'up-to-date guidance does not force with lease' `
+        ($guidance -notmatch 'force-with-lease') $guidance
 
-    # Reject forced non-fast-forwards in the local bare remote to exercise the
-    # helper's error without manufacturing a claim about why Git rejected it.
+    # ── Genuine post-rebase rewrite: force is both needed and safe ────────────
+    # Advance the base branch so the next rebase actually rewrites the task commit.
+    # The remote task ref still holds the commit this checkout pushed, so a force
+    # only drops history this rebase is knowingly replacing.
+    Set-Content -LiteralPath (Join-Path $seed 'base-advance.txt') -Value 'second base change'
+    Invoke-Git $seed add base-advance.txt | Out-Null
+    Invoke-Git $seed commit -m 'Advance main' | Out-Null
+    Invoke-Git $seed push origin main | Out-Null
+
+    Push-Location $work
+    try {
+        $rewriteGuidance = (& $rebaseScript -BaseBranch main -Remote origin 6>&1 | Out-String)
+    }
+    finally {
+        Pop-Location
+    }
+    $expectedLease = "git push --force-with-lease=refs/heads/$taskBranch --set-upstream -- origin HEAD:refs/heads/$taskBranch"
+    Assert-That 'a genuine post-rebase rewrite forces with lease in the guidance' `
+        ($rewriteGuidance -match [regex]::Escape($expectedLease)) $rewriteGuidance
+
+    $remoteBeforeRewrite = (Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()
+    Push-Location $work
+    try {
+        & $rebaseScript -BaseBranch main -Remote origin -Push 6>&1 | Out-Null
+    }
+    finally {
+        Pop-Location
+    }
+    $remoteAfterRewrite = (Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()
+    $localRewrite = (Invoke-Git $work rev-parse HEAD).Trim()
+    Assert-That 'the legitimate force advances the remote task ref to the rewritten head' `
+        ($remoteAfterRewrite -eq $localRewrite) "remote=$remoteAfterRewrite local=$localRewrite"
+    Assert-That 'the legitimate force actually rewrote the remote ref' `
+        ($remoteAfterRewrite -ne $remoteBeforeRewrite) "before=$remoteBeforeRewrite after=$remoteAfterRewrite"
+
+    # ── Remote-ahead: refuse rather than silently delete another actor's work ──
+    # A second actor advances the remote task ref with a commit this checkout never
+    # had. The helper must REFUSE: a force here would delete it, and an implicit
+    # --force-with-lease would not catch it because the helper's own fetch advances
+    # the lease expectation onto that very commit. This is the data-loss guard.
+    $work2 = Join-Path $tempRoot 'work2'
+    Invoke-Git $tempRoot clone $remote $work2 | Out-Null
+    Invoke-Git $work2 config user.email 'harness-tests@example.invalid' | Out-Null
+    Invoke-Git $work2 config user.name 'Harness Tests' | Out-Null
+    Invoke-Git $work2 switch $taskBranch | Out-Null
+    Set-Content -LiteralPath (Join-Path $work2 'other-actor.txt') -Value 'work this checkout never had'
+    Invoke-Git $work2 add other-actor.txt | Out-Null
+    Invoke-Git $work2 commit -m 'Another actor commit' | Out-Null
+    Invoke-Git $work2 push origin $taskBranch | Out-Null
+    $remoteAhead = (Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()
+
+    $aheadError = ''
+    Push-Location $work
+    try {
+        try { & $rebaseScript -BaseBranch main -Remote origin -Push 6>&1 | Out-Null }
+        catch { $aheadError = $_.Exception.Message }
+    }
+    finally {
+        Pop-Location
+    }
+    Assert-That 'a remote-ahead task ref is refused, not force-rewound' `
+        ($aheadError -match 'never had|ahead|diverged') $aheadError
+    Assert-That 'the refused remote-ahead push preserves the newer remote commit' `
+        (((Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()) -eq $remoteAhead) $remoteAhead
+
+    # ── Push-failure error path (legitimate force the remote rejects) ─────────
+    # Reconcile local onto the other actor's commit so a subsequent force is
+    # legitimate (the remote tip is now what this checkout last knew), advance main
+    # so the rebase rewrites, and have the bare remote reject the non-fast-forward.
+    # This exercises the push-failure message without staging the unsafe ambiguity.
+    Invoke-Git $work fetch origin | Out-Null
+    Invoke-Git $work reset --hard "origin/$taskBranch" | Out-Null
+    Set-Content -LiteralPath (Join-Path $seed 'base-advance-2.txt') -Value 'third base change'
+    Invoke-Git $seed add base-advance-2.txt | Out-Null
+    Invoke-Git $seed commit -m 'Advance main again' | Out-Null
+    Invoke-Git $seed push origin main | Out-Null
     Invoke-Git $remote config receive.denyNonFastForwards true | Out-Null
-    Invoke-Git $work reset --hard origin/main | Out-Null
-    Set-Content -LiteralPath (Join-Path $work 'replacement.txt') -Value 'replacement task history'
-    Invoke-Git $work add replacement.txt | Out-Null
-    Invoke-Git $work commit -m 'Replacement task change' | Out-Null
+    $remoteBeforeReject = (Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()
+
     $pushError = ''
     Push-Location $work
     try {
@@ -144,8 +236,12 @@ try {
     Assert-That 'push failure does not invent a concurrent-update diagnosis' `
         ($pushError -notmatch 'someone|concurrent') $pushError
     Assert-That 'rejected force push leaves the remote task ref unchanged' `
-        (((Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()) -eq $taskRemote)
+        (((Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()) -eq $remoteBeforeReject) $remoteBeforeReject
 
+    # Capture remote main now: the fixture advanced it legitimately above, so the
+    # baseline for "the refusal changed nothing" is its current value, not the
+    # value from before those advances.
+    $mainBeforeProtected = (Invoke-Git $remote rev-parse refs/heads/main).Trim()
     Invoke-Git $work switch main | Out-Null
     $protectedError = ''
     Push-Location $work
@@ -159,7 +255,7 @@ try {
     Assert-That 'the helper rejects a protected current branch before pushing' `
         ($protectedError -match "Refusing to rebase 'main'") $protectedError
     Assert-That 'protected-branch refusal leaves remote main unchanged' `
-        (((Invoke-Git $remote rev-parse refs/heads/main).Trim()) -eq $mainBefore)
+        (((Invoke-Git $remote rev-parse refs/heads/main).Trim()) -eq $mainBeforeProtected)
 
     # ── Worktree intake ──────────────────────────────────────────────────────
     #

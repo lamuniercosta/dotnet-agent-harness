@@ -8,6 +8,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [semantic versioning](https://semver.org/), where a **major** bump
 means a consuming repo's gates may start failing on code that previously passed.
 
+## [0.4.1] — 2026-08-08
+
+### Fixed
+
+- **`rebase-task-branch.ps1` no longer force-pushes on a first push.** The rebase
+  helper passed `--force-with-lease` unconditionally — both on the `-Push` it ran
+  and in the push command it printed — so a task branch that had never been pushed
+  advertised a force even though no remote ref existed to overwrite. On that common
+  path (straight after `new-task-branch.ps1`) the force was pointless and tripped
+  force-push guards, so the documented rebase-then-PR flow failed on first use. The
+  helper now forces only when the remote task ref already exists **and** the rebase
+  left local history diverged from it; a first push, and a re-push that
+  fast-forwards, are plain `--set-upstream` pushes.
+- **`rebase-task-branch.ps1` refuses to force over a remote task branch that
+  advanced independently.** When another actor had pushed a commit this checkout
+  never had, the helper's own `git fetch` moved the remote-tracking ref onto that
+  commit, so an implicit `--force-with-lease` still succeeded and silently deleted
+  it. The helper now records what it last knew the remote task ref to be *before*
+  fetching, and refuses with reconcile guidance when the remote has moved to a
+  commit not already in local history — forcing only over history this checkout
+  had itself.
+
 ## [0.4.0] — 2026-08-08
 
 ### Added
