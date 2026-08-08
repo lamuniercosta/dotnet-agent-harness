@@ -16,8 +16,9 @@
 # Which version of the harness produced this file. Written by install.ps1 and
 # updated on every run - don't edit it by hand. Its job is to answer "what am I
 # on?" after an install changes behaviour, and to let the installer report
-# 0.2.0 -> 0.3.0 rather than overwriting silently.
-harnessVersion: 0.3.0
+# 0.3.0 -> 0.4.0 rather than overwriting silently. Kept in lockstep with the
+# VERSION file by Test-HarnessConfig.ps1, so a fresh install reports the truth.
+harnessVersion: 0.4.0
 
 # Which language pack's gates to run. Only `dotnet` ships today.
 pack: dotnet

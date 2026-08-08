@@ -94,6 +94,13 @@ else {
     if ($missing.Count -gt 0) {
         Write-Host "        missing: $($missing -join ', ')" -ForegroundColor Red
     }
+
+    # A fresh install copies the example verbatim, so its stamp - not the VERSION
+    # file - is what a brand-new consumer reports. If the two drift, the consumer
+    # runs one version's behaviour while reporting another, and the next
+    # same-version install reports a phantom upgrade. Pin them together here.
+    $version = (Get-Content -LiteralPath (Join-Path $repoRoot 'VERSION') -Raw).Trim()
+    Assert-Equal 'example harnessVersion matches the VERSION file' $version $example['harnessVersion']
 }
 
 Write-Host ''
