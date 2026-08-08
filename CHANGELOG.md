@@ -30,7 +30,10 @@ means a consuming repo's gates may start failing on code that previously passed.
   change-detection check against the remote-tracking ref (which is only a fetch
   cache a prior IDE auto-fetch or manual `git fetch` can already pollute). Refuses
   with reconcile guidance when the tip is not in local history — forcing only over
-  history this checkout already contained.
+  history this checkout already contained. The force uses an explicit
+  `--force-with-lease=<ref>:<validated-sha>` pin (both when pushing and in the
+  printed guidance) so a fetch after the command is emitted cannot widen the lease
+  onto a peer commit.
 
 ## [0.4.0] — 2026-08-08
 
