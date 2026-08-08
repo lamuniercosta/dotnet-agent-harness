@@ -18,6 +18,66 @@ $env:DOTNET_CLI_UI_LANGUAGE = 'en'
 # because it is the one piece of this pack that is not about running a gate.
 . (Join-Path $PSScriptRoot '_harness-config.ps1')
 
+# Paths that are never part of the repo under analysis: build output, vendored
+# packages, and NESTED CHECKOUTS. An in-repo git worktree (.claude/worktrees/<name>/
+# from Claude Code's agent isolation, or any *.worktrees/ root) is a different
+# branch's working tree; recursive discovery must not mix its projects and configs
+# into this repo's gate results. new-task-branch.ps1 refuses to CREATE one in-repo,
+# but other tools still do, so the gates exclude them defensively. See #79.
+$script:HarnessExcludedPathPattern =
+    '[\\/](bin|obj|node_modules|artifacts)[\\/]' +
+    '|[\\/]\.claude[\\/]worktrees[\\/]' +
+    '|[\\/][^\\/]+\.worktrees[\\/]'
+
+function Test-HarnessExcludedPath {
+    <#
+      True when a discovered path lies in build output, vendored packages, or a
+      nested checkout, and must not be treated as part of this repo.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Path)
+
+    return $Path -match $script:HarnessExcludedPathPattern
+}
+
+$script:InRepoWorktreeWarningIssued = $false
+
+function Write-InRepoWorktreeWarning {
+    <#
+      Warn once per process when a git worktree lives inside the repo. Discovery
+      excludes them (see Test-HarnessExcludedPath), but a checkout sitting in the
+      tree is still a problem the user should know about: other recursive tools do
+      not share this exclusion. Never throws - a gate must not fail over this.
+    #>
+    param([Parameter(Mandatory)][string]$RepoRoot)
+
+    if ($script:InRepoWorktreeWarningIssued) { return }
+    $script:InRepoWorktreeWarningIssued = $true
+
+    try {
+        $lines = @(git -C $RepoRoot worktree list --porcelain 2>$null)
+        if ($LASTEXITCODE -ne 0) { return }
+    }
+    catch { return }
+
+    $rootFull = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd('\', '/')
+    $inside = foreach ($line in $lines) {
+        if ($line -notmatch '^worktree\s+(.+)$') { continue }
+        $candidate = [System.IO.Path]::GetFullPath($Matches[1].Trim()).TrimEnd('\', '/')
+        if ($candidate -eq $rootFull) { continue }
+        if ($candidate.StartsWith($rootFull + [System.IO.Path]::DirectorySeparatorChar,
+                [System.StringComparison]::OrdinalIgnoreCase) -or
+            $candidate.StartsWith($rootFull + '/', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $candidate
+        }
+    }
+
+    if ($inside) {
+        Write-Warning ("Git worktree(s) live INSIDE this repo and are excluded from gate discovery, " +
+            "but other recursive tools still walk them: $($inside -join ', '). " +
+            "Move them outside the repo (see new-task-branch.ps1 -WorktreeRoot) or remove them with 'git worktree remove'.")
+    }
+}
+
 function Get-RepoRoot {
     <#
       Where the gates look for CodeMetricsConfig.txt, .config/dotnet-tools.json,
@@ -38,15 +98,21 @@ function Get-RepoRoot {
       HARNESS_REPO_ROOT pins them to the project you actually mean.
     #>
     if ($env:HARNESS_REPO_ROOT) {
-        return (Resolve-Path -LiteralPath $env:HARNESS_REPO_ROOT).Path
+        $resolved = (Resolve-Path -LiteralPath $env:HARNESS_REPO_ROOT).Path
+        Write-InRepoWorktreeWarning -RepoRoot $resolved
+        return $resolved
     }
 
     $root = git -C $PSScriptRoot rev-parse --show-toplevel 2>$null
     if ($root) {
-        return $root.Trim()
+        $resolved = $root.Trim()
+        Write-InRepoWorktreeWarning -RepoRoot $resolved
+        return $resolved
     }
 
-    return (Split-Path $PSScriptRoot -Parent)
+    $resolved = (Split-Path $PSScriptRoot -Parent)
+    Write-InRepoWorktreeWarning -RepoRoot $resolved
+    return $resolved
 }
 
 function Test-IsGitRepo {
@@ -96,7 +162,7 @@ function Resolve-BuildTarget {
 
     $projects = @(
         Get-ChildItem -Path $RepoRoot -Include '*.csproj' -File -Depth 2 -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '[\\/](bin|obj|node_modules|artifacts)[\\/]' }
+            Where-Object { -not (Test-HarnessExcludedPath $_.FullName) }
     )
 
     if ($projects.Count -eq 1) {
@@ -151,7 +217,7 @@ function Get-TestProjects {
     else {
         $candidates = @(
             Get-ChildItem -Path $RepoRoot -Filter '*.csproj' -File -Recurse -ErrorAction SilentlyContinue |
-                Where-Object { $_.FullName -notmatch '[\\/](bin|obj)[\\/]' } |
+                Where-Object { -not (Test-HarnessExcludedPath $_.FullName) } |
                 Select-Object -ExpandProperty FullName
         )
     }
@@ -303,7 +369,7 @@ function Resolve-TestProject {
 
     $candidates = @(
         Get-ChildItem -Path $RepoRoot -Include '*.csproj' -File -Depth 3 -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '[\\/](bin|obj|node_modules)[\\/]' } |
+            Where-Object { -not (Test-HarnessExcludedPath $_.FullName) } |
             Where-Object {
                 $name = $_.BaseName
                 foreach ($pattern in $NamePatterns) {
@@ -440,7 +506,7 @@ function Get-EditorConfigFiles {
         # refused to run, which is the correct failure for a missing config but
         # the wrong answer for a config that is right there.
         Get-ChildItem -Path $RepoRoot -Include '.editorconfig' -File -Force -Depth 3 -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '[\\/](bin|obj|node_modules)[\\/]' }
+            Where-Object { -not (Test-HarnessExcludedPath $_.FullName) }
     )
 }
 
@@ -449,7 +515,7 @@ function Get-BuildConfigFiles {
 
     return @(
         Get-ChildItem -Path $RepoRoot -Include 'Directory.Build.props', 'Directory.Packages.props', '*.csproj' -File -Depth 3 -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '[\\/](bin|obj|node_modules)[\\/]' }
+            Where-Object { -not (Test-HarnessExcludedPath $_.FullName) }
     )
 }
 
