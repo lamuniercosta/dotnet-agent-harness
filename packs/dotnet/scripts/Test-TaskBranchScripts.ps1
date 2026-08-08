@@ -88,6 +88,22 @@ try {
     $upstreamBefore = (Invoke-Git $work rev-parse --abbrev-ref --symbolic-full-name '@{upstream}').Trim()
     $mainBefore = (Invoke-Git $remote rev-parse refs/heads/main).Trim()
 
+    # First push: no remote branch of this name exists yet, so the guidance must be
+    # a plain set-upstream push. A --force-with-lease here overwrites nothing and is
+    # rejected by cruder push guards - the whole point of #78.
+    Push-Location $work
+    try {
+        $firstPushGuidance = (& $rebaseScript -BaseBranch main -Remote origin 6>&1 | Out-String)
+    }
+    finally {
+        Pop-Location
+    }
+    $expectedFirstPush = "git push --set-upstream -- origin HEAD:refs/heads/$taskBranch"
+    Assert-That 'first-push guidance is a plain set-upstream push' `
+        ($firstPushGuidance -match [regex]::Escape($expectedFirstPush)) $firstPushGuidance
+    Assert-That 'first-push guidance does not force with lease' `
+        ($firstPushGuidance -notmatch 'force-with-lease') $firstPushGuidance
+
     Push-Location $work
     try {
         $pushOutput = (& $rebaseScript -BaseBranch main -Remote origin -Push 6>&1 | Out-String)
@@ -119,9 +135,13 @@ try {
     finally {
         Pop-Location
     }
-    $expectedCommand = "git push --force-with-lease=refs/heads/$taskBranch --set-upstream -- origin HEAD:refs/heads/$taskBranch"
-    Assert-That 'no-push guidance prints the same explicit safe refspec' `
+    # The push above created origin/$taskBranch at local HEAD, so a re-push
+    # fast-forwards and needs no force: the guidance stays a plain push.
+    $expectedCommand = "git push --set-upstream -- origin HEAD:refs/heads/$taskBranch"
+    Assert-That 'guidance stays plain when the remote task ref matches local HEAD' `
         ($guidance -match [regex]::Escape($expectedCommand)) $guidance
+    Assert-That 'up-to-date guidance does not force with lease' `
+        ($guidance -notmatch 'force-with-lease') $guidance
 
     # Reject forced non-fast-forwards in the local bare remote to exercise the
     # helper's error without manufacturing a claim about why Git rejected it.
@@ -130,6 +150,21 @@ try {
     Set-Content -LiteralPath (Join-Path $work 'replacement.txt') -Value 'replacement task history'
     Invoke-Git $work add replacement.txt | Out-Null
     Invoke-Git $work commit -m 'Replacement task change' | Out-Null
+
+    # Local history now diverges from the remote task ref (both branch off main),
+    # so this is the genuine post-rebase case where a force IS needed: the guidance
+    # must use --force-with-lease.
+    Push-Location $work
+    try {
+        $divergedGuidance = (& $rebaseScript -BaseBranch main -Remote origin 6>&1 | Out-String)
+    }
+    finally {
+        Pop-Location
+    }
+    $expectedLease = "git push --force-with-lease=refs/heads/$taskBranch --set-upstream -- origin HEAD:refs/heads/$taskBranch"
+    Assert-That 'guidance forces with lease once the remote task ref has diverged' `
+        ($divergedGuidance -match [regex]::Escape($expectedLease)) $divergedGuidance
+
     $pushError = ''
     Push-Location $work
     try {

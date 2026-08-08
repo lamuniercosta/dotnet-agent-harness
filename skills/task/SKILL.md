@@ -99,7 +99,7 @@ Always bring the branch up to date so anything merged in the meantime is include
 ./scripts/rebase-task-branch.ps1 -Push
 ```
 
-This fetches and rebases onto the remote default branch. On conflicts it stops with next steps (`git rebase --continue` / `--abort`) — resolve, then re-run. Only after a clean rebase and a `--force-with-lease` push should the PR be opened.
+This fetches and rebases onto the remote default branch, then pushes. On conflicts it stops with next steps (`git rebase --continue` / `--abort`) — resolve, then re-run. The push forces with `--force-with-lease` only when the rebase rewrote history the remote branch already holds; a first push (no remote branch yet) is a plain `--set-upstream` push, so it does not trip a force-push guard. Only open the PR after a clean rebase and push.
 
 ## Rules
 
