@@ -134,12 +134,17 @@ function Resolve-RouteChain {
         }
 
         [PSCustomObject]@{
-            Host     = $hostName
-            Tier     = $tier
-            Model    = $model
-            Effort   = $effort
-            Unpinned = $unpinned
-            IsFloor  = [bool]$isFloor
+            Host      = $hostName
+            Tier      = $tier
+            Model     = $model
+            Effort    = $effort
+            Unpinned  = $unpinned
+            # A host agents.tiers has no schema for (Junie, Gemini, ...) can
+            # never resolve a model, so its Unpinned is not a fixable config
+            # gap the way a known host's is. Callers must not tell the user
+            # to pin something the schema will reject.
+            KnownHost = ($script:RouteMapKnownHosts -contains $hostName)
+            IsFloor   = [bool]$isFloor
         }
     }
 
@@ -164,7 +169,10 @@ function Write-RouteLogEntry {
 function Format-RouteEntry {
     param([Parameter(Mandatory)]$Entry)
 
-    $modelPart = if ($Entry.Unpinned) { 'unpinned' } else { $Entry.Model }
+    $modelPart =
+        if (-not $Entry.KnownHost) { 'host-level advice (no tier data)' }
+        elseif ($Entry.Unpinned) { 'unpinned' }
+        else { $Entry.Model }
     $effortPart = if ($Entry.Effort) { ", effort=$($Entry.Effort)" } else { '' }
     $floorTag = if ($Entry.IsFloor) { '  [floor]' } else { '' }
     "$($Entry.Host):$($Entry.Tier) -> $modelPart$effortPart$floorTag"

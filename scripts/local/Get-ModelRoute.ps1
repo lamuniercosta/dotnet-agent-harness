@@ -80,10 +80,21 @@ foreach ($entry in $resolved.Chain) {
     Write-Host "  $(Format-RouteEntry -Entry $entry)"
 }
 
-$anyUnpinned = @($resolved.Chain | Where-Object { $_.Unpinned }).Count -gt 0
-if ($anyUnpinned) {
+# Only a KNOWN host's unpinned tier is a fixable config gap. Suggesting a pin
+# for a host agents.tiers has no schema for would send the user to an edit the
+# parser rejects.
+$fixableUnpinned = @($resolved.Chain | Where-Object { $_.Unpinned -and $_.KnownHost }).Count -gt 0
+$hostLevelOnly = @($resolved.Chain | Where-Object { -not $_.KnownHost })
+
+if ($fixableUnpinned) {
     Write-Host ''
     Write-Host "Some tiers are unpinned in this repo's harness.yml — pin 'agents.tiers.<tier>.<host>.model' there for a concrete model." -ForegroundColor DarkGray
+}
+if ($hostLevelOnly.Count -gt 0) {
+    $uniqueHosts = @($hostLevelOnly | ForEach-Object { $_.Host } | Sort-Object -Unique)
+    $names = $uniqueHosts -join ', '
+    $verb = if ($uniqueHosts.Count -eq 1) { 'sits' } else { 'sit' }
+    Write-Host "$names $verb outside agents.tiers, so the tier is advice about what to select in that tool, not a resolved model." -ForegroundColor DarkGray
 }
 
 if (-not $NoLog) {

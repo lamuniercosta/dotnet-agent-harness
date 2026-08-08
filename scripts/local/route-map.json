@@ -1,5 +1,6 @@
 {
   "schemaVersion": 1,
+  "notes": "Junie draws JetBrains AI credits (All Products Pack -> AI Pro), a pool separate from Claude Pro, Cursor, and Codex. It therefore sits immediately above the floor on commands whose floor is a real quality cliff: reaching for fresh capacity beats degrading quality. The credit budget is small (10-20 per 30 days, and JetBrains recommends Ultimate for regular use), so Junie is reserve capacity, not a workhorse -- it is absent from cheap commands where the floor costs little anyway. Junie has no agents.tiers entry, so its tier resolves unpinned: the tier is advice about what to set via --model and the effort control, not a resolved model. Gemini is deliberately absent -- see spike-findings.md.",
   "commands": {
     "/task": {
       "why": "Reading an issue and naming a branch is deterministic script execution; no reasoning tier does this better than another.",
@@ -12,6 +13,7 @@
       "why": "Interrogating a plan for hidden assumptions and coining precise glossary terms is the judgment work that separates tiers; a shallow model produces a shallow grill and the miss is silent.",
       "route": [
         { "host": "claude", "tier": "deep" },
+        { "host": "junie", "tier": "deep" },
         { "host": "cursor", "tier": "deep", "floor": true }
       ]
     },
@@ -35,6 +37,7 @@
       "route": [
         { "host": "claude", "tier": "deep" },
         { "host": "cursor", "tier": "deep" },
+        { "host": "junie", "tier": "deep" },
         { "host": "claude", "tier": "balanced", "floor": true }
       ]
     },
@@ -49,6 +52,7 @@
       "why": "Cross-checks spec, plan, tasks, and the constitution for contradictions; catching a subtle inconsistency is exactly the kind of miss that stays silent on a weaker model.",
       "route": [
         { "host": "claude", "tier": "deep" },
+        { "host": "junie", "tier": "deep" },
         { "host": "claude", "tier": "balanced", "floor": true }
       ]
     },
@@ -57,6 +61,7 @@
       "route": [
         { "host": "claude", "tier": "deep" },
         { "host": "cursor", "tier": "deep" },
+        { "host": "junie", "tier": "deep" },
         { "host": "claude", "tier": "balanced", "floor": true }
       ]
     },
@@ -78,6 +83,7 @@
       "why": "Three-axis diff review; the risk axis (security, concurrency, coverage gaps) needs real judgment even though standards and spec checks are closer to a checklist.",
       "route": [
         { "host": "claude", "tier": "deep" },
+        { "host": "junie", "tier": "balanced" },
         { "host": "cursor", "tier": "balanced", "floor": true }
       ]
     },
@@ -85,6 +91,7 @@
       "why": "Interprets Stryker survivors and decides whether the invariant or the test is wrong; a mistaken call here either hides a real gap or adds a test that proves nothing.",
       "route": [
         { "host": "claude", "tier": "deep" },
+        { "host": "junie", "tier": "deep" },
         { "host": "claude", "tier": "balanced", "floor": true }
       ]
     },
