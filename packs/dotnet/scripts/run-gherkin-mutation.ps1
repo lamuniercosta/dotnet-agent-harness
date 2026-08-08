@@ -43,7 +43,8 @@ EXAMPLES:
 $repoRoot = Get-RepoRoot
 $acceptanceProject = Resolve-TestProject -RepoRoot $repoRoot -Explicit $Project -NamePatterns @('*AcceptanceTests', '*.Acceptance', '*AcceptanceTest')
 
-$featureFiles = @(Get-ChildItem -Path (Join-Path $repoRoot $SpecsPath) -Recurse -Filter '*.feature' -ErrorAction SilentlyContinue)
+$featureFiles = @(Get-ChildItem -Path (Join-Path $repoRoot $SpecsPath) -Recurse -Filter '*.feature' -ErrorAction SilentlyContinue |
+    Where-Object { -not (Test-HarnessExcludedPath -Path $_.FullName -RepoRoot $repoRoot) })
 
 if ($featureFiles.Count -eq 0) {
     # SKIPPED (exit 2), not passed (exit 0). Acceptance tests are opt-in, so

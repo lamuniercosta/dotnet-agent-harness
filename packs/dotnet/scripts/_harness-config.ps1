@@ -244,6 +244,57 @@ function Get-HarnessValue {
     return (Get-HarnessConfig -RepoRoot $RepoRoot)[$Key]
 }
 
+# Paths that are never part of the repo under analysis: build output, vendored
+# packages, and NESTED CHECKOUTS. An in-repo git worktree (.claude/worktrees/<name>/
+# from Claude Code's agent isolation, or any *.worktrees/ root) is a different
+# branch's working tree; recursive discovery must not mix its projects and configs
+# into this repo's gate results. new-task-branch.ps1 refuses to CREATE one in-repo,
+# but other tools still do, so the gates exclude them defensively. See #79.
+$script:HarnessExcludedPathPattern =
+    '[\\/](bin|obj|node_modules|artifacts)[\\/]' +
+    '|[\\/]\.claude[\\/]worktrees[\\/]' +
+    '|[\\/][^\\/]+\.worktrees[\\/]'
+
+function Test-HarnessExcludedPath {
+    <#
+      True when a discovered path lies in build output, vendored packages, or a
+      nested checkout, and must not be treated as part of this repo.
+
+      Matching is done on the portion of the path BELOW RepoRoot. Ancestors of the
+      repo must never exclude it: the harness's own default task layout is
+      <repo>.worktrees/<task>, so an absolute match would exclude a task worktree's
+      own files. The same applies to a repo living under a directory named obj, bin,
+      or artifacts. See #79.
+    #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Path,
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    if ([string]::IsNullOrEmpty($Path)) { return $false }
+
+    $rootFull = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd('\', '/')
+    try { $pathFull = [System.IO.Path]::GetFullPath($Path) } catch { $pathFull = $Path }
+
+    $comparison = [System.StringComparison]::OrdinalIgnoreCase
+    $subject =
+        if ($pathFull.Equals($rootFull, $comparison)) {
+            ''
+        }
+        elseif ($pathFull.StartsWith($rootFull + [System.IO.Path]::DirectorySeparatorChar, $comparison) -or
+                $pathFull.StartsWith($rootFull + '/', $comparison)) {
+            # Keeps a leading separator, so a top-level 'bin/' still matches.
+            $pathFull.Substring($rootFull.Length)
+        }
+        else {
+            # Defensive: discovery always passes paths under RepoRoot. For anything
+            # else there is no meaningful relative form, so fall back to the whole path.
+            $pathFull
+        }
+
+    return $subject -match $script:HarnessExcludedPathPattern
+}
+
 function Resolve-Solution {
     <#
       The single entry point for solution resolution.
@@ -272,7 +323,7 @@ function Resolve-Solution {
 
     $candidates = @(
         Get-ChildItem -Path $RepoRoot -Include '*.slnx', '*.sln' -File -Depth 2 -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -notmatch '[\\/](bin|obj|node_modules|artifacts)[\\/]' }
+            Where-Object { -not (Test-HarnessExcludedPath -Path $_.FullName -RepoRoot $RepoRoot) }
     )
 
     if ($candidates.Count -eq 0) { return $null }

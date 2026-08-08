@@ -275,6 +275,31 @@ try {
     finally {
         Remove-Item -LiteralPath $wtParent -Recurse -Force -ErrorAction SilentlyContinue
     }
+
+    # ── #79 round 3: a nested checkout's solution must not become the gate target ─
+    # Resolve-BuildTarget prefers a resolved solution over project candidates, so an
+    # unfiltered Resolve-Solution would hand it a nested worktree's .sln.
+    Write-Host 'Nested solution must not become the gate target (#79 round 3):'
+    $repo = New-TempRepo
+    New-Item -ItemType Directory -Path (Join-Path $repo 'src') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $repo 'src/App.csproj') -Value '<Project />'
+    $nestedWt = Join-Path $repo 'inner.worktrees/task-x'
+    New-Item -ItemType Directory -Path $nestedWt -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $nestedWt 'Nested.sln') -Value 'Microsoft Visual Studio Solution File, Format Version 12.00'
+
+    if (Test-Path variable:script:HarnessConfigCache) { Remove-Variable -Scope script -Name HarnessConfigCache }
+    Assert-Null 'a nested worktree solution is not discovered' `
+        (Resolve-Solution -RepoRoot $repo)
+    Assert-Equal 'Resolve-BuildTarget falls back to the outer project' `
+        (Join-Path $repo 'src/App.csproj') (Resolve-BuildTarget -RepoRoot $repo)
+
+    # Same for a nested .claude/worktrees solution.
+    $nestedClaude = Join-Path $repo '.claude/worktrees/agent-z'
+    New-Item -ItemType Directory -Path $nestedClaude -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $nestedClaude 'Agent.sln') -Value 'Microsoft Visual Studio Solution File, Format Version 12.00'
+    if (Test-Path variable:script:HarnessConfigCache) { Remove-Variable -Scope script -Name HarnessConfigCache }
+    Assert-Null 'a nested .claude/worktrees solution is not discovered' `
+        (Resolve-Solution -RepoRoot $repo)
 }
 finally {
     foreach ($r in $repos) {

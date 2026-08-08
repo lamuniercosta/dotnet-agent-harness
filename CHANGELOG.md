@@ -40,9 +40,10 @@ means a consuming repo's gates may start failing on code that previously passed.
   `.editorconfig` files discovered as part of the outer repo, mixing one branch's
   files into another's gate results. `new-task-branch.ps1` already refuses to
   create such a worktree; the gates now exclude them defensively too, through a
-  single shared `Test-HarnessExcludedPath` used by all five discovery sites
-  (which previously carried three different exclusion lists). The exclusion is
-  evaluated relative to the repo root, so a task worktree under
+  single shared `Test-HarnessExcludedPath` used by every recursive discovery site
+  in the pack: the five project/config sites, solution discovery
+  (`Resolve-Solution`), and feature-file discovery (`run-gherkin-mutation.ps1`).
+  The exclusion is evaluated relative to the repo root, so a task worktree under
   `<repo>.worktrees/<task>` keeps discovering its own files while nested
   checkouts below it stay excluded. A worktree found inside the repo is also
   warned about once per run rather than staying silent.
