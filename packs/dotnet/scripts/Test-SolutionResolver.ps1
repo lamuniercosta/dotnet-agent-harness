@@ -202,6 +202,36 @@ try {
         Write-Host "  FAIL  refusal lists both candidates - threw=$threw msg=$msg" -ForegroundColor Red
         $script:failures++
     }
+
+    # ── #79: nested checkouts are not part of the repo under analysis ────────────
+    Write-Host 'Nested checkouts (#79):'
+    $repo = New-TempRepo
+    New-Item -ItemType Directory -Path (Join-Path $repo 'src') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $repo 'src/App.csproj') -Value '<Project />'
+
+    # A .csproj inside an in-repo agent worktree must be invisible to discovery.
+    $nested = Join-Path $repo '.claude/worktrees/agent-x/src'
+    New-Item -ItemType Directory -Path $nested -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $nested 'Nested.csproj') -Value '<Project />'
+    Set-Content -LiteralPath (Join-Path (Join-Path $repo '.claude/worktrees/agent-x') 'Directory.Build.props') -Value '<Project />'
+    Set-Content -LiteralPath (Join-Path (Join-Path $repo '.claude/worktrees/agent-x') '.editorconfig') -Value 'root = true'
+
+    Assert-Equal 'an in-repo .claude/worktrees path is excluded' `
+        $true (Test-HarnessExcludedPath (Join-Path $nested 'Nested.csproj'))
+    Assert-Equal 'a sibling *.worktrees path is excluded' `
+        $true (Test-HarnessExcludedPath 'F:\Dev\repo.worktrees\bug-1\src\A.csproj')
+    Assert-Equal 'a normal source path is NOT excluded' `
+        $false (Test-HarnessExcludedPath (Join-Path $repo 'src/App.csproj'))
+    Assert-Equal 'build output is still excluded' `
+        $true (Test-HarnessExcludedPath (Join-Path $repo 'src/bin/Debug/App.csproj'))
+
+    # Discovery helpers must agree with the predicate.
+    $discoveredConfigs = @(Get-BuildConfigFiles -RepoRoot $repo | ForEach-Object { $_.FullName })
+    Assert-Equal 'Get-BuildConfigFiles skips the nested worktree' `
+        $false ([bool]($discoveredConfigs -match 'worktrees'))
+    $discoveredEditorConfigs = @(Get-EditorConfigFiles -RepoRoot $repo | ForEach-Object { $_.FullName })
+    Assert-Equal 'Get-EditorConfigFiles skips the nested worktree' `
+        $false ([bool]($discoveredEditorConfigs -match 'worktrees'))
 }
 finally {
     foreach ($r in $repos) {

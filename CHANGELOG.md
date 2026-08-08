@@ -34,6 +34,15 @@ means a consuming repo's gates may start failing on code that previously passed.
   `--force-with-lease=<ref>:<validated-sha>` pin (both when pushing and in the
   printed guidance) so a fetch after the command is emitted cannot widen the lease
   onto a peer commit.
+- **Gate discovery ignores nested checkouts.** A git worktree inside the repo —
+  `.claude/worktrees/<name>/` from Claude Code's agent isolation, or any
+  `*.worktrees/` root — had its `.csproj`, `Directory.Build.props`, and
+  `.editorconfig` files discovered as part of the outer repo, mixing one branch's
+  files into another's gate results. `new-task-branch.ps1` already refuses to
+  create such a worktree; the gates now exclude them defensively too, through a
+  single shared `Test-HarnessExcludedPath` used by all five discovery sites
+  (which previously carried three different exclusion lists). A worktree found
+  inside the repo is also warned about once per run rather than staying silent.
 
 ## [0.4.0] — 2026-08-08
 
