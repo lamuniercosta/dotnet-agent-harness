@@ -49,7 +49,7 @@ _Avoid_: Directory ownership
 ## Agent delegation
 
 **Agent tier**:
-A named cost and capability class assigned to an agent profile according to the cost of a silent miss, not the apparent difficulty of its work.
+A named cost and capability class assigned to a unit of delegated work — an agent profile or a pipeline command — according to the cost of a silent miss, not the apparent difficulty of the work.
 _Avoid_: Model tier, difficulty level
 
 **Canonical agent profile**:
@@ -67,6 +67,32 @@ _Avoid_: Generic subtask, delegation by default
 **Writable errand**:
 A cheap errand that applies one specified transformation to an explicit set of files exclusively owned by that errand until it returns.
 _Avoid_: Open-ended implementation, overlapping edit
+
+## Model routing
+
+**Route map**:
+The authored table of judgments about work: which host and tier each pipeline command calls for. It records what the work demands, never what a model provides.
+_Avoid_: Capability map, model map
+
+**Route**:
+The preference-ordered chain of options a command may be run on, best first. Each option names a host and a tier, and resolves to the model that tier names for that host, or to an explicit unpinned when the tier names none.
+_Avoid_: Assignment, routing decision
+
+**Floor**:
+The lowest option in a route that still does the work without losing quality. Below it the honest answer is that the work waits, not that it proceeds on what remains.
+_Avoid_: Minimum tier, last resort
+
+**Deviation**:
+An occasion where a human ran a command on an option other than the head of its route. Evidence about an authored judgment, not an error.
+_Avoid_: Override, violation
+
+**Floor breach**:
+A deviation that ran below the floor. It records work knowingly done at reduced quality, and is counted separately from a deviation within the route.
+_Avoid_: Downgrade, fallback
+
+**Capability map**:
+The authored record of what models provide: which one is stronger for a kind of work, and which clears a given quality bar. It is the counterpart of the route map and does not yet exist.
+_Avoid_: Route map, benchmark results
 
 ## Solution resolution
 

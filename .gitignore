@@ -36,3 +36,7 @@ Thumbs.db
 !/.agents/skills/start-issue/
 !/.agents/skills/start-issue/**
 /scripts/local/.self-skills-manifest.json
+
+# Route-map advisor log: personal usage evidence, not the authored artifact.
+# route-map.json itself IS tracked (it's the durable output of #46).
+/scripts/local/route-log.jsonl
