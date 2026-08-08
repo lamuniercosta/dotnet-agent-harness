@@ -41,8 +41,11 @@ means a consuming repo's gates may start failing on code that previously passed.
   files into another's gate results. `new-task-branch.ps1` already refuses to
   create such a worktree; the gates now exclude them defensively too, through a
   single shared `Test-HarnessExcludedPath` used by all five discovery sites
-  (which previously carried three different exclusion lists). A worktree found
-  inside the repo is also warned about once per run rather than staying silent.
+  (which previously carried three different exclusion lists). The exclusion is
+  evaluated relative to the repo root, so a task worktree under
+  `<repo>.worktrees/<task>` keeps discovering its own files while nested
+  checkouts below it stay excluded. A worktree found inside the repo is also
+  warned about once per run rather than staying silent.
 
 ## [0.4.0] — 2026-08-08
 

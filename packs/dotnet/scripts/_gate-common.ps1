@@ -33,10 +33,40 @@ function Test-HarnessExcludedPath {
     <#
       True when a discovered path lies in build output, vendored packages, or a
       nested checkout, and must not be treated as part of this repo.
-    #>
-    param([Parameter(Mandatory)][AllowEmptyString()][string]$Path)
 
-    return $Path -match $script:HarnessExcludedPathPattern
+      Matching is done on the portion of the path BELOW RepoRoot. Ancestors of the
+      repo must never exclude it: the harness's own default task layout is
+      <repo>.worktrees/<task>, so an absolute match would exclude a task worktree's
+      own files. The same applies to a repo living under a directory named obj, bin,
+      or artifacts. See #79.
+    #>
+    param(
+        [Parameter(Mandatory)][AllowEmptyString()][string]$Path,
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    if ([string]::IsNullOrEmpty($Path)) { return $false }
+
+    $rootFull = [System.IO.Path]::GetFullPath($RepoRoot).TrimEnd('\', '/')
+    try { $pathFull = [System.IO.Path]::GetFullPath($Path) } catch { $pathFull = $Path }
+
+    $comparison = [System.StringComparison]::OrdinalIgnoreCase
+    $subject =
+        if ($pathFull.Equals($rootFull, $comparison)) {
+            ''
+        }
+        elseif ($pathFull.StartsWith($rootFull + [System.IO.Path]::DirectorySeparatorChar, $comparison) -or
+                $pathFull.StartsWith($rootFull + '/', $comparison)) {
+            # Keeps a leading separator, so a top-level 'bin/' still matches.
+            $pathFull.Substring($rootFull.Length)
+        }
+        else {
+            # Defensive: discovery always passes paths under RepoRoot. For anything
+            # else there is no meaningful relative form, so fall back to the whole path.
+            $pathFull
+        }
+
+    return $subject -match $script:HarnessExcludedPathPattern
 }
 
 $script:InRepoWorktreeWarningIssued = $false
@@ -162,7 +192,7 @@ function Resolve-BuildTarget {
 
     $projects = @(
         Get-ChildItem -Path $RepoRoot -Include '*.csproj' -File -Depth 2 -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { -not (Test-HarnessExcludedPath $_.FullName) }
+            Where-Object { -not (Test-HarnessExcludedPath -Path $_.FullName -RepoRoot $RepoRoot) }
     )
 
     if ($projects.Count -eq 1) {
@@ -217,7 +247,7 @@ function Get-TestProjects {
     else {
         $candidates = @(
             Get-ChildItem -Path $RepoRoot -Filter '*.csproj' -File -Recurse -ErrorAction SilentlyContinue |
-                Where-Object { -not (Test-HarnessExcludedPath $_.FullName) } |
+                Where-Object { -not (Test-HarnessExcludedPath -Path $_.FullName -RepoRoot $RepoRoot) } |
                 Select-Object -ExpandProperty FullName
         )
     }
@@ -369,7 +399,7 @@ function Resolve-TestProject {
 
     $candidates = @(
         Get-ChildItem -Path $RepoRoot -Include '*.csproj' -File -Depth 3 -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { -not (Test-HarnessExcludedPath $_.FullName) } |
+            Where-Object { -not (Test-HarnessExcludedPath -Path $_.FullName -RepoRoot $RepoRoot) } |
             Where-Object {
                 $name = $_.BaseName
                 foreach ($pattern in $NamePatterns) {
@@ -506,7 +536,7 @@ function Get-EditorConfigFiles {
         # refused to run, which is the correct failure for a missing config but
         # the wrong answer for a config that is right there.
         Get-ChildItem -Path $RepoRoot -Include '.editorconfig' -File -Force -Depth 3 -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { -not (Test-HarnessExcludedPath $_.FullName) }
+            Where-Object { -not (Test-HarnessExcludedPath -Path $_.FullName -RepoRoot $RepoRoot) }
     )
 }
 
@@ -515,7 +545,7 @@ function Get-BuildConfigFiles {
 
     return @(
         Get-ChildItem -Path $RepoRoot -Include 'Directory.Build.props', 'Directory.Packages.props', '*.csproj' -File -Depth 3 -Recurse -ErrorAction SilentlyContinue |
-            Where-Object { -not (Test-HarnessExcludedPath $_.FullName) }
+            Where-Object { -not (Test-HarnessExcludedPath -Path $_.FullName -RepoRoot $RepoRoot) }
     )
 }
 

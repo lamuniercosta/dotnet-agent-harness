@@ -217,13 +217,11 @@ try {
     Set-Content -LiteralPath (Join-Path (Join-Path $repo '.claude/worktrees/agent-x') '.editorconfig') -Value 'root = true'
 
     Assert-Equal 'an in-repo .claude/worktrees path is excluded' `
-        $true (Test-HarnessExcludedPath (Join-Path $nested 'Nested.csproj'))
-    Assert-Equal 'a sibling *.worktrees path is excluded' `
-        $true (Test-HarnessExcludedPath 'F:\Dev\repo.worktrees\bug-1\src\A.csproj')
+        $true (Test-HarnessExcludedPath -Path (Join-Path $nested 'Nested.csproj') -RepoRoot $repo)
     Assert-Equal 'a normal source path is NOT excluded' `
-        $false (Test-HarnessExcludedPath (Join-Path $repo 'src/App.csproj'))
+        $false (Test-HarnessExcludedPath -Path (Join-Path $repo 'src/App.csproj') -RepoRoot $repo)
     Assert-Equal 'build output is still excluded' `
-        $true (Test-HarnessExcludedPath (Join-Path $repo 'src/bin/Debug/App.csproj'))
+        $true (Test-HarnessExcludedPath -Path (Join-Path $repo 'src/bin/Debug/App.csproj') -RepoRoot $repo)
 
     # Discovery helpers must agree with the predicate.
     $discoveredConfigs = @(Get-BuildConfigFiles -RepoRoot $repo | ForEach-Object { $_.FullName })
@@ -232,6 +230,51 @@ try {
     $discoveredEditorConfigs = @(Get-EditorConfigFiles -RepoRoot $repo | ForEach-Object { $_.FullName })
     Assert-Equal 'Get-EditorConfigFiles skips the nested worktree' `
         $false ([bool]($discoveredEditorConfigs -match 'worktrees'))
+
+    # ── #79 round 2: a RepoRoot that is itself <repo>.worktrees/<task> ───────────
+    # The harness's default task layout. The checkout's own files must stay
+    # discoverable; only nested checkouts BELOW it are excluded.
+    Write-Host 'Task worktree as RepoRoot (#79 round 2):'
+    $wtParent = Join-Path ([System.IO.Path]::GetTempPath()) ("gate-excl-{0}" -f [guid]::NewGuid())
+    $taskRoot = Join-Path $wtParent 'myrepo.worktrees/bug-1-fix'
+    New-Item -ItemType Directory -Path (Join-Path $taskRoot 'src') -Force | Out-Null
+    Set-Content -LiteralPath (Join-Path $taskRoot 'src/App.csproj') -Value '<Project />'
+    Set-Content -LiteralPath (Join-Path $taskRoot 'Directory.Build.props') -Value '<Project />'
+    Set-Content -LiteralPath (Join-Path $taskRoot '.editorconfig') -Value 'root = true'
+
+    try {
+        Assert-Equal 'a task worktree does not exclude its own source' `
+            $false (Test-HarnessExcludedPath -Path (Join-Path $taskRoot 'src/App.csproj') -RepoRoot $taskRoot)
+        Assert-Equal 'a task worktree does not exclude its own build props' `
+            $false (Test-HarnessExcludedPath -Path (Join-Path $taskRoot 'Directory.Build.props') -RepoRoot $taskRoot)
+
+        $wtConfigs = @(Get-BuildConfigFiles -RepoRoot $taskRoot | ForEach-Object { $_.FullName })
+        Assert-Equal 'Get-BuildConfigFiles finds the task worktree own files' `
+            $true ($wtConfigs.Count -gt 0)
+        $wtEditor = @(Get-EditorConfigFiles -RepoRoot $taskRoot | ForEach-Object { $_.FullName })
+        Assert-Equal 'Get-EditorConfigFiles finds the task worktree own .editorconfig' `
+            $true ($wtEditor.Count -gt 0)
+
+        # Nested checkouts BELOW the task worktree are still excluded.
+        $deepClaude = Join-Path $taskRoot '.claude/worktrees/agent-y/src'
+        New-Item -ItemType Directory -Path $deepClaude -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $deepClaude 'Deep.csproj') -Value '<Project />'
+        Assert-Equal 'a nested .claude/worktrees below a task worktree is excluded' `
+            $true (Test-HarnessExcludedPath -Path (Join-Path $deepClaude 'Deep.csproj') -RepoRoot $taskRoot)
+
+        $deepWt = Join-Path $taskRoot 'inner.worktrees/other/src'
+        New-Item -ItemType Directory -Path $deepWt -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $deepWt 'Other.csproj') -Value '<Project />'
+        Assert-Equal 'a nested *.worktrees below a task worktree is excluded' `
+            $true (Test-HarnessExcludedPath -Path (Join-Path $deepWt 'Other.csproj') -RepoRoot $taskRoot)
+
+        $wtConfigsAfter = @(Get-BuildConfigFiles -RepoRoot $taskRoot | ForEach-Object { $_.FullName })
+        Assert-Equal 'nested checkout files do not leak into task worktree discovery' `
+            $false ([bool]($wtConfigsAfter -match 'worktrees[\\/](agent-y|other)'))
+    }
+    finally {
+        Remove-Item -LiteralPath $wtParent -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }
 finally {
     foreach ($r in $repos) {
