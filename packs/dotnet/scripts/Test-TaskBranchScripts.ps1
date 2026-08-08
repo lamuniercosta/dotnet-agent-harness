@@ -164,6 +164,10 @@ try {
         ($rewriteGuidance -match [regex]::Escape($expectedLease)) $rewriteGuidance
 
     $remoteBeforeRewrite = (Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()
+    # Guidance-only already rebased local in place, so the originally-pushed tip is
+    # no longer in HEAD. Reset to the still-remote tip so -Push's pre-rebase HEAD
+    # still contains it (avoids the accepted false-refuse across invocations).
+    Invoke-Git $work reset --hard $remoteBeforeRewrite | Out-Null
     Push-Location $work
     try {
         & $rebaseScript -BaseBranch main -Remote origin -Push 6>&1 | Out-Null
@@ -204,8 +208,24 @@ try {
         Pop-Location
     }
     Assert-That 'a remote-ahead task ref is refused, not force-rewound' `
-        ($aheadError -match 'never had|ahead|diverged') $aheadError
+        ($aheadError -match 'not in this checkout''s local history|local history') $aheadError
     Assert-That 'the refused remote-ahead push preserves the newer remote commit' `
+        (((Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()) -eq $remoteAhead) $remoteAhead
+
+    # Reviewer's stricter case: a prior fetch already pulled the peer commit into
+    # the remote-tracking ref before the helper runs. Containment (not change-
+    # detection) must still refuse. This is the case that caught c8ba084.
+    Invoke-Git $work fetch origin | Out-Null   # origin/<branch> now = the peer commit
+    $prefetchAheadError = ''
+    Push-Location $work
+    try {
+        try { & $rebaseScript -BaseBranch main -Remote origin -Push 6>&1 | Out-Null }
+        catch { $prefetchAheadError = $_.Exception.Message }
+    }
+    finally { Pop-Location }
+    Assert-That 'a pre-fetched remote-ahead tip is still refused' `
+        ($prefetchAheadError -match 'not in this checkout''s local history|local history') $prefetchAheadError
+    Assert-That 'the pre-fetched remote-ahead refusal preserves the peer commit' `
         (((Invoke-Git $remote rev-parse "refs/heads/$taskBranch").Trim()) -eq $remoteAhead) $remoteAhead
 
     # ── Push-failure error path (legitimate force the remote rejects) ─────────
