@@ -223,18 +223,29 @@ is hit. On Junie every token is priced, so `junie:deep` on Opus-class models dra
 a 10-20 credit budget quickly while `junie:fast` on Flash Lite or GPT-5.6-LUNA
 stretches it by roughly 20x on input.
 
-### Antigravity drives headlessly and reviews correctly — tool use needs permission wiring
+### Antigravity drives headlessly; its review was plausible but incomplete — tool use needs permission wiring
 
 Trial run of `agy` 1.1.11 as the deep-tier reserve the advisor lists at #3 for
 `/implement`, confirming the route is usable in practice, not just on paper:
 
 - **Headless dispatch works.** `agy -p "Reply with exactly: ROUTE_TEST_OK"
   --output-format text --model gemini-3.1-pro-low` returned `ROUTE_TEST_OK` in ~13s.
-- **A real review is accurate.** Given the PR #80 `rebase-task-branch.ps1` change
-  inline, `gemini-3.1-pro-high` correctly answered that the push logic cannot force
-  over a remote-only commit, citing the exact guard variables (`$knownRemoteTip`,
-  `$currentRemoteTip`, `$preFetchHead`) and the `merge-base --is-ancestor` refusal.
-  ~16s.
+- **A real review ran, but was plausible-incomplete, not correct.** Given the PR #80
+  `rebase-task-branch.ps1` change at commit `c8ba084` inline, `gemini-3.1-pro-high`
+  (~16s) read the *nominal* guard and explained it in the straightforward case,
+  citing `$knownRemoteTip`/`$currentRemoteTip`/`$preFetchHead` and the
+  `merge-base --is-ancestor` refusal. But its confident verdict — that the logic
+  "cannot force over a remote-only commit" — was **wrong**: `c8ba084` still had two
+  high-severity data-loss holes that a separate reviewer then reproduced and that
+  drove the next two revisions — a prior fetch poisoning `$knownRemoteTip`
+  ([pre-fetch finding](https://github.com/lamuniercosta/dotnet-agent-harness/pull/80#issuecomment-5227939433)),
+  and, after the containment fix, an implicit lease widening after the guidance was
+  printed ([post-guidance finding](https://github.com/lamuniercosta/dotnet-agent-harness/pull/80#issuecomment-5228162790)).
+  The merged fix no longer even has `$knownRemoteTip`. So this is a
+  **plausible-but-incomplete** review — it identified the intended mechanism but
+  missed the exact counterexamples that mattered. It is evidence about headless
+  drive, latency, and model behaviour; it is **not** evidence that Antigravity
+  clears a review-quality bar.
 - **Tool-using tasks are blocked in headless mode without explicit permissions.**
   In `--mode plan`, asking `agy` to read the file *itself* triggered a `command`
   tool request that headless mode auto-denied ("a tool required the 'command'
