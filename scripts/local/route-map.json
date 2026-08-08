@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "commands": {
+    "/task": {
+      "why": "Reading an issue and naming a branch is deterministic script execution; no reasoning tier does this better than another.",
+      "route": [
+        { "host": "cursor", "tier": "fast" },
+        { "host": "claude", "tier": "fast", "floor": true }
+      ]
+    },
+    "/grill-with-docs": {
+      "why": "Interrogating a plan for hidden assumptions and coining precise glossary terms is the judgment work that separates tiers; a shallow model produces a shallow grill and the miss is silent.",
+      "route": [
+        { "host": "claude", "tier": "deep" },
+        { "host": "cursor", "tier": "deep", "floor": true }
+      ]
+    },
+    "/speckit-specify": {
+      "why": "Converts an already-settled brief into spec sections; mostly structured transcription once the grill has done the thinking.",
+      "route": [
+        { "host": "claude", "tier": "balanced" },
+        { "host": "cursor", "tier": "balanced" },
+        { "host": "claude", "tier": "fast", "floor": true }
+      ]
+    },
+    "/speckit-clarify": {
+      "why": "Surfaces remaining ambiguity as direct questions against a spec that already exists; recognizing a gap is easier than authoring the resolution.",
+      "route": [
+        { "host": "claude", "tier": "balanced" },
+        { "host": "cursor", "tier": "balanced", "floor": true }
+      ]
+    },
+    "/speckit-plan": {
+      "why": "Architectural reasoning about how a feature gets built; a wrong plan compounds through every later stage, so this is where a silent miss costs the most.",
+      "route": [
+        { "host": "claude", "tier": "deep" },
+        { "host": "cursor", "tier": "deep" },
+        { "host": "claude", "tier": "balanced", "floor": true }
+      ]
+    },
+    "/speckit-tasks": {
+      "why": "Decomposes an approved plan into a task list; largely mechanical once the plan states the shape of the work.",
+      "route": [
+        { "host": "claude", "tier": "balanced" },
+        { "host": "cursor", "tier": "fast", "floor": true }
+      ]
+    },
+    "/speckit-analyze": {
+      "why": "Cross-checks spec, plan, tasks, and the constitution for contradictions; catching a subtle inconsistency is exactly the kind of miss that stays silent on a weaker model.",
+      "route": [
+        { "host": "claude", "tier": "deep" },
+        { "host": "claude", "tier": "balanced", "floor": true }
+      ]
+    },
+    "/implement": {
+      "why": "Writes the production code and tests; the highest-token stage and the one where quality variance is most visible, so it anchors the top of the map.",
+      "route": [
+        { "host": "claude", "tier": "deep" },
+        { "host": "cursor", "tier": "deep" },
+        { "host": "claude", "tier": "balanced", "floor": true }
+      ]
+    },
+    "/gherkin": {
+      "why": "Translates settled scenarios into Gherkin; opt-in stage with moderate reasoning and a small, checkable surface.",
+      "route": [
+        { "host": "claude", "tier": "balanced" },
+        { "host": "cursor", "tier": "balanced", "floor": true }
+      ]
+    },
+    "/refactor": {
+      "why": "Reduces complexity and duplication against numeric gate thresholds; the target is measurable, so the model mainly needs to satisfy a check it can verify itself.",
+      "route": [
+        { "host": "cursor", "tier": "balanced" },
+        { "host": "claude", "tier": "fast", "floor": true }
+      ]
+    },
+    "/code-review": {
+      "why": "Three-axis diff review; the risk axis (security, concurrency, coverage gaps) needs real judgment even though standards and spec checks are closer to a checklist.",
+      "route": [
+        { "host": "claude", "tier": "deep" },
+        { "host": "cursor", "tier": "balanced", "floor": true }
+      ]
+    },
+    "/architect": {
+      "why": "Interprets Stryker survivors and decides whether the invariant or the test is wrong; a mistaken call here either hides a real gap or adds a test that proves nothing.",
+      "route": [
+        { "host": "claude", "tier": "deep" },
+        { "host": "claude", "tier": "balanced", "floor": true }
+      ]
+    },
+    "/ship-review": {
+      "why": "Final pre-PR fan-out; high stakes for what it gates but review-only and checklist-heavy, so balanced clears it without deep's cost.",
+      "route": [
+        { "host": "claude", "tier": "balanced" },
+        { "host": "cursor", "tier": "balanced", "floor": true }
+      ]
+    }
+  }
+}
