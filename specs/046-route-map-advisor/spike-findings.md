@@ -87,8 +87,58 @@ export named 'addAbortListener'` under **Node.js v18.16.0**. `addAbortListener`
 was added in Node v20.5.0, so the CLI crashes at module load, before reaching
 authentication.
 
-This says nothing about entitlement. The question stays open until the runtime is
-upgraded to Node 20+ and the call is retried.
+This says nothing about entitlement.
+
+#### Attempt 2 — CLOSED. The deprecation is real; Antigravity is the successor
+
+**Antigravity CLI 1.1.11**, authenticated as **Google AI Plus**, answered both
+probes:
+
+- `Reply with exactly: ROUTE_TEST_OK` returned `ROUTE_TEST_OK`.
+- After `/model` set **Gemini 3.1 Pro (Low)**, `Reply with exactly: PRO_OK`
+  returned `PRO_OK` — so this is **not** a Flash-only tier.
+
+Open questions 3 and 4 are closed. Standalone Gemini CLI stays out of the route
+map permanently: it is deprecated, and `antigravity` is the entry that replaces it.
+
+##### Two independent weekly pools — new to this map
+
+`/credits` reports quota split into **two separate weekly limits**:
+
+| Pool | Models | Observed remaining |
+| --- | --- | --- |
+| Gemini | Gemini Flash, Gemini Pro | 97.40% (refreshes in ~168h) |
+| Claude and GPT | Claude Opus, Claude Sonnet, GPT-OSS | 100.00% |
+
+The tool states quota is *"consumed proportionally to the cost of the tokens,"*
+so limits stretch with cheaper models — the same metered behaviour as Junie,
+expressed as a weekly percentage rather than credits.
+
+The consequence for routing is specific to this host: **choosing a tier also
+chooses which pool drains.** An exhausted Claude pool does not block Gemini-model
+work, and vice versa. No other host in the map has this property.
+
+It also resolves the earlier confusion about the consumer usage meter. That meter
+tracks the Gemini web app; `/credits` is the pool that actually backs CLI work,
+and the two are independent.
+
+### Correction: headless capability was the wrong inclusion criterion
+
+The research prompt asserted that a tool usable only through an interactive
+window *"cannot be automated. That single distinction is what this research
+decides."* Applied to route-map inclusion, that was wrong.
+
+The MVP is an **advisor**, not a dispatcher — it prints a recommendation for a
+human, and never launches a process. A human can use an interactive TUI perfectly
+well, so **interactive-only tools are routable for #46**.
+
+Headless capability decides eligibility for **#26**, the orchestrator that
+actually launches processes. It is recorded here for that reason, but it does not
+gate a row in `route-map.json`.
+
+Antigravity is therefore routed on the strength of working, entitled, and largely
+unused quota. Whether it exposes a non-interactive flag remains open and matters
+only to #26.
 
 ### Junie runs the same top-tier models — corrects the routing rationale
 
