@@ -222,3 +222,29 @@ Cursor Pro, picking a stronger model costs nothing extra until the periodic limi
 is hit. On Junie every token is priced, so `junie:deep` on Opus-class models drains
 a 10-20 credit budget quickly while `junie:fast` on Flash Lite or GPT-5.6-LUNA
 stretches it by roughly 20x on input.
+
+### Antigravity drives headlessly and reviews correctly — tool use needs permission wiring
+
+Trial run of `agy` 1.1.11 as the deep-tier reserve the advisor lists at #3 for
+`/implement`, confirming the route is usable in practice, not just on paper:
+
+- **Headless dispatch works.** `agy -p "Reply with exactly: ROUTE_TEST_OK"
+  --output-format text --model gemini-3.1-pro-low` returned `ROUTE_TEST_OK` in ~13s.
+- **A real review is accurate.** Given the PR #80 `rebase-task-branch.ps1` change
+  inline, `gemini-3.1-pro-high` correctly answered that the push logic cannot force
+  over a remote-only commit, citing the exact guard variables (`$knownRemoteTip`,
+  `$currentRemoteTip`, `$preFetchHead`) and the `merge-base --is-ancestor` refusal.
+  ~16s.
+- **Tool-using tasks are blocked in headless mode without explicit permissions.**
+  In `--mode plan`, asking `agy` to read the file *itself* triggered a `command`
+  tool request that headless mode auto-denied ("a tool required the 'command'
+  permission that headless mode cannot prompt for"). The remedy is a
+  `permissions.allow` rule (e.g. `command(<target>)`) in agy's `settings.json`, or
+  `--dangerously-skip-permissions` — which auto-approves everything and must stay
+  off for any writer node. Feeding the code inline sidesteps it for read/reasoning
+  work.
+
+Net: `agy` clears the reserve-host bar for read and reasoning work today; writer
+and tool use is gated on the per-node permission scoping #26 already plans in #35 —
+the orchestrator must pre-grant scoped permissions rather than rely on interactive
+prompts a headless CLI can never answer.
