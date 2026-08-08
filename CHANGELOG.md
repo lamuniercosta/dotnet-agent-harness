@@ -8,7 +8,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [semantic versioning](https://semver.org/), where a **major** bump
 means a consuming repo's gates may start failing on code that previously passed.
 
-## [0.4.0] — 2026-08-07
+## [0.4.0] — 2026-08-08
+
+### Added
+
+- The `guard.ps1` PreToolUse hook now blocks **deleting a protected branch via
+  push**, closing a gap where only force-pushes were caught. A delete is refused
+  whether expressed as `--delete`/`-d` (including any unique abbreviation Git
+  accepts — `--de` through `--delete` — and clustered forms such as `-fd`) or as
+  an empty-source `:dst` refspec (`git push origin :main`, `:refs/heads/main`,
+  `+:main`). Detection is per-refspec, so deleting a task branch alongside a
+  plain push to a protected branch in one command is still allowed, as are
+  fast-forward pushes, `--no-delete`, and `--dry-run`.
 
 ### Breaking
 
@@ -226,3 +237,4 @@ account:
 [0.1.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.1.0
 [0.2.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.2.0
 [0.3.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.3.0
+[0.4.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.4.0
