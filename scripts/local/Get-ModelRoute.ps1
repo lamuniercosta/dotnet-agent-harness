@@ -34,15 +34,22 @@
 .EXAMPLE
   ./scripts/local/Get-ModelRoute.ps1 -Command /implement -RepoRoot ../LamuFlix -Area frontend
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Route')]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $true, ParameterSetName = 'Route')]
     [string]$Command,
+
+    # Print every routed command with its head and floor, then exit. The map is
+    # only useful if you can see what it covers without guessing a name.
+    [Parameter(Mandatory = $true, ParameterSetName = 'List')]
+    [switch]$List,
 
     [string]$RepoRoot,
 
+    [Parameter(ParameterSetName = 'Route')]
     [string]$Area,
 
+    [Parameter(ParameterSetName = 'Route')]
     [switch]$NoLog,
 
     [switch]$Help
@@ -63,6 +70,23 @@ if (-not $RepoRoot) { $RepoRoot = Get-RepoRoot }
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
 
 $map = Get-RouteMap
+
+if ($List) {
+    Write-Host "Repo: $RepoRoot"
+    Write-Host ''
+    foreach ($name in ($map.commands.PSObject.Properties.Name | Sort-Object)) {
+        $row = Resolve-RouteChain -Command $name -Map $map -RepoRoot $RepoRoot
+        $head = $row.Chain[0]
+        $floor = $row.Chain | Where-Object { $_.IsFloor } | Select-Object -First 1
+        $headText = "$($head.Host):$($head.Tier)"
+        $floorText = "$($floor.Host):$($floor.Tier)"
+        Write-Host ("  {0,-20} {1,-22} floor: {2}" -f $name, $headText, $floorText)
+    }
+    Write-Host ''
+    Write-Host 'Ask about one with -Command <name>.' -ForegroundColor DarkGray
+    exit 0
+}
+
 $resolved = Resolve-RouteChain -Command $Command -Map $map -RepoRoot $RepoRoot
 
 if ($null -eq $resolved) {

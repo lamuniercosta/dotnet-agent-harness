@@ -42,3 +42,34 @@ pwsh ./scripts/local/Sync-SelfSkills.ps1 -Clean
 ```
 
 This is not a full self-install; `install.ps1` still refuses the harness root.
+
+## Which host and model to run a command on
+
+`scripts/local/Get-ModelRoute.ps1` recommends a host and tier for a pipeline
+command, ordered best first, with a **floor** marking the lowest option that
+still does the work without losing quality:
+
+```powershell
+pwsh ./scripts/local/Get-ModelRoute.ps1 -List
+```
+
+```powershell
+pwsh ./scripts/local/Get-ModelRoute.ps1 -Command /implement -RepoRoot ../SomeRepo -Area frontend
+```
+
+It only advises — it never launches or configures anything. Read down the chain
+to the first option you still have allowance for. **If that lands below the
+floor, the work waits**; running below it means knowingly accepting reduced
+quality, which is the one thing the map exists to make visible.
+
+Record what you actually ran, especially when it differed:
+
+```powershell
+pwsh ./scripts/local/Add-RouteDeviation.ps1 -Command /implement -Ran junie:deep -Note 'Claude weekly limit hit'
+```
+
+Those deviations are the point, not an admission of failure — they are the
+evidence for whether the authored judgments in `route-map.json` hold up. See
+`docs/adr/0008-route-map-records-work-demands.md` for why the map records what
+work demands rather than what models provide, and `specs/046-route-map-advisor/`
+for the reasoning behind each row. Neither script is shipped by `install.ps1`.

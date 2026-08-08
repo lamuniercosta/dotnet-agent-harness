@@ -134,6 +134,23 @@ try {
     & $advisor -Command '/not-a-real-command' -RepoRoot $unpinnedRoot 2>$null | Out-Null
     Assert-That 'advisor exits non-zero for an unknown command' ($LASTEXITCODE -ne 0)
 
+    # A repo with no harness.yml at all must still resolve — the shipped
+    # defaults are a complete config, so absence is not an error.
+    $bareRoot = New-TemporaryRepoRoot
+    $bareOut = & $advisor -Command '/implement' -RepoRoot $bareRoot 6>&1 | Out-String
+    Assert-That 'advisor runs against a checkout with no harness.yml' ($LASTEXITCODE -eq 0) $bareOut
+
+    # 6>&1, not 2>&1: the advisor reports through Write-Host, which writes to
+    # the information stream. Redirecting stderr captures an empty string and
+    # every content assertion below would pass or fail for the wrong reason.
+    $commandNames = @($map.commands.PSObject.Properties.Name)
+    $listOut = & $advisor -List -RepoRoot $unpinnedRoot 6>&1 | Out-String
+    Assert-That '-List exits 0' ($LASTEXITCODE -eq 0)
+    Assert-That '-List produces output' (-not [string]::IsNullOrWhiteSpace($listOut))
+    $missing = @($commandNames | Where-Object { $listOut -notmatch [regex]::Escape($_) })
+    Assert-That '-List names every routed command' ($missing.Count -eq 0) "Missing: $($missing -join ', ')"
+    Assert-That '-List reports a floor for each row' (([regex]::Matches($listOut, 'floor:')).Count -eq $commandNames.Count)
+
     if (Test-Path -LiteralPath $realLog) { Remove-Item -LiteralPath $realLog -Force }
 
     Write-Host ''
