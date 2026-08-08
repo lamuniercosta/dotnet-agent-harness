@@ -167,6 +167,13 @@ jobs:
         shell: pwsh
         run: ./scripts/local/Test-SelfSkills.ps1
 
+      # Repo-local route-map advisor (scripts/local/, not packaged). The map is
+      # the durable artifact of #46, so its schema, coverage, and resolution
+      # must stay guarded after merge.
+      - name: Route-map advisor resolves and classifies correctly
+        shell: pwsh
+        run: ./scripts/local/Test-RouteMap.ps1
+
       # Both directions. A scanner that matches nothing looks exactly like a
       # clean codebase, and one that matches everything gets switched off.
       - name: Secret scanner fires, and stays quiet on look-alikes

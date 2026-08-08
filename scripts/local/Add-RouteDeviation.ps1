@@ -38,20 +38,24 @@
 .EXAMPLE
   ./scripts/local/Add-RouteDeviation.ps1 -Command /implement -Ran cursor:fast -Note 'Claude weekly limit hit'
 #>
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = 'Log')]
 param(
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $true, ParameterSetName = 'Log')]
     [string]$Command,
 
-    [Parameter(Mandatory = $true)]
+    [Parameter(Mandatory = $true, ParameterSetName = 'Log')]
     [string]$Ran,
 
     [string]$RepoRoot,
 
+    [Parameter(ParameterSetName = 'Log')]
     [string]$Area,
 
+    [Parameter(ParameterSetName = 'Log')]
     [string]$Note,
 
+    # Own set so `-Help` alone binds without tripping the mandatory checks.
+    [Parameter(Mandatory = $true, ParameterSetName = 'Help')]
     [switch]$Help
 )
 

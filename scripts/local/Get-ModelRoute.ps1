@@ -52,6 +52,8 @@ param(
     [Parameter(ParameterSetName = 'Route')]
     [switch]$NoLog,
 
+    # Own set so `-Help` alone binds without tripping Command's mandatory check.
+    [Parameter(Mandatory = $true, ParameterSetName = 'Help')]
     [switch]$Help
 )
 
