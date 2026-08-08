@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "notes": "Junie draws JetBrains AI credits (All Products Pack -> AI Pro), a pool separate from Claude Pro, Cursor, and Codex, and its model picker offers the same top-tier models those hosts run (Claude Opus 5, Claude Sonnet 5, GPT-5.6, Gemini 3.x, Grok 4.3). Junie is therefore NOT a quality step down -- it is a billing step. Flat-rate subscription capacity is spent first because it is already paid for whether or not it is used; metered credits are held back. That is exactly why Junie sits immediately above the floor: reaching for equal-quality metered capacity beats dropping a tier and losing quality. Two consequences of the metering. The credit budget is small (10-20 per 30 days, and JetBrains recommends Ultimate for regular use), so Junie is reserve, not a workhorse, and it is absent from cheap commands where the floor costs little anyway. And unlike a flat-rate host, the chosen model changes the cost directly -- Opus-class work burns credits fast, while Gemini Flash Lite or GPT-5.6-LUNA stretch them -- so the tier carries more weight on Junie than elsewhere. Junie has no agents.tiers entry, so its tier resolves unpinned: the tier is advice about what to select via --model and the effort control, not a resolved model. Standalone Gemini CLI is deliberately absent -- see spike-findings.md.",
+  "notes": "Reserve hosts (antigravity, junie) sit between the primary hosts and the floor. Neither is a quality step down -- both reach Claude Opus and Sonnet -- so their position is a BILLING order, not a quality order: flat-rate subscription capacity is spent first because it is already paid for whether used or not, and metered capacity is held back. That is precisely why they sit ABOVE the floor: reaching for equal-quality reserve beats dropping a tier and losing quality. They are absent from cheap commands, where the floor costs little anyway. Ordering between the two reserves is by headroom: antigravity carries a weekly allowance, junie a much tighter 10-20 credits per 30 days. ANTIGRAVITY (Google AI Plus) replaces the deprecated Gemini CLI and holds TWO independent weekly pools -- one for Gemini Flash/Pro, one for Claude Opus/Sonnet/GPT-OSS. Choosing a tier therefore also chooses which pool drains, so an exhausted Claude pool does not block Gemini-model work and vice versa. JUNIE draws JetBrains AI credits (All Products Pack -> AI Pro). On both reserve hosts consumption is proportional to token cost, unlike the flat-rate primaries, so the tier changes spend directly -- Opus-class work drains fast while Gemini Flash Lite or GPT-5.6-LUNA stretch the same budget by roughly 20x. Neither reserve host is in agents.tiers, so their tiers resolve unpinned: the tier is advice about what to select in that tool, not a resolved model. Standalone Gemini CLI is deliberately absent -- it is deprecated in favour of antigravity. See spike-findings.md.",
   "commands": {
     "/task": {
       "why": "Reading an issue and naming a branch is deterministic script execution; no reasoning tier does this better than another.",
@@ -13,6 +13,7 @@
       "why": "Interrogating a plan for hidden assumptions and coining precise glossary terms is the judgment work that separates tiers; a shallow model produces a shallow grill and the miss is silent.",
       "route": [
         { "host": "claude", "tier": "deep" },
+        { "host": "antigravity", "tier": "deep" },
         { "host": "junie", "tier": "deep" },
         { "host": "cursor", "tier": "deep", "floor": true }
       ]
@@ -37,6 +38,7 @@
       "route": [
         { "host": "claude", "tier": "deep" },
         { "host": "cursor", "tier": "deep" },
+        { "host": "antigravity", "tier": "deep" },
         { "host": "junie", "tier": "deep" },
         { "host": "claude", "tier": "balanced", "floor": true }
       ]
@@ -52,6 +54,7 @@
       "why": "Cross-checks spec, plan, tasks, and the constitution for contradictions; catching a subtle inconsistency is exactly the kind of miss that stays silent on a weaker model.",
       "route": [
         { "host": "claude", "tier": "deep" },
+        { "host": "antigravity", "tier": "deep" },
         { "host": "junie", "tier": "deep" },
         { "host": "claude", "tier": "balanced", "floor": true }
       ]
@@ -61,6 +64,7 @@
       "route": [
         { "host": "claude", "tier": "deep" },
         { "host": "cursor", "tier": "deep" },
+        { "host": "antigravity", "tier": "deep" },
         { "host": "junie", "tier": "deep" },
         { "host": "claude", "tier": "balanced", "floor": true }
       ]
@@ -83,6 +87,7 @@
       "why": "Three-axis diff review; the risk axis (security, concurrency, coverage gaps) needs real judgment even though standards and spec checks are closer to a checklist.",
       "route": [
         { "host": "claude", "tier": "deep" },
+        { "host": "antigravity", "tier": "balanced" },
         { "host": "junie", "tier": "balanced" },
         { "host": "cursor", "tier": "balanced", "floor": true }
       ]
@@ -91,6 +96,7 @@
       "why": "Interprets Stryker survivors and decides whether the invariant or the test is wrong; a mistaken call here either hides a real gap or adds a test that proves nothing.",
       "route": [
         { "host": "claude", "tier": "deep" },
+        { "host": "antigravity", "tier": "deep" },
         { "host": "junie", "tier": "deep" },
         { "host": "claude", "tier": "balanced", "floor": true }
       ]
