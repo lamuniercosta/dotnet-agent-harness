@@ -291,9 +291,9 @@ matches its description.
 For Spec Kit `0.8.14`, initialize Codex with `specify init --integration codex`; that
 provides the `$speckit-*` commands.
 
-The harness generates seven named profiles under `.codex/agents/`: `gate-runner`,
+The harness generates eight named profiles under `.codex/agents/`: `gate-runner`,
 `code-scout`, `edit-applier`, `test-writer`, `mutation-analyst`, `code-reviewer`,
-and `security-reviewer`. Their model and reasoning effort come from the profile's
+`security-reviewer`, and `fix-prober`. Their model and reasoning effort come from the profile's
 tier in `harness.yml`; inherited fields fall back to Codex's configured default.
 `code-scout` overlaps with Codex's built-in `explorer` without replacing it. A
 consumer who prefers the built-in can remove the generated `code-scout` profile.

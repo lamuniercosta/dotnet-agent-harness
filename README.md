@@ -100,11 +100,11 @@ which scaffolds a solution and then calls the same installer — one code path.
 The canonical source plus host-specific delivery files:
 
 ```
-.claude/skills/         25 skill copies ← Cursor and Claude Code
+.claude/skills/         26 skill copies ← Cursor and Claude Code
 .agents/skills/         generated Codex copies ← invoke as `$name`
-.claude/agents/          7 generated profiles ← Claude Code
-.cursor/agents/          7 generated profiles ← Cursor
-.codex/agents/           7 generated TOML profiles ← Codex
+.claude/agents/          8 generated profiles ← Claude Code
+.cursor/agents/          8 generated profiles ← Cursor
+.codex/agents/           8 generated TOML profiles ← Codex
 .cursor/rules/          11 rules    ← Cursor globs them; CLAUDE.md @imports them
 .cursor/rules/vendor/    8 rules    ← glob-scoped, `globs:`  (Cursor)
 .claude/rules/vendor/    8 rules    ← glob-scoped, `paths:`  (Claude Code)
@@ -217,8 +217,8 @@ default would be the exact failure the gates exist to prevent.
 ## Layout
 
 ```
-skills/              25 SKILL.md sources → host discovery directories on install
-.claude/agents/       7 canonical profiles → three host discovery formats
+skills/              26 SKILL.md sources → host discovery directories on install
+.claude/agents/       8 canonical profiles → three host discovery formats
 rules/pipeline/      11 authored always-on rules
 rules/vendor/         8 third-party .NET rules, isolated and attributed (see NOTICE)
 hooks/                4 hook scripts + 3 self-tests

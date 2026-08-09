@@ -100,11 +100,11 @@ try {
     $codexAgentNames = @(Get-ChildItem -LiteralPath (Join-Path $repo '.codex/agents') `
         -File -Filter '*.toml' | ForEach-Object { $_.BaseName } | Sort-Object)
 
-    Assert-That 'all seven canonical agent names reach Claude Code' `
+    Assert-That 'all eight canonical agent names reach Claude Code' `
         (($expectedAgentNames -join ',') -eq ($claudeAgentNames -join ','))
-    Assert-That 'all seven canonical agent names reach Cursor' `
+    Assert-That 'all eight canonical agent names reach Cursor' `
         (($expectedAgentNames -join ',') -eq ($cursorAgentNames -join ','))
-    Assert-That 'all seven canonical agent names reach Codex' `
+    Assert-That 'all eight canonical agent names reach Codex' `
         (($expectedAgentNames -join ',') -eq ($codexAgentNames -join ','))
 
     foreach ($agentName in $expectedAgentNames) {
@@ -161,6 +161,14 @@ try {
         (($claudeWritable -notmatch '(?m)^permissionMode:') -and
          ($cursorWritable -match '(?m)^readonly: false$') -and
          ($codexWritable -notmatch '(?m)^sandbox_mode ='))
+
+    $claudeProber = Get-Content -LiteralPath (Join-Path $repo '.claude/agents/fix-prober.md') -Raw
+    $cursorProber = Get-Content -LiteralPath (Join-Path $repo '.cursor/agents/fix-prober.md') -Raw
+    $codexProber = Get-Content -LiteralPath (Join-Path $repo '.codex/agents/fix-prober.toml') -Raw
+    Assert-That 'the writable fix-prober renders without read-only host controls on every host' `
+        (($claudeProber -notmatch '(?m)^permissionMode:') -and
+         ($cursorProber -match '(?m)^readonly: false$') -and
+         ($codexProber -notmatch '(?m)^sandbox_mode ='))
     Assert-That 'every generated profile carries a harness ownership marker' `
         (($claudeFast -match '(?m)^harnessGenerated: true$') -and
          ($cursorFast -match '(?m)^harnessGenerated: true$') -and
@@ -312,7 +320,7 @@ try {
              ($agents -match 'do not\s+re-brief the cheap agent')) `
             'Codex cannot import delegation.mdc, so a pointer would silently omit the rule'
         Assert-That 'AGENTS.md documents generated Codex named agents' `
-            (($agents -match '\.codex/agents/') -and ($agents -match 'seven named profiles'))
+            (($agents -match '\.codex/agents/') -and ($agents -match 'eight named profiles'))
     }
 
     Assert-That '.codex/config.toml registers both documentation servers' `
@@ -340,12 +348,21 @@ try {
     } else { @() }
 
     Assert-That 'the default installs every canonical skill for Codex' `
-        (($sourceSkillNames.Count -eq 25) -and
+        (($sourceSkillNames.Count -eq 26) -and
          (@($sourceSkillNames | Where-Object { $_ -notin $installedSkillNames }).Count -eq 0)) `
         'a missing .agents/skills directory silently removes part of the workflow'
     Assert-That 'the four pipeline entry skills are present for Codex' `
         (@(@('task', 'grill-with-docs', 'verify', 'ship-review') |
              Where-Object { $_ -notin $installedSkillNames }).Count -eq 0)
+
+    # ── Bundled skill resources: pr-review ships its helper + schema intact ──
+    Assert-That 'pr-review bundles its helper and schema into every host skill tree' `
+        ((Test-Path (Join-Path $repo '.claude/skills/pr-review/scripts/pr-review.ps1')) -and
+         (Test-Path (Join-Path $repo '.claude/skills/pr-review/scripts/review-schema.json')) -and
+         (Test-Path (Join-Path $codexSkillsPath 'pr-review/scripts/pr-review.ps1')) -and
+         (Test-Path (Join-Path $codexSkillsPath 'pr-review/scripts/review-schema.json')) -and
+         ((Get-Item (Join-Path $repo '.claude/skills/pr-review/scripts/pr-review.ps1')).Length -gt 0)) `
+        'the deterministic helper must reach every host, not just the SKILL.md'
 
     $codexTask = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'task/SKILL.md') -Raw
     $claudeTask = Get-Content -LiteralPath (Join-Path $repo '.claude/skills/task/SKILL.md') -Raw
@@ -411,7 +428,7 @@ try {
         (($ownedAfterFirst -eq $ownedAfterSecond) -and
          ((Get-Content -LiteralPath $ownedSkill -Raw) -match '\$grill-with-docs'))
     Assert-That '-Platform codex generates only the Codex agent discovery tree' `
-        ((@(Get-ChildItem -LiteralPath (Join-Path $repo '.codex/agents') -File -Filter '*.toml').Count -eq 7) -and
+        ((@(Get-ChildItem -LiteralPath (Join-Path $repo '.codex/agents') -File -Filter '*.toml').Count -eq 8) -and
          (-not (Test-Path (Join-Path $repo '.claude/agents'))) -and
          (-not (Test-Path (Join-Path $repo '.cursor/agents'))))
 
@@ -567,8 +584,8 @@ try {
          (-not (Test-Path (Join-Path $repo '.codex/config.toml')))) `
         'both means cursor + claude; widening it would change what a pinned flag does'
     Assert-That '-Platform both generates Claude and Cursor agent profiles' `
-        ((@(Get-ChildItem -LiteralPath (Join-Path $repo '.claude/agents') -File -Filter '*.md').Count -eq 7) -and
-         (@(Get-ChildItem -LiteralPath (Join-Path $repo '.cursor/agents') -File -Filter '*.md').Count -eq 7))
+        ((@(Get-ChildItem -LiteralPath (Join-Path $repo '.claude/agents') -File -Filter '*.md').Count -eq 8) -and
+         (@(Get-ChildItem -LiteralPath (Join-Path $repo '.cursor/agents') -File -Filter '*.md').Count -eq 8))
     Assert-That '-Platform both still writes the Claude adapter' `
         (Test-Path (Join-Path $repo 'CLAUDE.md'))
     Assert-That '-Platform both reports slash syntax and no Codex next step' `

@@ -36,7 +36,8 @@ Task arrives
  ├─ Mutation / architect gate ───────────────→ /architect
  ├─ Something broke ─────────────────────────→ /diagnosing-bugs
  ├─ Reviewing code ──────────────────────────→ /code-review
- │   └─ Pre-PR consolidated review (gate 3) ─→ /ship-review
+ │   ├─ Pre-PR consolidated review (gate 3) ─→ /ship-review
+ │   └─ An already-open GitHub PR ───────────→ /pr-review
  ├─ Designing architecture / domain ─────────→ /codebase-design · /domain-modeling
  ├─ Broad architecture assessment ───────────→ /improve-codebase-architecture
  ├─ Performance / load / SLA ────────────────→ /k6-load-testing
@@ -62,6 +63,7 @@ Named profiles cover noisy stages and bounded mid-task errands:
 | Writing tests inline on a large change | `test-writer` | Keeps fixture/spec churn out of the main context |
 | Reading Stryker's report | `mutation-analyst` | Survivor lists are long and mostly noise |
 | Reviewing a whole diff | `code-reviewer` · `security-reviewer` | Independent perspectives, run in parallel |
+| Exploring an alternative fix for a confirmed PR finding | `fix-prober` | Isolated worktree; returns a candidate patch + evidence, never ships or pushes |
 
 Installation generates named profiles in `.claude/agents/` for Claude Code,
 `.cursor/agents/` for Cursor, and `.codex/agents/` for Codex. The always-on

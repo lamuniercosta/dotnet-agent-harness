@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dotnet-agent-harness.local/pr-review/review-schema.json",
+  "title": "pr-review finding and reviewPayload schemas",
+  "description": "Deterministic shapes used by skills/pr-review/scripts/pr-review.ps1. Semantic analysis stays in the model; this schema only constrains mechanics.",
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "description": "One review finding. Only CONFIRMED findings are eligible for inline placement; PLAUSIBLE findings must stay in the summary (as questions), never as inline comments. The helper enforces this in -BuildPayload.",
+      "required": ["severity", "category", "file", "verdict"],
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": ["Critical", "High", "Medium", "Low"]
+        },
+        "category": {
+          "type": "string",
+          "enum": ["risk", "security", "standards", "spec", "coverage", "performance"]
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["CONFIRMED", "PLAUSIBLE"],
+          "description": "CONFIRMED = eligible for inline; PLAUSIBLE = summary-only questions."
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "side": {
+          "type": "string",
+          "enum": ["LEFT", "RIGHT"]
+        },
+        "start_side": {
+          "type": "string",
+          "enum": ["LEFT", "RIGHT"]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "failure_scenario": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": ["string", "number"]
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "placement": {
+          "type": "string",
+          "enum": ["inline", "file", "summary"],
+          "description": "Requested placement. Inline is valid only when verdict is CONFIRMED and a diff location is present."
+        },
+        "suggestion": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string",
+          "description": "Optional pre-rendered inline comment body. When absent, -BuildPayload composes one from severity/category/summary/failure_scenario/evidence/suggestion."
+        },
+        "repo": {
+          "type": "string",
+          "description": "Optional owner/repo used when fingerprinting outside a workspace context."
+        },
+        "pr": {
+          "type": ["integer", "string"],
+          "description": "Optional PR number used when fingerprinting outside a workspace context."
+        }
+      },
+      "additionalProperties": true
+    },
+    "reviewComment": {
+      "type": "object",
+      "required": ["path", "body"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "side": {
+          "type": "string",
+          "enum": ["LEFT", "RIGHT"]
+        },
+        "start_side": {
+          "type": "string",
+          "enum": ["LEFT", "RIGHT"]
+        }
+      },
+      "additionalProperties": true,
+      "description": "Requires either line (single-line) or start_line+line (multi-line). side/start_side must be LEFT or RIGHT when present."
+    },
+    "reviewPayload": {
+      "type": "object",
+      "required": ["commit_id", "event", "body"],
+      "properties": {
+        "commit_id": {
+          "type": "string",
+          "minLength": 7,
+          "description": "Pinned PR head SHA."
+        },
+        "event": {
+          "type": "string",
+          "const": "COMMENT",
+          "description": "Always COMMENT. Never APPROVE or REQUEST_CHANGES."
+        },
+        "body": {
+          "type": "string",
+          "description": "Review summary markdown."
+        },
+        "comments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reviewComment"
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}

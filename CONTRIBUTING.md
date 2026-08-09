@@ -110,7 +110,7 @@ Generated syntax is structurally tested, but host discovery still needs a real
 smoke test before tagging. Install into a throwaway repo and open Claude Code,
 Cursor, and Codex. Confirm:
 
-1. All seven agents appear in every host's agent list.
+1. All eight agents appear in every host's agent list.
 2. `gate-runner` and `code-reviewer` use the host's read-only control.
 3. `edit-applier` can edit only when explicitly delegated writable work.
 4. A fast agent shows the configured cheap model and low effort, while a

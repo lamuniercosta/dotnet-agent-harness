@@ -107,6 +107,16 @@
         { "host": "claude", "tier": "balanced" },
         { "host": "cursor", "tier": "balanced", "floor": true }
       ]
+    },
+    "/pr-review": {
+      "why": "Reviews an open PR through a three-pass convergence protocol (independent discovery, adversarial boundary challenge, completion audit) and optional isolated fix probes, then publishes inline. The adversarial and audit passes are exactly the judgment a weaker model skips silently, and a missed defect ships to a human as an approved-looking review -- so it anchors deep with a balanced floor, like /implement rather than the lighter /ship-review.",
+      "route": [
+        { "host": "claude", "tier": "deep" },
+        { "host": "cursor", "tier": "deep" },
+        { "host": "antigravity", "tier": "deep" },
+        { "host": "junie", "tier": "deep" },
+        { "host": "claude", "tier": "balanced", "floor": true }
+      ]
     }
   }
 }

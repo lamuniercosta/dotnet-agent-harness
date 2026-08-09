@@ -8,6 +8,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [semantic versioning](https://semver.org/), where a **major** bump
 means a consuming repo's gates may start failing on code that previously passed.
 
+## [Unreleased]
+
+### Added
+
+- **`/pr-review` — convergent post-PR review with inline GitHub publishing.** A
+  first-class, cross-host skill that reviews an already-open GitHub pull request
+  end to end: it pins the base/head SHAs, gathers the PR and its base-branch
+  standards, runs independent review axes plus a mandatory three-pass convergence
+  protocol (independent discovery → adversarial boundary challenge → completion
+  audit), optionally explores minimal alternative fixes in isolated worktrees, and
+  publishes one batched `COMMENT` review with inline comments — never an automatic
+  approve or request-changes. All PR content is treated as untrusted, and
+  PR-authored agent instructions are data, not commands. Ships a deterministic
+  PowerShell helper (`scripts/pr-review.ps1`) and JSON schema for resolving,
+  validating, fingerprinting, deduplicating, and posting, with a Markdown fallback
+  when the API refuses. Distinct from `/code-review` (local diff engine) and
+  `/ship-review` (pre-PR local gate). (#83)
+- **`fix-prober` agent.** A new writable canonical profile that explores one
+  bounded alternative fix inside its own disposable worktree and returns the
+  candidate patch plus evidence — it never pushes, commits, posts, or touches the
+  user's checkout. Used by `/pr-review`'s selective try-fix. (#83)
+
 ## [0.4.1] — 2026-08-08
 
 ### Fixed

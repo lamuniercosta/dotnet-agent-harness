@@ -166,4 +166,5 @@ Severity ranking in step 8 is not a violation of that separation: `category` pre
 
 - `/verify` — run the tooling gate (build, tests, analyzers, format, mutation) before reviewing
 - `/ship-review` — the pre-PR fan-out that calls this skill
+- `/pr-review` — review an **already-open GitHub PR** and publish inline feedback; reuses this engine's axes and adds convergence + publishing
 - `/diagnosing-bugs` — when a finding needs a root cause rather than a report

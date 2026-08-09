@@ -69,4 +69,5 @@ Verify: READY / NEEDS FIXES
 ## Related
 - `/verify` — the blocking gate this runs first
 - `/code-review` — the same three-axis review, standalone
+- `/pr-review` — the post-PR counterpart: reviews an already-open GitHub PR and publishes inline feedback
 - `/pipeline` — where this sits in the stage order (gate 3)

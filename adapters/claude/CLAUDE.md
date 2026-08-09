@@ -83,7 +83,7 @@ never substitute plain `dotnet build`.
 
 ## Agents
 
-Seven agents live in `.claude/agents/` for Claude Code. Cursor receives generated
+Eight agents live in `.claude/agents/` for Claude Code. Cursor receives generated
 copies in `.cursor/agents/`. Delegate to them when the delegation rule applies:
 
 - `gate-runner` (read-only) — runs the gates, returns `file:line` + cause
@@ -93,6 +93,7 @@ copies in `.cursor/agents/`. Delegate to them when the delegation rule applies:
 - `mutation-analyst` (read-only) — triages Stryker survivors
 - `code-reviewer` (read-only) — one named axis per call: Risk, Standards, or Spec
 - `security-reviewer` (read-only) — supply chain, authz, injection, data exposure
+- `fix-prober` — explores one bounded alternative fix in an isolated worktree; writable, used by `/pr-review` (returns a candidate + evidence, never ships)
 
 Profiles declare `fast`, `balanced`, or `deep`; installation renders each host's
 configured model and effort. Only `fast` is pinned to a cheaper model by default.
