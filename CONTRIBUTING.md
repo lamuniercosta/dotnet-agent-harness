@@ -9,8 +9,8 @@ This doubles as the architecture tour. If you only read one section, read
 harness.yml.example   every setting, documented. The ONLY place thresholds live
 VERSION               stamped into a consumer's harness.yml on install
 install.ps1           adopt-first installer; new-project.sh calls it too
-skills/               25 SKILL.md — canonical source for host discovery copies
-.claude/agents/       7 canonical agents — rendered for all three hosts
+skills/               26 SKILL.md — canonical source for host discovery copies
+.claude/agents/       8 canonical agents — rendered for all three hosts
 rules/pipeline/       11 authored always-on rules
 rules/vendor/         8 third-party .NET rules, glob-scoped (see NOTICE)
 hooks/                4 hook scripts + self-tests

@@ -59,6 +59,12 @@ If an errand is ambiguous, partial, or untrustworthy, finish it inline and do no
 re-brief the cheap agent. If partial edits already exist, review the current diff
 and continue from it; do not roll back automatically.
 
+`fix-prober` is the one other writable agent, and only `$pr-review` may use it.
+It explores one bounded alternative in its own disposable worktree, never pushes,
+commits, posts, or touches the user's checkout, and its patch is review evidence
+rather than an implementation. Everywhere else, `edit-applier` remains the only
+writable errand.
+
 ## Coding conventions
 
 - Define an interface in the same file as its primary implementation

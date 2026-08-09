@@ -17,8 +17,8 @@ scripts actually catch defects.
 |---|---|---|
 | **Pipeline** | 11 stages | Ticket to PR, with three human approval gates |
 | **Gates** | 6 | Numeric thresholds, each a script with a real exit code |
-| **Skills** | 25 | `SKILL.md` files — process, pipeline stages, and .NET reference |
-| **Agents** | 7 | Tiered subagents for noisy stages and cheap mechanical errands |
+| **Skills** | 26 | `SKILL.md` files — process, pipeline stages, and .NET reference |
+| **Agents** | 8 | Tiered subagents for noisy stages and cheap mechanical errands |
 | **Rules** | 11 + 8 | Authored always-on rules, plus vendored glob-scoped .NET guidance |
 | **Hooks** | 4 | Destructive-command guard, secret scan, format-on-edit, gate reminder |
 

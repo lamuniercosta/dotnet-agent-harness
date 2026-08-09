@@ -468,7 +468,11 @@ try {
     $repos += $repo
     $legacyPath = Join-Path $repo '.claude/agents/code-reviewer.md'
     New-Item -ItemType Directory -Path (Split-Path $legacyPath -Parent) -Force | Out-Null
-    $legacy = Get-Content -LiteralPath (Join-Path $harnessRoot '.claude/agents/code-reviewer.md') -Raw
+    # Normalize to LF first — the same normalization install.ps1 applies before
+    # hashing. On a CRLF checkout (core.autocrlf=true), `$` sits before the \n
+    # and after the \r, so the tier rewrite below silently matched nothing and
+    # this check failed on Windows only.
+    $legacy = (Get-Content -LiteralPath (Join-Path $harnessRoot '.claude/agents/code-reviewer.md') -Raw) -replace "`r`n", "`n"
     $legacy = $legacy -replace '(?m)^tier: balanced$', 'model: inherit'
     [IO.File]::WriteAllText($legacyPath, $legacy, [Text.UTF8Encoding]::new($false))
     $output = Invoke-Install -Repo $repo -Platform 'claude'

@@ -48,6 +48,15 @@ If the errand encounters ambiguity after partial edits, it stops and reports
 the changed files and unfinished point. The parent reviews the current diff and
 finishes inline; do not roll back automatically.
 
+`fix-prober` is the one other writable agent, and only `/pr-review` may use it.
+It does not carry an exact transformation — exploring an alternative is the
+point — so it is fenced by isolation instead: one bounded alternative per probe,
+its own disposable worktree, and no write that outlives the probe. It never
+pushes, commits, posts, or touches the user's checkout or another probe's
+worktree, and its patch is review evidence, never an implementation. Parallel
+probes are allowed because their worktrees are disjoint by construction.
+Everywhere else, `edit-applier` remains the only writable errand.
+
 ## One strike
 
 If an errand returns ambiguity, a partial answer, or a result the parent cannot

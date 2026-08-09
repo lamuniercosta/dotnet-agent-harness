@@ -91,8 +91,17 @@ NOTES
 }
 
 function Test-ResolveRequested {
-    # -Resolve may be bound as an empty string (current-branch resolution).
-    return $PSBoundParameters.ContainsKey('Resolve')
+    <#
+      -Resolve may be bound as an empty string (current-branch resolution), so
+      presence has to be tested rather than truthiness.
+
+      The script's bound parameters must be passed in: inside a function,
+      $PSBoundParameters is that function's own binding, which is always empty
+      here — reading it directly made every `-Resolve` invocation fail with
+      "No verb specified".
+    #>
+    param([Parameter(Mandatory)]$BoundParameters)
+    return $BoundParameters.ContainsKey('Resolve')
 }
 
 # ---------------------------------------------------------------------------
@@ -142,6 +151,94 @@ function ConvertFrom-GhJson {
     }
     catch {
         throw "Failed to parse gh JSON while $Action`: $($_.Exception.Message)`nRaw: $($Text.Trim())"
+    }
+}
+
+function Split-JsonDocuments {
+    <#
+      `gh api --paginate` emits one complete JSON document per page, so a PR that
+      crosses a page boundary produces `[...]\n[...]` — not parseable as a single
+      document. Split the stream back into top-level documents. String- and
+      escape-aware so brackets inside string values do not move the depth.
+    #>
+    param([Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+
+    $docs = [System.Collections.Generic.List[string]]::new()
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $docs }
+
+    $depth = 0
+    $inString = $false
+    $escaped = $false
+    $start = -1
+
+    for ($i = 0; $i -lt $Text.Length; $i++) {
+        $ch = [string]$Text[$i]
+
+        if ($inString) {
+            if ($escaped) { $escaped = $false }
+            elseif ($ch -eq '\') { $escaped = $true }
+            elseif ($ch -eq '"') { $inString = $false }
+            continue
+        }
+
+        if ($ch -eq '"') { $inString = $true; continue }
+
+        if ($ch -eq '[' -or $ch -eq '{') {
+            if ($depth -eq 0) { $start = $i }
+            $depth++
+            continue
+        }
+
+        if ($ch -eq ']' -or $ch -eq '}') {
+            if ($depth -gt 0) { $depth-- }
+            if ($depth -eq 0 -and $start -ge 0) {
+                $docs.Add($Text.Substring($start, $i - $start + 1))
+                $start = -1
+            }
+        }
+    }
+
+    if ($depth -ne 0) {
+        throw "Unbalanced JSON in gh output (truncated response?)."
+    }
+
+    return $docs
+}
+
+function Invoke-GhPaginated {
+    <#
+      Run a paginated `gh api` call and return every page parsed, plus the pages
+      flattened into one item list. Callers that need per-page envelopes (such as
+      check-runs, which wraps its array in an object) read .Pages; callers over a
+      plain array endpoint read .Items.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Action,
+        [Parameter(Mandatory)][string]$Path,
+        [switch]$AllowFailure
+    )
+
+    $result = Invoke-Gh -Action $Action -GhArgs @('api', $Path, '--paginate') -AllowFailure:$AllowFailure
+
+    $pages = [System.Collections.Generic.List[object]]::new()
+    if ($result.ExitCode -eq 0) {
+        foreach ($doc in (Split-JsonDocuments -Text $result.Text)) {
+            $pages.Add((ConvertFrom-GhJson -Text $doc -Action $Action))
+        }
+    }
+
+    $items = [System.Collections.Generic.List[object]]::new()
+    foreach ($page in $pages) {
+        foreach ($item in @($page)) {
+            if ($null -ne $item) { $items.Add($item) }
+        }
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $result.ExitCode
+        Text     = $result.Text
+        Pages    = $pages.ToArray()
+        Items    = $items.ToArray()
     }
 }
 
@@ -233,6 +330,56 @@ function Get-WorkspaceRoot {
     return Join-Path (Join-Path $base $repoKey) $prKey
 }
 
+function Set-PrivateDirectoryMode {
+    <#
+      Restrict a workspace directory to the owner (0700) on POSIX hosts. Windows
+      temp directories are already per-user, so this is a no-op there.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+
+    if ($IsWindows) { return }
+    try {
+        $mode = [System.IO.UnixFileMode]::UserRead -bor
+                [System.IO.UnixFileMode]::UserWrite -bor
+                [System.IO.UnixFileMode]::UserExecute
+        [System.IO.File]::SetUnixFileMode($Path, $mode)
+    }
+    catch {
+        Write-Warning "Could not restrict permissions on '$Path' ($($_.Exception.Message)). On a shared host, review state may be readable by other users."
+    }
+}
+
+function Assert-SafeWorkspacePath {
+    <#
+      The workspace path is predictable (temp/pr-review/<owner>-<repo>/<pr>-<sha>),
+      so on a shared host another user can pre-create it — or plant a symlink or
+      NTFS junction aimed at somewhere sensitive — and then read the review or
+      have this script write through it. Refuse anything that is not a real
+      directory belonging to the current user.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+
+    $item = Get-Item -LiteralPath $Path -Force -ErrorAction Stop
+
+    if ($item.Attributes.HasFlag([System.IO.FileAttributes]::ReparsePoint)) {
+        throw "Refusing to use review workspace '$Path': it is a symlink or junction, not a directory. Remove it and re-run."
+    }
+    if (-not $item.PSIsContainer) {
+        throw "Refusing to use review workspace '$Path': it exists and is not a directory. Remove it and re-run."
+    }
+
+    if (-not $IsWindows) {
+        $owner = $null
+        try { $owner = ([string]$item.User).Trim() } catch { $owner = $null }
+        if (-not [string]::IsNullOrWhiteSpace($owner)) {
+            $ownerName = ($owner -split '\s+')[0]
+            if ($ownerName -ne [System.Environment]::UserName) {
+                throw "Refusing to use review workspace '$Path': owned by '$ownerName', not '$([System.Environment]::UserName)'. Remove it and re-run."
+            }
+        }
+    }
+}
+
 function New-OrGetWorkspace {
     param(
         [Parameter(Mandatory)][string]$Owner,
@@ -242,9 +389,20 @@ function New-OrGetWorkspace {
     )
 
     $path = Get-WorkspaceRoot -Owner $Owner -Repo $Repo -Pr $Pr -HeadSha $HeadSha
-    if (-not (Test-Path -LiteralPath $path)) {
-        New-Item -ItemType Directory -Path $path -Force | Out-Null
+
+    # Create and lock down every level this script owns — <temp>/pr-review and
+    # below — so a pre-existing hostile parent is caught before anything is
+    # written under it. The OS temp root itself is not ours to police.
+    $repoDir = Split-Path -Parent $path
+    $baseDir = Split-Path -Parent $repoDir
+    foreach ($dir in @($baseDir, $repoDir, $path)) {
+        if (-not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+        }
+        Assert-SafeWorkspacePath -Path $dir
+        Set-PrivateDirectoryMode -Path $dir
     }
+
     return $path
 }
 
@@ -1033,52 +1191,57 @@ function Parse-PrTarget {
     throw "Unrecognized -Resolve target (expected integer, GitHub PR URL, or empty): $Target"
 }
 
-function Invoke-Resolve {
-    param([string]$Target)
+function Merge-CheckRunPages {
+    <#
+      The check-runs endpoint wraps its array in an envelope, so paginating it
+      yields one `{ total_count, check_runs }` object per page. Merge them into a
+      single envelope with the true total.
+    #>
+    param([object[]]$Pages)
 
-    Assert-GhPresent
-    $target = Parse-PrTarget -Target $Target
-    $owner = $target.Owner
-    $repo = $target.Repo
-    $number = $target.Number
-    $apiBase = "repos/$owner/$repo"
+    $runs = [System.Collections.Generic.List[object]]::new()
+    foreach ($page in @($Pages)) {
+        if ($null -eq $page) { continue }
+        if (-not (Test-HasProperty -Object $page -Name 'check_runs')) { continue }
+        foreach ($run in @((Get-PropertyValue -Object $page -Name 'check_runs'))) {
+            if ($null -ne $run) { $runs.Add($run) }
+        }
+    }
 
-    $prRaw = Invoke-Gh -Action "fetching PR #$number" -GhArgs @(
-        'api', "$apiBase/pulls/$number"
+    return [pscustomobject]@{
+        total_count = $runs.Count
+        check_runs  = $runs.ToArray()
+    }
+}
+
+function Get-ReviewThreads {
+    <#
+      Cursor-page every review thread. Coverage that stopped short is reported
+      rather than silently truncated: dedupe treats "no prior thread" as "new
+      finding", so a quietly capped fetch reposts comments that already exist.
+
+      Returns { threads, complete, incompleteReason, truncatedThreads, pagesFetched }.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Owner,
+        [Parameter(Mandatory)][string]$Repo,
+        [Parameter(Mandatory)][int]$Number,
+        [int]$MaxPages = 20
     )
-    $pr = ConvertFrom-GhJson -Text $prRaw.Text -Action "parsing PR #$number"
 
-    $baseSha = [string]$pr.base.sha
-    $headSha = [string]$pr.head.sha
-    $baseRef = [string]$pr.base.ref
-    $headRef = [string]$pr.head.ref
-
-    $filesRaw = Invoke-Gh -Action 'fetching changed files' -GhArgs @(
-        'api', "$apiBase/pulls/$number/files", '--paginate'
-    )
-    $files = @(ConvertFrom-GhJson -Text $filesRaw.Text -Action 'parsing changed files')
-
-    $commitsRaw = Invoke-Gh -Action 'fetching commits' -GhArgs @(
-        'api', "$apiBase/pulls/$number/commits", '--paginate'
-    )
-    $commits = @(ConvertFrom-GhJson -Text $commitsRaw.Text -Action 'parsing commits')
-
-    $reviewsRaw = Invoke-Gh -Action 'fetching reviews' -GhArgs @(
-        'api', "$apiBase/pulls/$number/reviews", '--paginate'
-    )
-    $reviews = @(ConvertFrom-GhJson -Text $reviewsRaw.Text -Action 'parsing reviews')
-
-    # Review threads (GraphQL) — resolved/unresolved state for incremental dedupe.
-    $threadsQuery = @'
-query($owner:String!, $repo:String!, $number:Int!) {
+    $query = @'
+query($owner:String!, $repo:String!, $number:Int!, $cursor:String) {
   repository(owner:$owner, name:$repo) {
     pullRequest(number:$number) {
-      reviewThreads(first: 100) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           id
           isResolved
           isOutdated
-          comments(first: 20) {
+          comments(first: 100) {
+            totalCount
+            pageInfo { hasNextPage }
             nodes {
               id
               databaseId
@@ -1095,35 +1258,123 @@ query($owner:String!, $repo:String!, $number:Int!) {
   }
 }
 '@
-    $threadsTmp = Join-Path ([System.IO.Path]::GetTempPath()) ("pr-review-threads-{0}.graphql" -f [guid]::NewGuid().ToString('n'))
+
+    $nodes = [System.Collections.Generic.List[object]]::new()
+    $truncated = [System.Collections.Generic.List[string]]::new()
+    $complete = $true
+    $reason = $null
+    $cursor = $null
+    $pagesFetched = 0
+
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("pr-review-threads-{0}.graphql" -f [guid]::NewGuid().ToString('n'))
     try {
-        Set-Content -LiteralPath $threadsTmp -Value $threadsQuery -Encoding utf8
-        $threadsRaw = Invoke-Gh -Action 'fetching review threads' -GhArgs @(
-            'api', 'graphql',
-            '-f', "owner=$owner",
-            '-f', "repo=$repo",
-            '-F', "number=$number",
-            '-F', "query=@$threadsTmp"
-        ) -AllowFailure
-        $threads = $null
-        if ($threadsRaw.ExitCode -eq 0) {
-            $threads = ConvertFrom-GhJson -Text $threadsRaw.Text -Action 'parsing review threads'
-        }
-        else {
-            Write-Warning "Could not fetch review threads (continuing without them): $($threadsRaw.Text.Trim())"
-            $threads = [pscustomobject]@{ warning = 'review threads unavailable'; raw = $threadsRaw.Text }
+        Set-Content -LiteralPath $tmp -Value $query -Encoding utf8
+
+        while ($true) {
+            $ghArgs = @(
+                'api', 'graphql',
+                '-f', "owner=$Owner",
+                '-f', "repo=$Repo",
+                '-F', "number=$Number",
+                '-F', "query=@$tmp"
+            )
+            if (-not [string]::IsNullOrEmpty($cursor)) { $ghArgs += @('-f', "cursor=$cursor") }
+
+            $raw = Invoke-Gh -Action 'fetching review threads' -GhArgs $ghArgs -AllowFailure
+            if ($raw.ExitCode -ne 0) {
+                Write-Warning "Could not fetch review threads (continuing without them): $($raw.Text.Trim())"
+                $complete = $false
+                $reason = "GraphQL request failed: $($raw.Text.Trim())"
+                break
+            }
+
+            $rt = $null
+            try { $rt = $raw.Text | ConvertFrom-Json -Depth 100 | ForEach-Object { $_.data.repository.pullRequest.reviewThreads } }
+            catch { $rt = $null }
+            if ($null -eq $rt) {
+                Write-Warning 'Review threads response contained no thread data (continuing without them).'
+                $complete = $false
+                $reason = 'GraphQL response contained no reviewThreads data'
+                break
+            }
+
+            foreach ($node in @($rt.nodes)) {
+                if ($null -eq $node) { continue }
+                $nodes.Add($node)
+                $moreComments = $false
+                try { $moreComments = [bool]$node.comments.pageInfo.hasNextPage } catch { $moreComments = $false }
+                if ($moreComments) { $truncated.Add([string]$node.id) }
+            }
+            $pagesFetched++
+
+            $hasNext = $false
+            try { $hasNext = [bool]$rt.pageInfo.hasNextPage } catch { $hasNext = $false }
+            if (-not $hasNext) { break }
+
+            if ($pagesFetched -ge $MaxPages) {
+                $complete = $false
+                $reason = "Stopped after $MaxPages pages of review threads; later threads were not fetched."
+                break
+            }
+            $cursor = [string]$rt.pageInfo.endCursor
         }
     }
     finally {
-        Remove-Item -LiteralPath $threadsTmp -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $tmp -ErrorAction SilentlyContinue
     }
 
-    $ciRaw = Invoke-Gh -Action 'fetching check status' -GhArgs @(
-        'api', "$apiBase/commits/$headSha/check-runs", '--paginate'
-    ) -AllowFailure
+    if ($truncated.Count -gt 0) {
+        $complete = $false
+        if ([string]::IsNullOrEmpty($reason)) {
+            $reason = "$($truncated.Count) thread(s) hold more than 100 comments; the later comments were not fetched."
+        }
+    }
+
+    return [pscustomobject]@{
+        threads          = $nodes.ToArray()
+        complete         = $complete
+        incompleteReason = $reason
+        truncatedThreads = $truncated.ToArray()
+        pagesFetched     = $pagesFetched
+    }
+}
+
+function Invoke-Resolve {
+    param([string]$Target)
+
+    Assert-GhPresent
+    # Not $target: PowerShell variable names are case-insensitive, so assigning
+    # here would land back in the [string]-typed $Target parameter and stringify
+    # the parsed object.
+    $parsed = Parse-PrTarget -Target $Target
+    $owner = $parsed.Owner
+    $repo = $parsed.Repo
+    $number = $parsed.Number
+    $apiBase = "repos/$owner/$repo"
+
+    $prRaw = Invoke-Gh -Action "fetching PR #$number" -GhArgs @(
+        'api', "$apiBase/pulls/$number"
+    )
+    $pr = ConvertFrom-GhJson -Text $prRaw.Text -Action "parsing PR #$number"
+
+    $baseSha = [string]$pr.base.sha
+    $headSha = [string]$pr.head.sha
+    $baseRef = [string]$pr.base.ref
+    $headRef = [string]$pr.head.ref
+
+    $files = @((Invoke-GhPaginated -Action 'fetching changed files' -Path "$apiBase/pulls/$number/files").Items)
+    $commits = @((Invoke-GhPaginated -Action 'fetching commits' -Path "$apiBase/pulls/$number/commits").Items)
+    $reviews = @((Invoke-GhPaginated -Action 'fetching reviews' -Path "$apiBase/pulls/$number/reviews").Items)
+
+    # Review threads (GraphQL) — resolved/unresolved state for incremental dedupe.
+    # Cursor-paged: a busy PR has more than one page of threads, and silently
+    # keeping the first 100 would make dedupe repost findings already commented on.
+    $threads = Get-ReviewThreads -Owner $owner -Repo $repo -Number $number
+
+    $ciResult = Invoke-GhPaginated -Action 'fetching check status' -Path "$apiBase/commits/$headSha/check-runs" -AllowFailure
     $ci = $null
-    if ($ciRaw.ExitCode -eq 0) {
-        $ci = ConvertFrom-GhJson -Text $ciRaw.Text -Action 'parsing check runs'
+    if ($ciResult.ExitCode -eq 0) {
+        $ci = Merge-CheckRunPages -Pages $ciResult.Pages
     }
     else {
         # Fallback: combined status
@@ -1141,10 +1392,16 @@ query($owner:String!, $repo:String!, $number:Int!) {
 
     $workspace = New-OrGetWorkspace -Owner $owner -Repo $repo -Pr $number -HeadSha $headSha
 
+    # Each explicit -Resolve mints a run id. The posting receipt is keyed by it,
+    # so retrying one run stays idempotent while a deliberate re-review of an
+    # unchanged head still publishes its own summary.
+    $runId = [guid]::NewGuid().ToString('n').Substring(0, 12)
+
     $pinned = [pscustomobject]@{
         owner     = $owner
         repo      = $repo
         pr        = $number
+        runId     = $runId
         baseSha   = $baseSha
         headSha   = $headSha
         baseRef   = $baseRef
@@ -1166,7 +1423,12 @@ query($owner:String!, $repo:String!, $number:Int!) {
     Write-Output "Resolved PR $owner/$repo#$number"
     Write-Output "baseSha: $baseSha"
     Write-Output "headSha: $headSha"
+    Write-Output "runId: $runId"
     Write-Output "workspace: $workspace"
+    Write-Output "changedFiles: $($files.Count)  commits: $($commits.Count)  reviews: $($reviews.Count)  threads: $($threads.threads.Count)"
+    if (-not $threads.complete) {
+        Write-Output "threadCoverage: INCOMPLETE — $($threads.incompleteReason)"
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -1174,8 +1436,21 @@ query($owner:String!, $repo:String!, $number:Int!) {
 # ---------------------------------------------------------------------------
 
 function Get-PostResultPath {
-    param([Parameter(Mandatory)][string]$Workspace)
-    return Join-Path $Workspace 'post-result.json'
+    <#
+      The receipt is keyed by run id, not by head SHA. Keying it by head made a
+      deliberate re-review of an unchanged head a silent no-op even when it had
+      new findings; keying it by run keeps retries of one run idempotent while
+      letting the next explicit run publish its own summary. Workspaces resolved
+      before run ids existed fall back to the old head-keyed path.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Workspace,
+        [string]$RunId
+    )
+    if ([string]::IsNullOrWhiteSpace($RunId)) {
+        return Join-Path $Workspace 'post-result.json'
+    }
+    return Join-Path $Workspace "post-result-$RunId.json"
 }
 
 function Move-UnmappableToSummary {
@@ -1261,15 +1536,22 @@ function Invoke-Post {
     $number = [int]$pinned.pr
     $pinnedHead = [string]$pinned.headSha
 
-    # Idempotent retry: same head already posted.
-    $resultPath = Get-PostResultPath -Workspace $workspace
+    $runId = ''
+    if (Test-HasProperty -Object $pinned -Name 'runId') {
+        $runId = [string](Get-PropertyValue -Object $pinned -Name 'runId')
+    }
+
+    # Idempotent retry: this run already posted. A later -Resolve mints a new run
+    # id, so re-reviewing an unchanged head still publishes a fresh summary.
+    $resultPath = Get-PostResultPath -Workspace $workspace -RunId $runId
     if (Test-Path -LiteralPath $resultPath) {
         $prior = Read-JsonFile -Path $resultPath
         if ([string]$prior.headSha -eq $headSha -and $prior.reviewId) {
-            Write-Output "Already posted for head $headSha (idempotent no-op)"
+            Write-Output "Already posted for run $runId at head $headSha (idempotent no-op)"
             Write-Output "reviewId: $($prior.reviewId)"
             Write-Output ("commentIds: " + ((@($prior.commentIds) | ForEach-Object { $_ }) -join ', '))
             Write-Output "postedAt: $($prior.postedAt)"
+            Write-Output 'Run -Resolve again to start a new run against this head.'
             exit 0
         }
     }
@@ -1285,10 +1567,7 @@ function Invoke-Post {
     }
 
     # 2. Validate comments against pinned diff (refresh files list).
-    $filesRaw = Invoke-Gh -Action 'refreshing changed files for line map' -GhArgs @(
-        'api', "repos/$owner/$repo/pulls/$number/files", '--paginate'
-    )
-    $files = @(ConvertFrom-GhJson -Text $filesRaw.Text -Action 'parsing changed files')
+    $files = @((Invoke-GhPaginated -Action 'refreshing changed files for line map' -Path "repos/$owner/$repo/pulls/$number/files").Items)
     Write-JsonFile -Value $files -Path (Join-Path $workspace 'changed-files.json')
     $diffMap = Get-DiffLineMap -Files $files
 
@@ -1344,10 +1623,7 @@ function Invoke-Post {
     # 3. If gh rejects line locations, refresh + remap exactly once.
     if ($response.ExitCode -ne 0 -and $response.Text -match '(?i)(line|position|pull_request_review_thread|Path)') {
         Write-Warning 'GitHub rejected one or more line locations; refreshing diff and retrying once.'
-        $filesRaw2 = Invoke-Gh -Action 're-refreshing changed files' -GhArgs @(
-            'api', "repos/$owner/$repo/pulls/$number/files", '--paginate'
-        )
-        $files2 = @(ConvertFrom-GhJson -Text $filesRaw2.Text -Action 'parsing changed files (retry)')
+        $files2 = @((Invoke-GhPaginated -Action 're-refreshing changed files' -Path "repos/$owner/$repo/pulls/$number/files").Items)
         Write-JsonFile -Value $files2 -Path (Join-Path $workspace 'changed-files.json')
         $diffMap2 = Get-DiffLineMap -Files $files2
 
@@ -1403,24 +1679,27 @@ function Invoke-Post {
     $created = ConvertFrom-GhJson -Text $response.Text -Action 'parsing created review'
     $reviewId = $created.id
 
-    # Collect comment ids from the review comments endpoint.
+    # Collect comment ids from the review comments endpoint (paginated: a large
+    # review exceeds one page, and a short receipt makes retries look wrong).
     $commentIds = @()
-    $cRaw = Invoke-Gh -Action 'listing review comments' -GhArgs @(
-        'api', "repos/$owner/$repo/pulls/$number/reviews/$reviewId/comments"
-    ) -AllowFailure
-    if ($cRaw.ExitCode -eq 0) {
-        $clist = @(ConvertFrom-GhJson -Text $cRaw.Text -Action 'parsing review comment ids')
-        $commentIds = @($clist | ForEach-Object { $_.id })
+    $cResult = Invoke-GhPaginated -Action 'listing review comments' -Path "repos/$owner/$repo/pulls/$number/reviews/$reviewId/comments" -AllowFailure
+    if ($cResult.ExitCode -eq 0) {
+        $commentIds = @($cResult.Items | ForEach-Object { $_.id })
     }
 
     $postedAt = (Get-Date).ToUniversalTime().ToString('o')
     $result = [pscustomobject]@{
         reviewId   = $reviewId
         commentIds = $commentIds
+        runId      = $runId
         headSha    = $headSha
         postedAt   = $postedAt
     }
     Write-JsonFile -Value $result -Path $resultPath
+    if ($resultPath -ne (Get-PostResultPath -Workspace $workspace)) {
+        # Latest-run pointer, so a human reading the workspace has one obvious file.
+        Write-JsonFile -Value $result -Path (Get-PostResultPath -Workspace $workspace)
+    }
     Write-JsonFile -Value $working -Path (Join-Path $workspace 'review.json')
 
     Write-Output "Posted COMMENT review $reviewId on $owner/$repo#$number"
@@ -1440,7 +1719,7 @@ try {
         exit 0
     }
 
-    $resolveRequested = Test-ResolveRequested
+    $resolveRequested = Test-ResolveRequested -BoundParameters $PSBoundParameters
     $verbCount = 0
     if ($resolveRequested) { $verbCount++ }
     if ($Post) { $verbCount++ }

@@ -167,6 +167,13 @@ jobs:
         shell: pwsh
         run: ./scripts/local/Test-SelfSkills.ps1
 
+      # The /pr-review helper talks to gh, so its defects (multi-page fetches,
+      # rerun receipts, verb dispatch) are invisible to a distribution test.
+      # This drives the real script against a fake gh; no network, no auth.
+      - name: pr-review helper paginates and keys receipts per run
+        shell: pwsh
+        run: ./scripts/local/Test-PrReviewHelper.ps1
+
       # Repo-local route-map advisor (scripts/local/, not packaged). The map is
       # the durable artifact of #46, so its schema, coverage, and resolution
       # must stay guarded after merge.
