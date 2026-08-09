@@ -425,17 +425,20 @@ function Test-ReviewPayloadObject {
     }
 
     if (Test-HasProperty -Object $Payload -Name 'comments') {
+        # ConvertFrom-Json unwraps a single-element JSON array to a lone object,
+        # so a one-comment payload arrives here as a scalar, not an array. Wrap
+        # with @() before iterating (as every other comments reader in this file
+        # does); a genuine non-array scalar like a string is still rejected, and
+        # malformed items are still caught per-item by Test-ReviewCommentObject.
         $comments = Get-PropertyValue -Object $Payload -Name 'comments'
-        if ($null -ne $comments) {
-            if ($comments -isnot [System.Collections.IEnumerable] -or $comments -is [string]) {
-                Add-Violation -List $Violations -Path "$Path.comments" -Message "must be an array"
-            }
-            else {
-                $i = 0
-                foreach ($c in @($comments)) {
-                    Test-ReviewCommentObject -Comment $c -Path "$Path.comments[$i]" -Violations $Violations
-                    $i++
-                }
+        if ($null -ne $comments -and $comments -is [string]) {
+            Add-Violation -List $Violations -Path "$Path.comments" -Message "must be an array of comment objects"
+        }
+        else {
+            $i = 0
+            foreach ($c in @($comments)) {
+                Test-ReviewCommentObject -Comment $c -Path "$Path.comments[$i]" -Violations $Violations
+                $i++
             }
         }
     }
