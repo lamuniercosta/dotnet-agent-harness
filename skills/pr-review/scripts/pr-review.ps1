@@ -291,7 +291,20 @@ function Write-JsonFile {
     if ($dir -and -not (Test-Path -LiteralPath $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
     }
-    ($Value | ConvertTo-Json -Depth 100) | Set-Content -LiteralPath $Path -Encoding utf8
+    # Serialize first, then write to a sibling temp file and move it into place.
+    # A crash partway through writing the post receipt used to leave truncated
+    # JSON, and every later retry then died parsing it — before reaching the
+    # run-marker reconciliation that exists for exactly that case. Either the
+    # whole file lands or the previous one stays.
+    $json = ($Value | ConvertTo-Json -Depth 100)
+    $temp = "$Path.$([guid]::NewGuid().ToString('n').Substring(0, 8)).tmp"
+    try {
+        Set-Content -LiteralPath $temp -Value $json -Encoding utf8
+        Move-Item -LiteralPath $temp -Destination $Path -Force
+    }
+    finally {
+        if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
+    }
 }
 
 function Get-PropertyValue {
@@ -355,12 +368,35 @@ function Get-WorkspaceRoot {
 
 function Set-PrivateDirectoryMode {
     <#
-      Restrict a workspace directory to the owner (0700) on POSIX hosts. Windows
-      temp directories are already per-user, so this is a no-op there.
+      Restrict a workspace directory to the current user: 0700 on POSIX, and the
+      ACL equivalent on Windows. Windows temp directories are per-user by
+      default, but a default is not an enforcement — TEMP is routinely
+      redirected to a shared location on build and dev machines — so the
+      restriction is applied rather than assumed.
     #>
     param([Parameter(Mandatory)][string]$Path)
 
-    if ($IsWindows) { return }
+    if ($IsWindows) {
+        try {
+            $acl = Get-Acl -LiteralPath $Path
+            # Break inheritance without copying the inherited rules down, then
+            # drop whatever explicit rules survive, so only the grant below
+            # remains.
+            $acl.SetAccessRuleProtection($true, $false)
+            foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
+            $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
+                    [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
+                    [System.Security.AccessControl.FileSystemRights]::FullControl,
+                    'ContainerInherit, ObjectInherit',
+                    [System.Security.AccessControl.PropagationFlags]::None,
+                    [System.Security.AccessControl.AccessControlType]::Allow))
+            Set-Acl -LiteralPath $Path -AclObject $acl
+        }
+        catch {
+            Write-Warning "Could not restrict permissions on '$Path' ($($_.Exception.Message)). On a shared host, review state may be readable by other users."
+        }
+        return
+    }
     try {
         $mode = [System.IO.UnixFileMode]::UserRead -bor
                 [System.IO.UnixFileMode]::UserWrite -bor
@@ -370,6 +406,46 @@ function Set-PrivateDirectoryMode {
     catch {
         Write-Warning "Could not restrict permissions on '$Path' ($($_.Exception.Message)). On a shared host, review state may be readable by other users."
     }
+}
+
+function Assert-WindowsWorkspaceOwner {
+    <#
+      The POSIX branch proves the workspace belongs to the current user; Windows
+      needs the same proof. "Windows temp is per-user" is a default, not an
+      enforcement: with TEMP redirected to a shared location, another local
+      account can pre-create the predictable pr-review/<owner>-<repo>/<pr>-<sha>
+      tree as real directories, which passes the reparse-point and container
+      checks, and then read review state or plant prior-dedupe state that
+      suppresses findings.
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+
+    $me = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+    try {
+        $ownerSid = (Get-Acl -LiteralPath $Path).GetOwner([System.Security.Principal.SecurityIdentifier])
+    }
+    catch {
+        throw "Refusing to use review workspace '$Path': its owner could not be read ($($_.Exception.Message)). Remove it and re-run."
+    }
+    if (-not $ownerSid) {
+        throw "Refusing to use review workspace '$Path': it reports no owner. Remove it and re-run."
+    }
+    if ($ownerSid.Value -eq $me.User.Value) { return }
+
+    # Windows can be configured to stamp BUILTIN\Administrators as the owner of
+    # everything an elevated member of that group creates. Accept that only when
+    # this process is itself elevated — otherwise it is someone else's directory.
+    $administrators = [System.Security.Principal.SecurityIdentifier]::new(
+        [System.Security.Principal.WellKnownSidType]::BuiltinAdministratorsSid, $null)
+    if ($ownerSid.Value -eq $administrators.Value -and
+        ([System.Security.Principal.WindowsPrincipal]::new($me)).IsInRole(
+            [System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        return
+    }
+
+    $ownerName = $ownerSid.Value
+    try { $ownerName = $ownerSid.Translate([System.Security.Principal.NTAccount]).Value } catch { }
+    throw "Refusing to use review workspace '$Path': owned by '$ownerName', not '$($me.Name)'. Remove it and re-run."
 }
 
 function Assert-SafeWorkspacePath {
@@ -391,15 +467,23 @@ function Assert-SafeWorkspacePath {
         throw "Refusing to use review workspace '$Path': it exists and is not a directory. Remove it and re-run."
     }
 
-    if (-not $IsWindows) {
-        $owner = $null
-        try { $owner = ([string]$item.User).Trim() } catch { $owner = $null }
-        if (-not [string]::IsNullOrWhiteSpace($owner)) {
-            $ownerName = ($owner -split '\s+')[0]
-            if ($ownerName -ne [System.Environment]::UserName) {
-                throw "Refusing to use review workspace '$Path': owned by '$ownerName', not '$([System.Environment]::UserName)'. Remove it and re-run."
-            }
-        }
+    if ($IsWindows) {
+        Assert-WindowsWorkspaceOwner -Path $Path
+        return
+    }
+
+    $owner = $null
+    try { $owner = ([string]$item.User).Trim() } catch { $owner = $null }
+    if ([string]::IsNullOrWhiteSpace($owner)) {
+        # Say so rather than skipping in silence: an unreadable owner means the
+        # ownership guarantee is not in force, and the operator needs to know
+        # which of the two states they are in.
+        Write-Warning "Could not read the owner of review workspace '$Path'. Its ownership could not be verified; on a shared host, treat the review state as untrusted."
+        return
+    }
+    $ownerName = ($owner -split '\s+')[0]
+    if ($ownerName -ne [System.Environment]::UserName) {
+        throw "Refusing to use review workspace '$Path': owned by '$ownerName', not '$([System.Environment]::UserName)'. Remove it and re-run."
     }
 }
 
@@ -827,7 +911,13 @@ function Get-Sha256Hex {
 
 function Get-FindingFingerprint {
     <#
-      Exact dedupe key: repo, pr, category, file, range, and normalized substance.
+      Exact dedupe key: category, file, range, and normalized substance.
+
+      Repo and PR are deliberately absent. Dedupe is per-PR by workflow — prior
+      state is read from this PR's own run directory — so they discriminate
+      nothing, and as optional model-populated fields they made the key depend
+      on whether the model happened to fill them in: the same defect
+      fingerprinted two ways across runs and got reposted, failing open.
 
       Current findings are model-produced after reading untrusted PR content, so
       any fingerprint already present on the input is ignored — a prompt-injected
@@ -839,8 +929,6 @@ function Get-FindingFingerprint {
     #>
     param(
         $Finding,
-        [string]$Repo,
-        [string]$Pr,
         [switch]$HonorStored
     )
 
@@ -851,8 +939,6 @@ function Get-FindingFingerprint {
         }
     }
 
-    $repoVal = if ($Repo) { $Repo } else { [string](Get-PropertyValue -Object $Finding -Name 'repo') }
-    $prVal = if ($Pr) { $Pr } else { [string](Get-PropertyValue -Object $Finding -Name 'pr') }
     $category = [string](Get-PropertyValue -Object $Finding -Name 'category')
     $file = Normalize-PathKey -Path ([string](Get-PropertyValue -Object $Finding -Name 'file'))
     $line = Get-PropertyValue -Object $Finding -Name 'line'
@@ -870,7 +956,7 @@ function Get-FindingFingerprint {
     }
     $substance = Get-NormalizedSubstance -Finding $Finding
 
-    $material = (@($repoVal, $prVal, $category, $file, $range, $substance) -join '|')
+    $material = (@($category, $file, $range, $substance) -join '|')
     return Get-Sha256Hex -Text $material
 }
 
@@ -899,8 +985,8 @@ function Get-FindingSemanticFingerprint {
       A location-independent key, so a finding whose line only shifted is
       recognised as the same defect on a rerun.
 
-      Removing location entirely went one step too far: repo + pr + category +
-      file + wording cannot tell two separate defects apart when the reviewer
+      Removing location entirely went one step too far: category + file +
+      wording cannot tell two separate defects apart when the reviewer
       describes them identically — two methods with the same empty-input null
       deref and the same summary collapsed, and the second finding vanished.
       Any line-independent context the finding carries is folded back in, and
@@ -914,8 +1000,6 @@ function Get-FindingSemanticFingerprint {
     #>
     param(
         $Finding,
-        [string]$Repo,
-        [string]$Pr,
         [switch]$HonorStored
     )
 
@@ -926,14 +1010,12 @@ function Get-FindingSemanticFingerprint {
         }
     }
 
-    $repoVal = if ($Repo) { $Repo } else { [string](Get-PropertyValue -Object $Finding -Name 'repo') }
-    $prVal = if ($Pr) { $Pr } else { [string](Get-PropertyValue -Object $Finding -Name 'pr') }
     $category = [string](Get-PropertyValue -Object $Finding -Name 'category')
     $file = Normalize-PathKey -Path ([string](Get-PropertyValue -Object $Finding -Name 'file'))
     $context = Get-FindingContextKey -Finding $Finding
     $substance = Get-NormalizedSubstance -Finding $Finding
 
-    $material = (@($repoVal, $prVal, $category, $file, $context, $substance) -join '|')
+    $material = (@($category, $file, $context, $substance) -join '|')
     return Get-Sha256Hex -Text $material
 }
 
@@ -1364,6 +1446,16 @@ function Get-DiffLineMap {
     <#
       Parse unified patches from the PR files list into a map:
         path -> @{ RIGHT = HashSet[int]; LEFT = HashSet[int] }
+
+      Each hunk consumes exactly the line counts its header declares. An empty
+      patch line has to count as context — GitHub strips the single leading
+      space from a blank context line, so a blank line inside a hunk arrives as
+      '' — but that also makes any stray trailing '' look like one more context
+      line. A patch ending in a newline splits to a final '' and used to admit a
+      phantom EOF+1 line on both sides: it passes local validation, GitHub 422s
+      the whole review, and the remap retry then finds nothing left to fix and
+      demotes *every* inline comment to the summary. Honouring the declared
+      counts makes the phantom unrepresentable rather than merely unlikely.
     #>
     param($Files)
 
@@ -1379,29 +1471,46 @@ function Get-DiffLineMap {
         if ($patch) {
             $oldLine = 0
             $newLine = 0
+            # Lines still owed to the current hunk. Zero outside a hunk, so a
+            # patch whose first line is not a header contributes nothing rather
+            # than mapping lines from an assumed origin.
+            $oldRemaining = 0
+            $newRemaining = 0
             foreach ($raw in ($patch -split "`n")) {
                 $line = $raw.TrimEnd("`r")
                 if ($line -match '^@@\s+-([0-9]+)(?:,([0-9]+))?\s+\+([0-9]+)(?:,([0-9]+))?\s@@') {
                     $oldLine = [int]$Matches[1]
                     $newLine = [int]$Matches[3]
+                    # An absent count means 1 line, per the unified-diff format.
+                    $oldRemaining = if ($Matches[2]) { [int]$Matches[2] } else { 1 }
+                    $newRemaining = if ($Matches[4]) { [int]$Matches[4] } else { 1 }
                     continue
                 }
                 if ($line.StartsWith('+++') -or $line.StartsWith('---') -or $line.StartsWith('\') -or $line.StartsWith('diff ')) {
                     continue
                 }
                 if ($line.StartsWith('+')) {
+                    if ($newRemaining -le 0) { continue }
                     [void]$right.Add($newLine)
                     $newLine++
+                    $newRemaining--
                 }
                 elseif ($line.StartsWith('-')) {
+                    if ($oldRemaining -le 0) { continue }
                     [void]$left.Add($oldLine)
                     $oldLine++
+                    $oldRemaining--
                 }
                 elseif ($line.StartsWith(' ') -or $line -eq '') {
+                    # Context spends one line on each side, so it is only a real
+                    # context line while both sides still owe one.
+                    if ($oldRemaining -le 0 -or $newRemaining -le 0) { continue }
                     [void]$right.Add($newLine)
                     [void]$left.Add($oldLine)
                     $newLine++
                     $oldLine++
+                    $newRemaining--
+                    $oldRemaining--
                 }
             }
         }
@@ -1718,7 +1827,22 @@ function Invoke-Resolve {
     $baseRef = [string]$pr.base.ref
     $headRef = [string]$pr.head.ref
 
-    $files = @((Invoke-GhPaginated -Action 'fetching changed files' -Path "$apiBase/pulls/$number/files").Items)
+    # The diff itself comes from the SHA-addressed compare endpoint, with the
+    # same pinned-tree proof the post path uses before it will trust the mutable
+    # /pulls/<n>/files fallback. The closing pair re-read below cannot substitute
+    # for this: an author controls the branch, so pushing a decoy and force-
+    # pushing back before that check is cheap, and it would leave a B-shaped file
+    # list under a pair that still reads as A. Publication would stay safe — it
+    # re-derives placements from the pin — but every review pass reasons from
+    # this evidence, so the review itself would be about the wrong diff.
+    $expectedFileCount = 0
+    if (Test-HasProperty -Object $pr -Name 'changed_files') {
+        $expectedFileCount = [int](Get-PropertyValue -Object $pr -Name 'changed_files')
+    }
+    $resolvedFiles = Get-PinnedDiffFiles -Owner $owner -Repo $repo -Number $number `
+        -BaseSha $baseSha -HeadSha $headSha -ExpectedFileCount $expectedFileCount
+    $files = @($resolvedFiles.Files)
+
     $commits = @((Invoke-GhPaginated -Action 'fetching commits' -Path "$apiBase/pulls/$number/commits").Items)
     $reviews = @((Invoke-GhPaginated -Action 'fetching reviews' -Path "$apiBase/pulls/$number/reviews").Items)
 
@@ -1807,6 +1931,9 @@ function Invoke-Resolve {
     Write-Output "runId: $runId"
     Write-Output "workspace: $workspace"
     Write-Output "changedFiles: $($files.Count)  commits: $($commits.Count)  reviews: $($reviews.Count)  threads: $($threads.threads.Count)"
+    if (-not $resolvedFiles.Complete) {
+        Write-Output "fileCoverage: INCOMPLETE — $($resolvedFiles.Reason)"
+    }
     if (-not $threads.complete) {
         Write-Output "threadCoverage: INCOMPLETE — $($threads.incompleteReason)"
     }
@@ -1837,8 +1964,17 @@ function Get-RunMarker {
       POST reached GitHub but the response, the parse, or the process died
       before the receipt was written, the retry finds this marker on the
       existing review instead of publishing a duplicate.
+
+      The id is constrained to the shape -Resolve mints. It is read back out of
+      pinned.json, which lives on disk, and both marker searches are substring
+      matches: a runId of `*` would match the first review body it met and
+      suppress publication of a review that was never posted. Failing closed on
+      a malformed id is not a loss, since no real run has one.
     #>
     param([Parameter(Mandatory)][string]$RunId)
+    if ($RunId -notmatch '^[0-9a-fA-F]{6,64}$') {
+        throw "Refusing to use run id '$RunId': a run id must be 6-64 hex characters. Re-run -Resolve to mint one."
+    }
     return "<!-- pr-review:run=$RunId -->"
 }
 
@@ -1850,7 +1986,7 @@ function Add-RunMarker {
 
     $marker = Get-RunMarker -RunId $RunId
     $body = [string](Get-PropertyValue -Object $Payload -Name 'body')
-    if ($body -like "*$marker*") { return $Payload }
+    if ($body.Contains($marker, [System.StringComparison]::Ordinal)) { return $Payload }
 
     return [pscustomobject]@{
         commit_id = [string](Get-PropertyValue -Object $Payload -Name 'commit_id')
@@ -1882,7 +2018,9 @@ function Find-ReviewByRunMarker {
 
     foreach ($review in @($result.Items)) {
         $body = [string](Get-PropertyValue -Object $review -Name 'body')
-        if ($body -like "*$marker*") {
+        # Ordinal substring, not -like: the marker is literal text, and wildcard
+        # matching here would let a crafted id match a review it did not write.
+        if ($body.Contains($marker, [System.StringComparison]::Ordinal)) {
             return [pscustomobject]@{ Checked = $true; Review = $review }
         }
     }
@@ -2209,22 +2347,26 @@ function Move-UnmappableToSummary {
         $section.Add('')
     }
 
+    # Evict by object identity, never by a rendered-content key. Every caller
+    # partitions $Payload.comments and hands back the same object references, so
+    # reference equality removes exactly the demoted comments and nothing else.
+    # The former path|line|body-hash key omitted start_line — and collapsed on
+    # GetHashCode collisions — so an unmappable comment could delete a *mappable*
+    # one that merely rendered identically. The evicted comment then appeared
+    # nowhere at all, because only the unmappable list reaches the summary.
     $kept = @()
     if (Test-HasProperty -Object $Payload -Name 'comments') {
         $all = @((Get-PropertyValue -Object $Payload -Name 'comments'))
-        $unmapPaths = @(
-            foreach ($u in $UnmappableComments) {
-                '{0}|{1}|{2}' -f (Normalize-PathKey ([string](Get-PropertyValue $u 'path'))),
-                (Get-PropertyValue $u 'line'),
-                ([string](Get-PropertyValue $u 'body')).GetHashCode()
-            }
-        )
         $kept = @(
             foreach ($c in $all) {
-                $key = '{0}|{1}|{2}' -f (Normalize-PathKey ([string](Get-PropertyValue $c 'path'))),
-                (Get-PropertyValue $c 'line'),
-                ([string](Get-PropertyValue $c 'body')).GetHashCode()
-                if ($key -notin $unmapPaths) { $c }
+                $demoted = $false
+                foreach ($u in $UnmappableComments) {
+                    if ([object]::ReferenceEquals($c, $u)) {
+                        $demoted = $true
+                        break
+                    }
+                }
+                if (-not $demoted) { $c }
             }
         )
     }
@@ -2316,16 +2458,33 @@ function Get-SubmissionPlan {
     # a fresh summary. The runId is re-checked here as well as being implied by
     # the directory, so a legacy flat workspace cannot pass one run's receipt off
     # as another's.
+    #
+    # Sequential, not concurrent: this reconciliation and the marker lookup below
+    # make a *retry* safe, and nothing here is an inter-process lock. Two -Post
+    # processes started together for one run can both read "unpublished" before
+    # either writes, and both publish. Run-directory isolation covers concurrent
+    # runs, not concurrent posts of one run; SKILL.md states the one-post-at-a-
+    # time constraint. A lock would have to cover the read and the POST together.
     $resultPath = Get-PostResultPath -RunDirectory $workspace
     if (Test-Path -LiteralPath $resultPath) {
-        $prior = Read-JsonFile -Path $resultPath
-        $priorRun = [string](Get-PropertyValue -Object $prior -Name 'runId')
-        if ($priorRun -eq $runId -and [string]$prior.headSha -eq $headSha -and $prior.reviewId) {
-            return [pscustomobject]@{
-                AlreadyPosted = $true
-                Prior         = $prior
-                RunId         = $runId
-                HeadSha       = $headSha
+        # An unreadable receipt is treated as no receipt, not as a fatal error.
+        # Dying here would skip the run-marker reconciliation below, which is the
+        # one mechanism that can tell whether the POST actually landed — turning
+        # a recoverable state into an unrecoverable one.
+        $prior = $null
+        try { $prior = Read-JsonFile -Path $resultPath }
+        catch {
+            Write-Warning "Ignoring unreadable post receipt '$resultPath' ($($_.Exception.Message)). Reconciling against the run marker instead."
+        }
+        if ($null -ne $prior) {
+            $priorRun = [string](Get-PropertyValue -Object $prior -Name 'runId')
+            if ($priorRun -eq $runId -and [string]$prior.headSha -eq $headSha -and $prior.reviewId) {
+                return [pscustomobject]@{
+                    AlreadyPosted = $true
+                    Prior         = $prior
+                    RunId         = $runId
+                    HeadSha       = $headSha
+                }
             }
         }
     }
@@ -2574,10 +2733,15 @@ function Invoke-Post {
             $stillGood = [System.Collections.Generic.List[object]]::new()
         }
 
+        # Rebuild the body from the original payload, not from $working. By this
+        # point $working's body may already carry a pre-flight "## Unmappable
+        # findings" section and a run marker; reusing it would append a second
+        # section below the first and leave the reader with two contradictory
+        # lists of what was demoted.
         $working = [pscustomobject]@{
             commit_id = [string]$payload.commit_id
             event     = 'COMMENT'
-            body      = [string](Get-PropertyValue -Object $working -Name 'body')
+            body      = [string]$payload.body
             comments  = @($stillGood)
         }
         if ($stillBad.Count -gt 0) {

@@ -29,15 +29,15 @@ means a consuming repo's gates may start failing on code that previously passed.
   diff-location validation — and writes nothing to GitHub. Publication is `gh`-only
   by design: all of those guarantees live in the helper, so a second path would
   have to reimplement them per host. Distinct from `/code-review` (local diff
-  engine) and `/ship-review` (pre-PR local gate). (#83)
+  engine) and `/ship-review` (pre-PR local gate).
 - **PowerShell self-tests now run on Windows as well as Linux in CI.** The
   workspace-hardening code has genuinely OS-specific branches — POSIX `0700` mode
   versus Windows reparse-point and ownership checks — and only the Linux half was
-  ever exercised. (#83)
+  ever exercised.
 - **`fix-prober` agent.** A new writable canonical profile that explores one
   bounded alternative fix inside its own disposable worktree and returns the
   candidate patch plus evidence — it never pushes, commits, posts, or touches the
-  user's checkout. Used by `/pr-review`'s selective try-fix. (#83)
+  user's checkout. Used by `/pr-review`'s selective try-fix.
 
 ## [0.4.1] — 2026-08-08
 

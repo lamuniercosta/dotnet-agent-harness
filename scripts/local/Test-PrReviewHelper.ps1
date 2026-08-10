@@ -35,6 +35,9 @@
 #
 #   pwsh ./scripts/local/Test-PrReviewHelper.ps1
 
+[CmdletBinding()]
+param()
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
@@ -135,6 +138,18 @@ Assert-True 'two runs get two receipts' `
 Assert-Equal 'the run marker is deterministic' (Get-RunMarker -RunId 'abc123') (Get-RunMarker -RunId 'abc123')
 Assert-True 'two runs get different markers' ((Get-RunMarker -RunId 'abc123') -ne (Get-RunMarker -RunId 'def456'))
 
+# Both marker searches are substring matches, so a runId of `*` used to match
+# the first review body it met and suppress publication of a review that was
+# never posted. The id comes off disk, so it is validated at the one place that
+# builds the marker.
+$markerRejects = @('*', '', 'abcd', 'abc12g', ('a' * 65))
+$markerRejected = 0
+foreach ($bad in $markerRejects) {
+    try { [void](Get-RunMarker -RunId $bad) } catch { $markerRejected++ }
+}
+Assert-Equal 'a malformed run id is refused, not turned into a wildcard marker' `
+    $markerRejects.Count $markerRejected
+
 $markerPayload = [pscustomobject]@{ commit_id = 'aa'; event = 'COMMENT'; body = 'Summary.'; comments = @() }
 $stamped = Add-RunMarker -Payload $markerPayload -RunId 'abc123'
 Assert-True 'the marker is stamped into the body' ($stamped.body -like "*$(Get-RunMarker -RunId 'abc123')*")
@@ -168,6 +183,46 @@ finally {
     Remove-Item -LiteralPath $bodyDir -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $outsideFile -Force -ErrorAction SilentlyContinue
 }
+
+Write-Host ''
+Write-Host 'Get-DiffLineMap honours the counts each hunk declares'
+
+# A patch that ends in a newline splits to a trailing '', which the context
+# branch used to accept as one more line on both sides. That phantom passes
+# local validation and 422s at GitHub, and the remap retry then finds nothing
+# to fix and demotes every inline comment to the summary.
+$trailing = [pscustomobject]@{
+    filename = 'src/a.cs'; status = 'modified'
+    patch    = "@@ -10,3 +10,4 @@`n first`n second`n+inserted`n third`n"
+}
+$trailingMap = Get-DiffLineMap -Files @($trailing)
+$declaredRight = @(10, 11, 12, 13 | Where-Object { $trailingMap['src/a.cs'].RIGHT.Contains($_) })
+Assert-Equal 'the four declared new-side lines are mapped' 4 $declaredRight.Count
+Assert-True 'a trailing newline adds no phantom line on the new side' `
+    (-not $trailingMap['src/a.cs'].RIGHT.Contains(14))
+Assert-True 'a trailing newline adds no phantom line on the old side' `
+    (-not $trailingMap['src/a.cs'].LEFT.Contains(13))
+
+# The counts have to be honoured without breaking the reason the empty-line
+# branch exists: GitHub strips the leading space from a blank context line, so
+# a blank line inside a hunk arrives as '' and is still a real line.
+$blankInside = [pscustomobject]@{
+    filename = 'src/b.cs'; status = 'modified'
+    patch    = "@@ -1,4 +1,5 @@`n one`n`n+added`n four"
+}
+$blankMap = Get-DiffLineMap -Files @($blankInside)
+Assert-True 'a blank context line inside a hunk still maps' $blankMap['src/b.cs'].RIGHT.Contains(2)
+Assert-True 'the line after the blank keeps its number' $blankMap['src/b.cs'].RIGHT.Contains(3)
+
+# An omitted count means one line, per the unified-diff format.
+$singleLine = [pscustomobject]@{
+    filename = 'src/c.cs'; status = 'modified'
+    patch    = "@@ -5 +5 @@`n only`n"
+}
+$singleMap = Get-DiffLineMap -Files @($singleLine)
+Assert-True 'a countless hunk header maps its one line' $singleMap['src/c.cs'].RIGHT.Contains(5)
+Assert-True 'a countless hunk header maps no more than one line' `
+    (-not $singleMap['src/c.cs'].RIGHT.Contains(6))
 
 Write-Host ''
 Write-Host 'Fingerprints survive an unrelated line shift'
@@ -226,6 +281,25 @@ $withSymbolAMoved = [pscustomobject]@{
 }
 Assert-Equal 'the symbol-keyed finding still survives a line shift' `
     (Get-FindingSemanticFingerprint -Finding $withSymbolA) (Get-FindingSemanticFingerprint -Finding $withSymbolAMoved)
+
+# repo and pr are optional fields the model may or may not populate. While they
+# were key material, the same defect keyed two ways across two runs and the
+# second run reposted it. Dedupe is per-PR by workflow, so they discriminate
+# nothing and are out of the key entirely.
+$withoutRepoPr = [pscustomobject]@{
+    category = 'risk'; file = 'src/a.cs'
+    side = 'RIGHT'; line = 120
+    summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+}
+Assert-Equal 'the exact key ignores whether repo/pr were populated' `
+    (Get-FindingFingerprint -Finding $findingA) (Get-FindingFingerprint -Finding $withoutRepoPr)
+$otherRepoPr = [pscustomobject]@{
+    repo = 'other/repo'; pr = '99'; category = 'risk'; file = 'src/a.cs'
+    side = 'RIGHT'; line = 120
+    summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+}
+Assert-Equal 'the semantic key ignores whether repo/pr were populated' `
+    (Get-FindingSemanticFingerprint -Finding $findingA) (Get-FindingSemanticFingerprint -Finding $otherRepoPr)
 
 Write-Host ''
 Write-Host 'Dedupe matches one prior finding to one current finding'
@@ -382,7 +456,7 @@ Set-Content -LiteralPath (Join-Path $fixtures 'files.json') -Encoding UTF8 -Valu
 # on the first page only — later pages continue the commit list. Modelling
 # `files` on every page hid the 300-file cap entirely.
 Set-Content -LiteralPath (Join-Path $fixtures 'compare.json') -Encoding UTF8 -Value @'
-{"status":"ahead","files":[{"filename":"src/a.cs","status":"modified","patch":"@@ -1,2 +1,3 @@\n var x = new[] { 1 };\n+added\n"},{"filename":"src/b.cs","status":"modified","patch":"@@ -1,2 +1,3 @@\n context\n+added\n"}]}
+{"status":"ahead","files":[{"filename":"src/a.cs","status":"modified","patch":"@@ -1,2 +1,3 @@\n var x = new[] { 1 };\n+added\n"},{"filename":"src/b.cs","status":"modified","patch":"@@ -1,2 +1,3 @@\n context\n+added\n"},{"filename":"src/c.cs","status":"modified","patch":"@@ -20,3 +20,4 @@\n first\n second\n+inserted\n third"}]}
 {"status":"ahead"}
 '@
 
@@ -616,6 +690,19 @@ function Get-PostCount {
     return @(Get-Content -LiteralPath $ghLog | Where-Object { $_ -match '--method POST' }).Count
 }
 
+function Get-GhLogLineCount {
+    return @(Get-Content -LiteralPath $ghLog).Count
+}
+
+function Get-GhLogSince {
+    # The calls one helper invocation made, so a claim about which endpoints a
+    # verb reads is not diluted by every earlier verb in the scenario.
+    param([int]$Offset)
+    $all = @(Get-Content -LiteralPath $ghLog)
+    if ($all.Count -le $Offset) { return @() }
+    return @($all[$Offset..($all.Count - 1)])
+}
+
 $originalTmpdir = $env:TMPDIR
 $originalTemp = $env:TEMP
 $originalTmp = $env:TMP
@@ -624,6 +711,7 @@ try {
     $target = 'https://github.com/acme/widgets/pull/7'
 
     # ── Resolve: the multi-page fetch that used to abort ─────────────────────
+    $resolveLogOffset = Get-GhLogLineCount
     $resolve1 = Invoke-Helper -HelperArgs @('-Resolve', $target)
     Assert-Equal 'resolve succeeds against a multi-page PR' 0 $resolve1.ExitCode
     if ($resolve1.ExitCode -ne 0) { Write-Host $resolve1.Text -ForegroundColor DarkYellow }
@@ -634,7 +722,7 @@ try {
 
     if ($workspace -and (Test-Path -LiteralPath $workspace)) {
         $changed = @(Get-Content -LiteralPath (Join-Path $workspace 'changed-files.json') -Raw | ConvertFrom-Json)
-        Assert-Equal 'both pages of changed files survive pagination' 2 $changed.Count
+        Assert-Equal 'the pinned compare yields every changed file' 3 $changed.Count
         Assert-True 'a patch containing brackets round-trips intact' `
             (@($changed | Where-Object { $_.patch -match 'new\[\] \{ 1 \}' }).Count -eq 1)
 
@@ -650,6 +738,16 @@ try {
             ((Split-Path -Leaf $workspace) -eq [string]$pinned1.runId)
         Assert-True 'the run directory sits under runs/' `
             ((Split-Path -Leaf (Split-Path -Parent $workspace)) -eq 'runs')
+
+        # The gather's closing pair re-read does not survive an ABA: the author
+        # can push a decoy and force-push back before it runs. The evidence every
+        # review pass reasons from therefore has to come from a SHA-addressed
+        # source, exactly as publication's line map does.
+        $resolveCalls = Get-GhLogSince -Offset $resolveLogOffset
+        Assert-True 'resolve derives its diff from the pinned compare' `
+            (@($resolveCalls | Where-Object { $_ -match "compare/$([string]$pinned1.baseSha)\.\.\.$([string]$pinned1.headSha)" }).Count -ge 1)
+        Assert-Equal 'resolve never reads the mutable PR files view' 0 `
+            (@($resolveCalls | Where-Object { $_ -match 'pulls/7/files' }).Count)
 
         # ── Preflight: the --dry-run path ────────────────────────────────────
         # A dry run implemented by skipping the POST proves nothing, so the
@@ -681,6 +779,36 @@ try {
             ((Get-Content -LiteralPath (Join-Path $workspace 'review.json') -Raw) -match [regex]::Escape($pinned1.runId))
         Assert-True 'preflight leaves no receipt behind' `
             (-not (Test-Path -LiteralPath (Join-Path $workspace 'post-result.json')))
+
+        # Demotion must evict by identity. The old eviction key was
+        # path|line|body-hash, which omits both `side` and `start_line` — neither
+        # of which the rendered body shows. These twins are the "two sites, same
+        # wording" family the semantic dedupe key was built around: same file,
+        # same line, identical prose, one on each side of the diff. A
+        # content-keyed eviction deleted the mappable one along with the
+        # unmappable one, and the deleted one reached neither the inline comments
+        # nor the summary — a confirmed finding published nowhere. src/c.cs
+        # hunks lines 20-23, so start_line 10 is outside it while still passing
+        # the schema's start_line <= line rule.
+        $twinPayload = Join-Path $workspace 'review.twins.json'
+        Set-Content -LiteralPath $twinPayload -Encoding UTF8 -Value @"
+{"commit_id":"$headSha","event":"COMMENT","body":"Twin summary.","comments":[{"path":"src/c.cs","start_line":20,"start_side":"RIGHT","line":23,"side":"RIGHT","body":"Identical wording."},{"path":"src/c.cs","start_line":10,"start_side":"RIGHT","line":23,"side":"RIGHT","body":"Identical wording."}]}
+"@
+        $postsBefore = Get-PostCount
+        $preTwins = Invoke-Helper -HelperArgs @('-Preflight', '-Payload', $twinPayload)
+        Assert-Equal 'preflight over identically worded twins succeeds' 0 $preTwins.ExitCode
+        if ($preTwins.ExitCode -ne 0) { Write-Host $preTwins.Text -ForegroundColor DarkYellow }
+        Assert-Equal 'the twin preflight writes nothing to GitHub' $postsBefore (Get-PostCount)
+        # Assert on the outgoing payload, not on the printed counts: the counts
+        # come from the mappable/unmappable partition, which the eviction bug
+        # never touched. What it corrupted was the comment array that ships.
+        $twinOut = Get-Content -LiteralPath (Join-Path $workspace 'review.json') -Raw | ConvertFrom-Json
+        $twinComments = @($twinOut.comments)
+        Assert-Equal 'an unmappable twin does not evict its mappable partner' 1 $twinComments.Count
+        Assert-Equal 'the surviving twin is the one whose range is in the diff' 20 `
+            ([int]@($twinComments | ForEach-Object { $_.start_line })[0])
+        Assert-Equal 'the demoted twin is named once in the summary' 1 `
+            (@([regex]::Matches([string]$twinOut.body, '(?m)^## Unmappable findings$')).Count)
 
         $preWrongRun = Invoke-Helper -HelperArgs @('-Preflight', '-Payload', $preflightPayload, '-RunId', 'not-this-run')
         Assert-Equal 'preflight with a foreign run id fails' 1 $preWrongRun.ExitCode
@@ -730,6 +858,22 @@ try {
         Assert-True 'the retry recovers the receipt from the run marker' `
             ($post2b.Text -match 'already published review')
         Assert-True 'the recovered receipt is written back' (Test-Path -LiteralPath $receipt1)
+
+        # ── A truncated receipt must not be fatal ────────────────────────────
+        # A crash mid-write leaves half a JSON document. Dying on it would skip
+        # the run-marker reconciliation that exists for exactly this case, so a
+        # published review would look unpublished and republish on the next try.
+        Set-Content -LiteralPath $receipt1 -Encoding UTF8 -Value '{"runId":"'
+        $postsBefore = Get-PostCount
+        $post2c = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadPath)
+        Assert-Equal 'a truncated receipt is survivable' 0 $post2c.ExitCode
+        Assert-Equal 'a truncated receipt causes no duplicate post' $postsBefore (Get-PostCount)
+        Assert-True 'the truncated receipt is reported, not swallowed' `
+            ($post2c.Text -match 'unreadable post receipt')
+        Assert-True 'reconciliation still finds the published review' `
+            ($post2c.Text -match 'already published review')
+        Assert-True 'the receipt is rewritten as valid JSON' `
+            ((Get-Content -LiteralPath $receipt1 -Raw | ConvertFrom-Json).runId -eq $pinned1.runId)
 
         # ── -RunId must match the run that owns the payload ──────────────────
         $wrongRun = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadPath, '-RunId', 'not-this-run')

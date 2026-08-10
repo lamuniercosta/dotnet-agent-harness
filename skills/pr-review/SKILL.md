@@ -103,7 +103,10 @@ Run the bundled helper to resolve the target and pin SHAs:
 
 ```
 pwsh ./scripts/pr-review.ps1 -Resolve <number-or-url>   # from the skill directory
+pwsh ./scripts/pr-review.ps1 -Resolve ''                # no target: the PR for the current branch
 ```
+
+Pass an explicit empty string for the current-branch form — omitting `-Resolve` entirely selects no verb at all.
 
 The helper requires an authenticated `gh` CLI, and that is deliberate rather than a gap: the pinned-pair checks, run markers, retry reconciliation, and receipts all live in the helper's resolve/post paths, so publishing through any other channel would bypass every one of them. A host with a native GitHub connector may use it for the read-only gathering below, but never as a substitute for the helper's pinned resolve or for publication. A host without an authenticated `gh` can complete the review through its connector but cannot publish through this skill — say so up front instead of failing at helper startup.
 
@@ -214,7 +217,9 @@ Maintain disposable audit state keyed by repository, PR number, and head SHA, **
 
 **Retries cannot duplicate a review.** The published body carries a deterministic run marker. If a POST reaches GitHub but the response, the parse, or the process dies before the receipt is written, the retry finds that marker on the existing review and recovers the receipt instead of publishing again. If existing reviews cannot be listed, the run refuses to post: a duplicate public review is worse than a failed run. Every submission attempt passes that gate, including the in-run remap retry after GitHub rejects a line location — a non-zero result is not proof the POST never landed, so resubmitting without re-reconciling published a second review.
 
-**Workspace safety.** The path is predictable, so on a shared host another user can pre-create it or aim a symlink or junction at it. The helper refuses a workspace directory that is a symlink/reparse point or that another user owns, and creates every level it owns with owner-only (`0700`) permissions on POSIX hosts. If permissions cannot be restricted, it warns rather than proceeding silently.
+**Workspace safety.** The path is predictable, so on a shared host another user can pre-create it or aim a symlink or junction at it. The helper refuses a workspace directory that is a symlink/reparse point or that another user owns, and creates every level it owns with owner-only permissions — `0700` on POSIX, and on Windows an ACL with inheritance broken and only the current user granted. Ownership is enforced on both platforms: "Windows temp is already per-user" is an assumption about `TEMP`, not an enforcement, and a redirected `TEMP` on a shared machine lets another local user pre-create the tree as real directories and then read review state or plant prior-dedupe state that suppresses findings. If ownership cannot be read or permissions cannot be restricted, it warns rather than proceeding silently.
+
+**One `-Post` at a time per run.** Receipt and run-marker reconciliation make a *sequential* retry safe; they are not an inter-process lock. Two `-Post` invocations for the same run started concurrently can both pass reconciliation before either publishes, and both then post. Run-directory isolation covers concurrent *runs*, not concurrent posts of one run. The skill's own flow posts once, so this is an operating constraint on fan-out rather than a guarded case: do not launch a second `-Post` for a run while one is in flight.
 
 **The posting workspace is recomputed, not accepted.** `-Post` reads its pinned state from beside the payload, which made the containing directory an input: a crafted payload plus `pinned.json` could name the authenticated destination while routing the outgoing payload, the receipt, and the Markdown fallback through a directory the helper never created. So the run directory is recomputed from the pinned owner/repo/PR/head/run id, an exact match is required before anything is read or written, and the symlink/ownership checks run again on every ancestor.
 

@@ -93,6 +93,7 @@ Start non-trivial tasks by consulting **`/using-agent-skills`** — the router t
 - `/diagnosing-bugs` — hard bugs, flakes, performance regressions
 - `/code-review` — three-axis (Risk + Standards + Spec) diff review. Run it **after Stage 7 (`/refactor`), before Stage 8 (`/architect`)**: the code is structurally settled by then, and mutation is the most expensive stage to spend on code a reviewer would tell you to delete. Non-gated — it reports findings, it does not pass or fail
 - `/ship-review` — pre-PR fan-out after `/verify`, feeding human gate 3
+- `/pr-review` — post-PR review of an already-open GitHub PR, publishing one batched COMMENT review with inline comments. Runs after the PR exists, not before it: `/ship-review` is the pre-PR local gate and `/code-review` is the local diff engine
 - `/k6-load-testing` — performance/SLA load tests in `tests/load/`
 - `/improve-codebase-architecture` — feed it Stryker survivors and complexity hot spots
 - `/handoff` — near a context limit or the end of a session
