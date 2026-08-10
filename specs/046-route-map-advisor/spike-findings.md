@@ -25,7 +25,7 @@ Sources older than ~12 months are flagged in Notes as possibly stale.
 2. **Which of JetBrains’ published credit tables (10/35 vs 20/70) applies to a given individual annual vs monthly purchase** — pages disagree. Resolve by checking the live JetBrains AI widget / account for the specific SKU.
 3. **Whether Login with Google still works at all for Gemini CLI after 18 June 2026 for free Google accounts** — deprecation text focuses on Code Assist individuals / Google AI Pro / Ultra; Gemini CLI homepage/quota docs still advertise free Login quotas. Resolve by re-reading an updated Gemini CLI auth/quotas page or Google I/O announcement linked from the deprecation page.
 4. **What quota a former “Google One AI Premium / Gemini Advanced” subscriber actually has for Gemini CLI today** — official CLI docs say Workspace/web Gemini plans do not apply to CLI; deprecation points consumer subscribers to Antigravity pricing (URL referenced but not fully retrieved here). Resolve at the Antigravity pricing page linked from https://developers.google.com/gemini-code-assist/docs/deprecations/code-assist-individuals .
-5. **Paid Gemini API key free-tier numbers** — homepage (100/day, 2.5 Pro) vs quotas page (250/day, Flash only). Resolve via https://ai.google.dev/gemini-api/docs/rate-limits (fetch timed out here).
+5. **Paid Gemini API key free-tier numbers** — **CLOSED (observed 10 Aug 2026).** Gemini CLI + API key attaches Google AI Studio Free Tier as a **third reserve lane** beside `agy` and `junie`. Observed: Flash Lite 15 RPM / 250K TPM / 500 RPD; Flash 5 / 250K / 20; shared 1.5M tokens/day; Pro needs Pay-As-You-Go. See "Third reserve" section below.
 6. **Whether JetBrains publishes a REST HTTP API to drive Junie without the `junie` binary** — CLI/ACP/CI documented; REST agent API not found. Resolve by searching junie.jetbrains.com docs for “API” beyond `JUNIE_API_KEY`, or asking JetBrains support.
 
 ---
@@ -98,8 +98,10 @@ probes:
 - After `/model` set **Gemini 3.1 Pro (Low)**, `Reply with exactly: PRO_OK`
   returned `PRO_OK` — so this is **not** a Flash-only tier.
 
-Open questions 3 and 4 are closed. Standalone Gemini CLI stays out of the route
-map permanently: it is deprecated, and `antigravity` is the entry that replaces it.
+Open questions 3 and 4 are closed for the **consumer Login-with-Google /
+Google AI Plus** path: that path moved to `antigravity`. Standalone Gemini CLI
+is **not** gone as capacity — see the third-reserve finding below for the
+API-key free-tier lane that coexists with `agy` and `junie`.
 
 ##### Two independent weekly pools — new to this map
 
@@ -184,10 +186,47 @@ implying parity with the `claude` host. That was too loose. Antigravity tops out
 at **Opus 4.6 / Sonnet 4.6**, a generation behind Junie's **Opus 5 / Sonnet 5**,
 and its GPT option is the open-weights `gpt-oss-120b`, not GPT-5.x.
 
-That is why the two reserves are ordered antigravity-then-junie rather than by
-raw capability: both clear the floor, so the plentiful weekly pool is spent
-before the scarce 10-20 monthly credits, and junie is reached past antigravity
-only when the work genuinely wants the newer generation.
+That is why the two **route-map** reserves are ordered antigravity-then-junie
+rather than by raw capability: both clear the floor, so the plentiful weekly
+pool is spent before the scarce 10-20 monthly credits, and junie is reached past
+antigravity only when the work genuinely wants the newer generation.
+
+### Third reserve — Gemini CLI + API key free tier (10 August 2026)
+
+Observed separately from `agy` and `junie`: logging into **Gemini CLI** with a
+**Gemini API key** attaches Google AI Studio **Free Tier**. This is a **new
+capacity lane on top of** the two route-map reserves, not a downgrade of the
+`agy` Plus entitlement and not a Junie model choice.
+
+| Model / category | RPM | TPM | RPD |
+| --- | ---: | ---: | ---: |
+| Gemini 3.5 Flash | 5 | 250,000 | 20 |
+| Gemini 3 Flash | 5 | 250,000 | 20 |
+| Gemini 3.1 Flash Lite | 15 | 250,000 | 500 |
+| Antigravity Agents *(same free-tier docs)* | 60 | 100,000 | 100 |
+
+Additional free-tier constraints:
+
+- **Shared daily workspace quota:** 1.5M tokens across models.
+- **Pro unavailable** without Pay-As-You-Go billing (e.g. Gemini 3.1 Pro).
+- **RPD** is a hard daily cap; **RPM** is a rolling 60-second window.
+- **Privacy:** free-tier prompts/responses may be used to train Google products —
+  keep enterprise-private work off this lane.
+
+Operational rule for this lane: default mechanical / high-frequency / verbose
+work to **Gemini 3.1 Flash Lite** (500 RPD); hold **Flash** for rare isolated
+reasoning so the 20 RPD budget is not burned by polling.
+
+Host id in the route map: **`gemini-api`**. Tier mapping: `fast` = Flash Lite,
+`balanced` = Flash 3.5. Present in mechanical `command.route` arrays only
+(`/task`, `/speckit-specify`, `/speckit-tasks`, `/gherkin`, `/refactor`), always
+as `fast`. Reasoning-heavy commands stay off this lane. Resolves as
+`KnownHost=false` host-level advice (outside `agents.tiers`), same as
+`antigravity` / `junie`.
+
+Open question 5 (API-key free-tier numbers) is **CLOSED** for this observed
+account state; treat the table as account-observed, not as a guarantee that
+Google's published docs match every workspace.
 
 ### Junie runs the same top-tier models — corrects the routing rationale
 
