@@ -21,15 +21,22 @@ means a consuming repo's gates may start failing on code that previously passed.
   publishes one batched `COMMENT` review with inline comments — never an automatic
   approve or request-changes. All PR content is treated as untrusted, and
   PR-authored agent instructions are data, not commands. Ships a deterministic
-  PowerShell helper (`scripts/pr-review.ps1`) and JSON schema for resolving,
-  validating, fingerprinting, deduplicating, and posting, with a Markdown fallback
-  when the API refuses. `--dry-run` runs the helper's `-Preflight` verb, which
-  performs every pre-publication check — schema, canonical run workspace, run-id
-  binding, the closing base/head re-read, run-marker reconciliation, and
-  diff-location validation — and writes nothing to GitHub. Publication is `gh`-only
-  by design: all of those guarantees live in the helper, so a second path would
-  have to reimplement them per host. Distinct from `/code-review` (local diff
-  engine) and `/ship-review` (pre-PR local gate).
+  PowerShell helper (`skills/pr-review/scripts/pr-review.ps1`) and JSON schema
+  for resolving, validating, fingerprinting, deduplicating, and posting, with a
+  Markdown fallback when the API refuses. `--dry-run` runs the helper's
+  `-Preflight` verb, which performs every pre-publication check — schema,
+  canonical run workspace, run-id binding, the closing base/head re-read,
+  run-marker reconciliation, and diff-location validation — and writes nothing
+  to GitHub. Publication is `gh`-only by design: all of those guarantees live
+  in the helper, so a second path would have to reimplement them per host.
+  Every `gh` call runs under a bounded wall clock so a hung proxy or an
+  interactive auth prompt reaches the Markdown fallback instead of parking the
+  run, and the run directory carries an exclusive `post.lock` held across
+  reconciliation, submission, and the receipt — concurrent `-Post` invocations
+  for one run can no longer both publish. Two pure verbs, `-Ledger` and
+  `-WatchDecide`, compute the completion verdict and the watch decision so
+  neither is left to prose. Distinct from `/code-review` (local diff engine)
+  and `/ship-review` (pre-PR local gate).
 - **PowerShell self-tests now run on Windows as well as Linux in CI.** The
   workspace-hardening code has genuinely OS-specific branches — POSIX `0700` mode
   versus Windows reparse-point and ownership checks — and only the Linux half was

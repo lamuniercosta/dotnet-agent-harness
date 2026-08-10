@@ -19,9 +19,11 @@
     -NewWorkspace -Owner <o> -Repo <r> -Pr <n> -HeadSha <sha>
     -Validate -Findings <path> | -Payload <path>
     -Fingerprint -Findings <path>
-    -Dedupe -Findings <path> -Prior <path>
-    -BuildPayload -Findings <path> -BaseSha <sha> -HeadSha <sha> (-BodyText <text> | -BodyFile <path>)
+    -Dedupe -Findings <path> -Prior <path> [-AllowIncompletePrior]
+    -BuildPayload -Findings <path> -BaseSha <sha> -HeadSha <sha> (-BodyText <text> | -BodyFile <path>) [-Out <path>]
     -MarkdownFallback -Payload <path>
+  -Ledger -State <path>
+  -WatchDecide -State <path>
     -Help
 
 .EXAMPLE
@@ -43,7 +45,14 @@ param(
     [switch]$Dedupe,
     [switch]$BuildPayload,
     [switch]$MarkdownFallback,
+    [switch]$Ledger,
+    [switch]$WatchDecide,
     [switch]$Help,
+
+    # -Dedupe suppresses findings against a prior review. When the prior state
+    # is known to be partial, that suppression is unsound, so it is refused
+    # unless the caller says out loud that a partial prior is acceptable.
+    [switch]$AllowIncompletePrior,
 
     [string]$Payload,
     [string]$Findings,
@@ -60,6 +69,13 @@ param(
     [string]$BodyText,
     [string]$BodyFile,
 
+    # -BuildPayload destination. Writing the payload here rather than piping
+    # stdout is what lets a provenance sidecar be written beside it.
+    [string]$Out,
+
+    # State document for the two pure decision verbs, -Ledger and -WatchDecide.
+    [string]$State,
+
     # Optional guard: -Post refuses a payload whose workspace belongs to a
     # different run.
     [string]$RunId
@@ -74,6 +90,21 @@ $script:CategoryEnum = @('risk', 'security', 'standards', 'spec', 'coverage', 'p
 $script:VerdictEnum = @('CONFIRMED', 'PLAUSIBLE')
 $script:SideEnum = @('LEFT', 'RIGHT')
 $script:PlacementEnum = @('inline', 'file', 'summary')
+
+# Owner-only (0700). Held as a constant because the create and the verify have
+# to agree: New-PrivateDirectory applies it atomically on Unix and
+# Set-PrivateDirectoryMode re-applies it, so a drift between the two would
+# silently reopen the window the atomic create exists to close.
+$script:PrivateDirectoryMode = [System.IO.UnixFileMode]::UserRead -bor
+                               [System.IO.UnixFileMode]::UserWrite -bor
+                               [System.IO.UnixFileMode]::UserExecute
+
+# gh is given a bounded wall-clock budget. Without one, a stuck proxy, an
+# interactive auth prompt, or a hung TLS handshake parks -Resolve or -Post
+# forever with a half-prepared workspace, and the Markdown-fallback path that
+# exists for exactly that failure is never reached. Override for a slow link
+# with PRREVIEW_GH_TIMEOUT_SECONDS.
+$script:GhTimeoutSeconds = 120
 
 # ---------------------------------------------------------------------------
 # Usage / dispatch helpers
@@ -91,9 +122,11 @@ USAGE (exactly one verb):
   -NewWorkspace -Owner <o> -Repo <r> -Pr <n> -HeadSha <sha>
   -Validate (-Findings <path> | -Payload <path>)
   -Fingerprint -Findings <path>
-  -Dedupe -Findings <path> -Prior <path>
-  -BuildPayload -Findings <path> -BaseSha <sha> -HeadSha <sha> (-BodyText <text> | -BodyFile <path>)
+  -Dedupe -Findings <path> -Prior <path> [-AllowIncompletePrior]
+  -BuildPayload -Findings <path> -BaseSha <sha> -HeadSha <sha> (-BodyText <text> | -BodyFile <path>) [-Out <path>]
   -MarkdownFallback -Payload <path>
+  -Ledger -State <path>
+  -WatchDecide -State <path>
 
 NOTES
   - Requires PowerShell 7+ and (for -Resolve/-Preflight/-Post) an authenticated
@@ -132,14 +165,50 @@ function Test-ResolveRequested {
 # ---------------------------------------------------------------------------
 
 function Assert-GhPresent {
-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+    if (-not (Get-GhCommandPath)) {
         throw 'gh CLI not found. Install https://cli.github.com and run: gh auth login'
     }
 }
 
+function Get-GhCommandPath {
+    <#
+      Resolve gh to a concrete executable once. The bounded-timeout runner below
+      starts it through System.Diagnostics.Process rather than the call
+      operator, and that needs a path rather than a command name.
+    #>
+    $cmd = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($null -eq $cmd) { return $null }
+    return [string]$cmd.Source
+}
+
+function Get-GhTimeoutSeconds {
+    $configured = [System.Environment]::GetEnvironmentVariable('PRREVIEW_GH_TIMEOUT_SECONDS')
+    if ([string]::IsNullOrWhiteSpace($configured)) { return $script:GhTimeoutSeconds }
+    $parsed = 0
+    if (-not [int]::TryParse($configured.Trim(), [ref]$parsed) -or $parsed -le 0) {
+        throw "PRREVIEW_GH_TIMEOUT_SECONDS must be a positive whole number of seconds; got '$configured'."
+    }
+    return $parsed
+}
+
 function Invoke-Gh {
     <#
-      Run gh, capture merged stdout/stderr, assert exit 0, return trimmed text.
+      Run gh under a bounded wall clock, capture merged stdout/stderr, assert
+      exit 0, return the text.
+
+      The call operator has no timeout, and every verb here is a network call:
+      a stuck proxy, a hung TLS handshake, or a gh build that decides to prompt
+      for credentials parks -Resolve or -Post indefinitely, holding a
+      half-prepared workspace open and never reaching the Markdown fallback
+      that exists for exactly that failure. Process gives a wall clock and a
+      tree kill; the call operator gives neither.
+
+      Two details are load-bearing. stdin is closed immediately, so a gh that
+      tries to prompt reads EOF and exits rather than waiting out the whole
+      budget. And stderr is placed *before* stdout in the merged text: the JSON
+      parsers downstream anchor on a document at the end of the stream, so a
+      deprecation notice arriving after the payload would otherwise make a
+      successful call unparseable.
     #>
     param(
         [Parameter(Mandatory)][string]$Action,
@@ -147,13 +216,70 @@ function Invoke-Gh {
         [switch]$AllowFailure
     )
 
-    $output = & gh @GhArgs 2>&1 | Out-String
-    if (-not $AllowFailure -and $LASTEXITCODE -ne 0) {
+    $exe = Get-GhCommandPath
+    if (-not $exe) {
+        throw 'gh CLI not found. Install https://cli.github.com and run: gh auth login'
+    }
+
+    $timeoutSeconds = Get-GhTimeoutSeconds
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $exe
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    foreach ($a in $GhArgs) { [void]$psi.ArgumentList.Add([string]$a) }
+
+    $proc = $null
+    $timedOut = $false
+    $stdoutText = ''
+    $stderrText = ''
+    # Captured inside the try: ExitCode is not readable once the Process is
+    # disposed, and the finally below disposes it.
+    $exitCode = 0
+    try {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        try { $proc.StandardInput.Close() } catch { }
+
+        # Read both pipes concurrently. Draining one to completion first
+        # deadlocks as soon as the other fills its buffer, which a large
+        # paginated response does routinely.
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        $errTask = $proc.StandardError.ReadToEndAsync()
+
+        if (-not $proc.WaitForExit($timeoutSeconds * 1000)) {
+            $timedOut = $true
+            # Kill the tree: on Windows gh may be reached through a shim that
+            # is itself the direct child, and killing only that leaves the real
+            # process holding the pipes open.
+            try { $proc.Kill($true) } catch { }
+            [void]$proc.WaitForExit(5000)
+        }
+
+        [void][System.Threading.Tasks.Task]::WaitAll(@($outTask, $errTask), 5000)
+        if ($outTask.IsCompletedSuccessfully) { $stdoutText = [string]$outTask.Result }
+        if ($errTask.IsCompletedSuccessfully) { $stderrText = [string]$errTask.Result }
+
+        # 124 is what timeout(1) reports, and it keeps a killed run
+        # distinguishable from a gh that genuinely exited non-zero.
+        $exitCode = if ($timedOut) { 124 } else { $proc.ExitCode }
+    }
+    finally {
+        if ($null -ne $proc) { $proc.Dispose() }
+    }
+
+    $output = ($stderrText + $stdoutText)
+    if ($timedOut) {
+        $output = ("gh timed out after ${timeoutSeconds}s while $Action and was terminated. " +
+            "Set PRREVIEW_GH_TIMEOUT_SECONDS to raise the budget.`n" + $output)
+    }
+
+    if (-not $AllowFailure -and $exitCode -ne 0) {
         $detail = if ([string]::IsNullOrWhiteSpace($output)) { '(no output)' } else { $output.Trim() }
-        throw "gh failed while $Action (exit $LASTEXITCODE): $detail"
+        throw "gh failed while $Action (exit $exitCode): $detail"
     }
     return [pscustomobject]@{
-        ExitCode = $LASTEXITCODE
+        ExitCode = $exitCode
         Text     = $output
     }
 }
@@ -378,34 +504,68 @@ function Set-PrivateDirectoryMode {
 
     if ($IsWindows) {
         try {
-            $acl = Get-Acl -LiteralPath $Path
-            # Break inheritance without copying the inherited rules down, then
-            # drop whatever explicit rules survive, so only the grant below
-            # remains.
+            # A *fresh* DirectorySecurity, not one read back from the directory.
+            # Get-Acl plus Set-Acl round-trips the owner and audit sections as
+            # well as the DACL, and rewriting those needs privileges an ordinary
+            # user does not hold (SeSecurityPrivilege for the SACL,
+            # SeRestorePrivilege to reassign an owner) — so a directory this
+            # script had already locked down failed to be locked down a second
+            # time, on its own workspace. Only the access rules are set here, so
+            # only the DACL is written.
+            $acl = [System.Security.AccessControl.DirectorySecurity]::new()
+            # Break inheritance without copying the inherited rules down, so the
+            # single grant below is the whole DACL.
             $acl.SetAccessRuleProtection($true, $false)
-            foreach ($rule in @($acl.Access)) { [void]$acl.RemoveAccessRule($rule) }
             $acl.AddAccessRule([System.Security.AccessControl.FileSystemAccessRule]::new(
                     [System.Security.Principal.WindowsIdentity]::GetCurrent().User,
                     [System.Security.AccessControl.FileSystemRights]::FullControl,
                     'ContainerInherit, ObjectInherit',
                     [System.Security.AccessControl.PropagationFlags]::None,
                     [System.Security.AccessControl.AccessControlType]::Allow))
-            Set-Acl -LiteralPath $Path -AclObject $acl
+            # On .NET Core SetAccessControl lives on FileSystemAclExtensions, not
+            # on DirectoryInfo itself, and PowerShell does not surface C#
+            # extension methods as instance calls.
+            [System.IO.FileSystemAclExtensions]::SetAccessControl(
+                [System.IO.DirectoryInfo]::new($Path), $acl)
         }
         catch {
-            Write-Warning "Could not restrict permissions on '$Path' ($($_.Exception.Message)). On a shared host, review state may be readable by other users."
+            throw ("Refusing to use review workspace '$Path': owner-only permissions could not be applied " +
+                "($($_.Exception.Message)). On a shared host the review state would stay readable by other " +
+                'local users, so this fails rather than continuing. Point TEMP at a directory you own and re-run.')
         }
         return
     }
     try {
-        $mode = [System.IO.UnixFileMode]::UserRead -bor
-                [System.IO.UnixFileMode]::UserWrite -bor
-                [System.IO.UnixFileMode]::UserExecute
-        [System.IO.File]::SetUnixFileMode($Path, $mode)
+        [System.IO.File]::SetUnixFileMode($Path, $script:PrivateDirectoryMode)
     }
     catch {
-        Write-Warning "Could not restrict permissions on '$Path' ($($_.Exception.Message)). On a shared host, review state may be readable by other users."
+        throw ("Refusing to use review workspace '$Path': 0700 could not be applied " +
+            "($($_.Exception.Message)). Some filesystems (NFS, some container temp mounts) reject the call, and " +
+            'a 0755 run directory lets another local user read review state or plant prior-dedupe state that ' +
+            'suppresses findings. Point TMPDIR at a filesystem that supports POSIX modes and re-run.')
     }
+}
+
+function New-PrivateDirectory {
+    <#
+      Create a directory that is owner-only from the moment it exists.
+
+      Creating it and then tightening it leaves a window — however short — in
+      which the directory sits at whatever the process umask allows, and on a
+      shared host that is long enough for another local user to open a handle
+      that survives the later chmod. .NET's mode-carrying CreateDirectory
+      overload applies the mode as part of the create on Unix; Windows has no
+      equivalent, so there the ACL is still applied immediately afterwards by
+      the caller (the Windows exposure is the inherited-ACL default, not a
+      umask race).
+    #>
+    param([Parameter(Mandatory)][string]$Path)
+
+    if ($IsWindows) {
+        New-Item -ItemType Directory -Path $Path -ErrorAction Stop | Out-Null
+        return
+    }
+    [void][System.IO.Directory]::CreateDirectory($Path, $script:PrivateDirectoryMode)
 }
 
 function Assert-WindowsWorkspaceOwner {
@@ -475,11 +635,13 @@ function Assert-SafeWorkspacePath {
     $owner = $null
     try { $owner = ([string]$item.User).Trim() } catch { $owner = $null }
     if ([string]::IsNullOrWhiteSpace($owner)) {
-        # Say so rather than skipping in silence: an unreadable owner means the
-        # ownership guarantee is not in force, and the operator needs to know
-        # which of the two states they are in.
-        Write-Warning "Could not read the owner of review workspace '$Path'. Its ownership could not be verified; on a shared host, treat the review state as untrusted."
-        return
+        # An unreadable owner is not a weaker version of a readable one: it is
+        # the absence of the proof this function exists to obtain. Warning and
+        # continuing let an unowned directory through on exactly the shared
+        # hosts the check is for, so it is treated the same as a foreign owner.
+        throw ("Refusing to use review workspace '$Path': its owner could not be read, so it cannot be " +
+            'proved to belong to this user. Remove it and re-run, or point TMPDIR at a filesystem that ' +
+            'reports ownership.')
     }
     $ownerName = ($owner -split '\s+')[0]
     if ($ownerName -ne [System.Environment]::UserName) {
@@ -504,7 +666,7 @@ function New-OrGetWorkspace {
     $baseDir = Split-Path -Parent $repoDir
     foreach ($dir in @($baseDir, $repoDir, $path)) {
         if (-not (Test-Path -LiteralPath $dir)) {
-            New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+            New-PrivateDirectory -Path $dir
         }
         Assert-SafeWorkspacePath -Path $dir
         Set-PrivateDirectoryMode -Path $dir
@@ -537,7 +699,7 @@ function New-RunWorkspace {
     $runDir = Join-Path $runsDir $safeRun
     foreach ($dir in @($runsDir, $runDir)) {
         if (-not (Test-Path -LiteralPath $dir)) {
-            New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+            New-PrivateDirectory -Path $dir
         }
         Assert-SafeWorkspacePath -Path $dir
         Set-PrivateDirectoryMode -Path $dir
@@ -1041,7 +1203,7 @@ function Add-SemanticOccurrence {
     else { $Counts[$Key] = 1 }
 }
 
-function Use-SemanticOccurrence {
+function Use-SemanticOccurrenceCredit {
     <#
       Consume one prior occurrence of a semantic key, returning whether one was
       available. Semantic matching is one-for-one: a prior review that raised a
@@ -1152,14 +1314,57 @@ function Get-PriorFingerprints {
     return [pscustomobject]@{ exact = $exactSet; semantic = $semanticCounts }
 }
 
+function Get-PriorCoverageGap {
+    <#
+      Return the reason the prior review state is known to be partial, or $null
+      when it is either complete or silent about its own completeness.
+
+      -Resolve already knows when it failed to enumerate every review thread —
+      it prints 'threadCoverage: INCOMPLETE' and records the same fact in
+      review-threads.json. Feeding that file to -Dedupe as the prior is the
+      normal workflow, and nothing downstream looked at the flag: a truncated
+      thread list simply produced a smaller fingerprint set, and every finding
+      the missing threads would have matched came back as new. That is the safe
+      direction of the two, but the reverse also happens — a caller pointing at
+      partial state and reading a 'dropped-semantic' verdict is being told a
+      prior review raised this, when what actually happened is that the prior
+      review is only half known.
+
+      Silence is treated as complete on purpose. Hand-written prior files and
+      plain findings arrays carry no completeness flag, and demanding one would
+      break every caller that legitimately has nothing to declare.
+    #>
+    param($PriorDocument)
+
+    if ($null -eq $PriorDocument) { return $null }
+
+    if (Test-HasProperty -Object $PriorDocument -Name 'complete') {
+        $complete = Get-PropertyValue -Object $PriorDocument -Name 'complete'
+        if ($complete -is [bool] -and -not $complete) {
+            $reason = [string](Get-PropertyValue -Object $PriorDocument -Name 'incompleteReason')
+            if ([string]::IsNullOrWhiteSpace($reason)) { $reason = 'no reason recorded' }
+            return $reason
+        }
+    }
+    return $null
+}
+
 function Invoke-Dedupe {
     param(
         [Parameter(Mandatory)][string]$FindingsPath,
-        [Parameter(Mandatory)][string]$PriorPath
+        [Parameter(Mandatory)][string]$PriorPath,
+        [switch]$AllowIncompletePrior
     )
 
     $doc = Read-JsonFile -Path $FindingsPath
     $prior = Read-JsonFile -Path $PriorPath
+    $coverageGap = Get-PriorCoverageGap -PriorDocument $prior
+    if ($coverageGap -and -not $AllowIncompletePrior) {
+        throw ("Refusing to dedupe against '$PriorPath': the prior review state is incomplete " +
+            "($coverageGap). Suppressing a finding as already-raised requires knowing what was raised, and " +
+            'that is exactly what is missing here. Re-run -Resolve until thread coverage is complete, or pass ' +
+            '-AllowIncompletePrior to accept suppression against partial prior state.')
+    }
     $items = Get-FindingsArray -Document $doc
     $priorSets = Get-PriorFingerprints -PriorDocument $prior
 
@@ -1182,11 +1387,11 @@ function Invoke-Dedupe {
             # semantic key. Without spending it here, a second distinct site
             # worded the same way would be dropped against a budget this
             # finding already consumed.
-            [void](Use-SemanticOccurrence -Counts $priorSets.semantic -Key $sfp)
+            [void](Use-SemanticOccurrenceCredit -Counts $priorSets.semantic -Key $sfp)
             $hash['dedupe'] = 'dropped-identical'
             $dropped.Add([pscustomobject]$hash)
         }
-        elseif (Use-SemanticOccurrence -Counts $priorSets.semantic -Key $sfp) {
+        elseif (Use-SemanticOccurrenceCredit -Counts $priorSets.semantic -Key $sfp) {
             $hash['dedupe'] = 'dropped-semantic'
             $dropped.Add([pscustomobject]$hash)
         }
@@ -1201,6 +1406,212 @@ function Invoke-Dedupe {
         dropped = @($dropped)
         keptCount = $kept.Count
         droppedCount = $dropped.Count
+        # Recorded rather than merely warned about: a run that suppressed
+        # against partial prior state has to be able to say so afterwards.
+        priorCoverage = if ($coverageGap) { 'INCOMPLETE' } else { 'COMPLETE' }
+        priorCoverageNote = $coverageGap
+    }
+    Write-Output ($result | ConvertTo-Json -Depth 100)
+}
+
+# ---------------------------------------------------------------------------
+# Completion ledger and watch decision
+#
+# Both verbs are pure: they read one state document and print a decision. The
+# host still owns gathering the state and acting on the answer. What they take
+# away from the host is the arithmetic — the two places where SKILL.md states a
+# rule ("a missing, failed, rate-limited, or timed-out reviewer is not a clean
+# axis"; "submit at most one review per stable head") that a prose-only
+# instruction lets an implementation quietly round in its own favour.
+# ---------------------------------------------------------------------------
+
+# Axis statuses that count as coverage. Everything else — failed, timeout,
+# rate-limited, unavailable, missing, or a spelling nobody anticipated — is a
+# gap, because the failure mode this guards against is an unrecognised status
+# being read as success.
+$script:CleanAxisStatuses = @('complete', 'skipped')
+$script:CleanFileDispositions = @('reviewed', 'generated', 'skipped')
+
+function Invoke-Ledger {
+    <#
+      Compute the completion verdict from the coverage state.
+
+      COMPLETE / COMPLETE WITH QUESTIONS / INCOMPLETE were a judgement the host
+      made in prose, which meant a run with a timed-out reviewer and eleven
+      clean ones could reasonably be written up as complete. The verdict is
+      mechanical here, and the reasons are enumerated, so the summary cannot
+      claim coverage the ledger does not show.
+
+      A skipped axis or file counts as covered only in the sense that it was
+      accounted for; it must still carry a reason, and a skip without one is a
+      gap.
+    #>
+    param([Parameter(Mandatory)][string]$StatePath)
+
+    $doc = Read-JsonFile -Path $StatePath
+    if ($null -eq $doc) { throw "Ledger state '$StatePath' is empty or unreadable." }
+
+    $gaps = [System.Collections.Generic.List[string]]::new()
+    $questions = [System.Collections.Generic.List[string]]::new()
+
+    foreach ($axis in @((Get-PropertyValue -Object $doc -Name 'axes'))) {
+        if ($null -eq $axis) { continue }
+        $name = [string](Get-PropertyValue -Object $axis -Name 'name')
+        if ([string]::IsNullOrWhiteSpace($name)) { $name = '(unnamed axis)' }
+        $status = ([string](Get-PropertyValue -Object $axis -Name 'status')).Trim().ToLowerInvariant()
+        if ($script:CleanAxisStatuses -notcontains $status) {
+            $shown = if ($status) { $status } else { 'no status recorded' }
+            $gaps.Add("axis '$name' did not produce coverage ($shown)")
+            continue
+        }
+        if ($status -eq 'skipped') {
+            $reason = [string](Get-PropertyValue -Object $axis -Name 'reason')
+            if ([string]::IsNullOrWhiteSpace($reason)) {
+                $gaps.Add("axis '$name' was skipped with no reason recorded")
+            }
+        }
+    }
+
+    foreach ($file in @((Get-PropertyValue -Object $doc -Name 'files'))) {
+        if ($null -eq $file) { continue }
+        $path = [string](Get-PropertyValue -Object $file -Name 'path')
+        if ([string]::IsNullOrWhiteSpace($path)) { $path = '(unnamed file)' }
+        $disp = ([string](Get-PropertyValue -Object $file -Name 'disposition')).Trim().ToLowerInvariant()
+        if ($script:CleanFileDispositions -notcontains $disp) {
+            $shown = if ($disp) { $disp } else { 'no disposition recorded' }
+            $gaps.Add("changed file '$path' has no accounted disposition ($shown)")
+            continue
+        }
+        if ($disp -eq 'skipped') {
+            $reason = [string](Get-PropertyValue -Object $file -Name 'reason')
+            if ([string]::IsNullOrWhiteSpace($reason)) {
+                $gaps.Add("changed file '$path' was skipped with no reason recorded")
+            }
+        }
+    }
+
+    # -Resolve, -Preflight and -Post already print these two; carrying them into
+    # the ledger is what stops a partial changed-file map or a truncated thread
+    # list from being reported as a complete review.
+    foreach ($axisName in @('fileMapCoverage', 'threadCoverage')) {
+        if (-not (Test-HasProperty -Object $doc -Name $axisName)) { continue }
+        $value = ([string](Get-PropertyValue -Object $doc -Name $axisName)).Trim()
+        if ($value -and -not $value.Equals('COMPLETE', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $gaps.Add("$axisName is $value")
+        }
+    }
+
+    foreach ($f in @((Get-PropertyValue -Object $doc -Name 'findings'))) {
+        if ($null -eq $f) { continue }
+        $verdict = ([string](Get-PropertyValue -Object $f -Name 'verdict')).Trim()
+        if ($verdict.Equals('PLAUSIBLE', [System.StringComparison]::OrdinalIgnoreCase)) {
+            $file = [string](Get-PropertyValue -Object $f -Name 'file')
+            $summary = [string](Get-PropertyValue -Object $f -Name 'summary')
+            $questions.Add("PLAUSIBLE finding in '$file': $summary")
+        }
+    }
+    foreach ($q in @((Get-PropertyValue -Object $doc -Name 'openQuestions'))) {
+        if ([string]::IsNullOrWhiteSpace([string]$q)) { continue }
+        $questions.Add([string]$q)
+    }
+
+    $verdict = if ($gaps.Count -gt 0) { 'INCOMPLETE' }
+    elseif ($questions.Count -gt 0) { 'COMPLETE WITH QUESTIONS' }
+    else { 'COMPLETE' }
+
+    $result = [pscustomobject]@{
+        verdict   = $verdict
+        gaps      = @($gaps)
+        questions = @($questions)
+    }
+    Write-Output ($result | ConvertTo-Json -Depth 100)
+}
+
+function Invoke-WatchDecide {
+    <#
+      Decide what --watch does next: 'review', 'wait', or 'stop'.
+
+      Watch mode has more stop conditions than any of them is memorable —
+      merge, close, user stop, a bounded host window, an absent watcher — plus
+      a debounce and a one-review-per-stable-head rule. Left in prose, the
+      predictable failure is the one that matters most: re-reviewing a head
+      that was already reviewed, which posts a second public review on an
+      unchanged PR. The order below is deliberate. Stop conditions are checked
+      before anything else, so a merged PR is never re-reviewed on the strength
+      of a new SHA, and the already-reviewed check precedes the debounce so a
+      known head never waits for stability it does not need.
+    #>
+    param([Parameter(Mandatory)][string]$StatePath)
+
+    $doc = Read-JsonFile -Path $StatePath
+    if ($null -eq $doc) { throw "Watch state '$StatePath' is empty or unreadable." }
+
+    $decision = 'review'
+    $reason = 'head is stable, CI has settled, and this head has not been reviewed'
+
+    $watcherAvailable = Get-PropertyValue -Object $doc -Name 'watcherAvailable'
+    $userStop = Get-PropertyValue -Object $doc -Name 'userStop'
+    $windowExpired = Get-PropertyValue -Object $doc -Name 'hostWindowExpired'
+    $prState = ([string](Get-PropertyValue -Object $doc -Name 'prState')).Trim().ToLowerInvariant()
+    $headSha = ([string](Get-PropertyValue -Object $doc -Name 'headSha')).Trim()
+    $reviewed = @((Get-PropertyValue -Object $doc -Name 'reviewedHeads') | ForEach-Object { ([string]$_).Trim() })
+
+    if ($watcherAvailable -is [bool] -and -not $watcherAvailable) {
+        $decision = 'stop'
+        $reason = 'watcher support is unavailable on this host; monitoring is not running'
+    }
+    elseif ($userStop -is [bool] -and $userStop) {
+        $decision = 'stop'
+        $reason = 'the user stopped the watch'
+    }
+    elseif ($prState -eq 'merged' -or $prState -eq 'closed') {
+        $decision = 'stop'
+        $reason = "the pull request is $prState"
+    }
+    elseif ($windowExpired -is [bool] -and $windowExpired) {
+        $decision = 'stop'
+        $reason = "the host's bounded monitoring window ended"
+    }
+    elseif ([string]::IsNullOrWhiteSpace($headSha)) {
+        $decision = 'wait'
+        $reason = 'no head SHA has been observed yet'
+    }
+    elseif ($reviewed -contains $headSha) {
+        $decision = 'wait'
+        $reason = "head $headSha has already been reviewed by this watch"
+    }
+    else {
+        # Debounce: a push burst produces several heads in seconds, and
+        # reviewing the first one wastes a whole run on a SHA nobody will keep.
+        $debounce = 0
+        $debounceValue = Get-PropertyValue -Object $doc -Name 'debounceSeconds'
+        if ($null -ne $debounceValue) { $debounce = [int]$debounceValue }
+        $observedAt = [string](Get-PropertyValue -Object $doc -Name 'headObservedAt')
+        $nowText = [string](Get-PropertyValue -Object $doc -Name 'now')
+        if ($debounce -gt 0 -and -not [string]::IsNullOrWhiteSpace($observedAt) -and
+            -not [string]::IsNullOrWhiteSpace($nowText)) {
+            $observed = [DateTimeOffset]::Parse($observedAt, [System.Globalization.CultureInfo]::InvariantCulture)
+            $now = [DateTimeOffset]::Parse($nowText, [System.Globalization.CultureInfo]::InvariantCulture)
+            $age = ($now - $observed).TotalSeconds
+            if ($age -lt $debounce) {
+                $decision = 'wait'
+                $reason = ("head $headSha has only been stable for $([int]$age)s of the required ${debounce}s")
+            }
+        }
+
+        if ($decision -eq 'review') {
+            $ci = ([string](Get-PropertyValue -Object $doc -Name 'ciStatus')).Trim().ToLowerInvariant()
+            if ($ci -eq 'pending' -or $ci -eq 'in_progress' -or $ci -eq 'queued') {
+                $decision = 'wait'
+                $reason = "CI for head $headSha is still $ci"
+            }
+        }
+    }
+
+    $result = [pscustomobject]@{
+        decision = $decision
+        reason   = $reason
+        headSha  = $headSha
     }
     Write-Output ($result | ConvertTo-Json -Depth 100)
 }
@@ -1273,11 +1684,43 @@ function Get-BodyText {
     return (Get-Content -LiteralPath $full -Raw -Encoding utf8)
 }
 
+function Test-CarriesFenceMarker {
+    <#
+      True when the text contains a line that opens or closes a Markdown code
+      fence. Anchored per line because a fence is only a fence at the start of
+      a line; a stray ``` inside prose is not one, and refusing it would reject
+      legitimate findings that quote fence syntax mid-sentence.
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrEmpty($Text)) { return $false }
+    return [regex]::IsMatch($Text, '(?m)^[ \t]{0,3}(`{3,}|~{3,})')
+}
+
 function Format-InlineCommentBody {
+    <#
+      Compose (or pass through) the body GitHub will render.
+
+      A committable ```suggestion fence is a one-click write to the head
+      branch, so two things gate it. The replacement has to have been checked
+      against the pinned head — 'suggestion_verified' — because an unchecked
+      suggestion that looks plausible is the one a reviewer commits without
+      reading. And the text itself must not carry a fence marker, in either the
+      suggestion or a caller-supplied raw body: a suggestion whose text closes
+      the fence early can continue past it with arbitrary Markdown, or open a
+      second suggestion fence whose contents no gate here ever saw. Unverified
+      text still gets shown, just as an inert code block rather than a button.
+    #>
     param($Finding)
 
     $explicit = Get-PropertyValue -Object $Finding -Name 'body'
     if (-not [string]::IsNullOrWhiteSpace([string]$explicit)) {
+        if (Test-CarriesFenceMarker -Text ([string]$explicit)) {
+            throw ("Finding for '$([string](Get-PropertyValue -Object $Finding -Name 'file'))' supplies a raw " +
+                "'body' containing a code fence. A pre-rendered body bypasses the suggestion gates, so a fence " +
+                'inside it could post a committable suggestion that was never verified. Drop the fence, or move ' +
+                "the replacement into 'suggestion' with 'suggestion_verified': true.")
+        }
         return [string]$explicit
     }
 
@@ -1294,12 +1737,57 @@ function Format-InlineCommentBody {
     if ($failure) { $lines.Add(""); $lines.Add("Failure scenario: $failure") }
     if ($evidence) { $lines.Add(""); $lines.Add("Evidence: $evidence") }
     if ($suggestion) {
+        if (Test-CarriesFenceMarker -Text $suggestion) {
+            throw ("Finding for '$([string](Get-PropertyValue -Object $Finding -Name 'file'))' has a " +
+                "'suggestion' containing a code fence. Fenced text cannot be nested inside a suggestion block " +
+                'without ending it early, so this is refused rather than emitted. Remove the fence from the ' +
+                'replacement text.')
+        }
+        $verified = Get-PropertyValue -Object $Finding -Name 'suggestion_verified'
         $lines.Add('')
-        $lines.Add('```suggestion')
-        $lines.Add($suggestion)
-        $lines.Add('```')
+        if ($verified -is [bool] -and $verified) {
+            $lines.Add('```suggestion')
+            $lines.Add($suggestion)
+            $lines.Add('```')
+        }
+        else {
+            $lines.Add('Suggested change (not verified against the pinned head, so not committable):')
+            $lines.Add('```')
+            $lines.Add($suggestion)
+            $lines.Add('```')
+        }
     }
     return ($lines -join "`n")
+}
+
+function Test-IsRuleCitation {
+    <#
+      True when the text looks like a citation of a written rule rather than an
+      assertion that one exists.
+
+      The Low-severity inline gate exists so a nit has to point at something
+      the repository actually wrote down. A non-whitespace check does not do
+      that: "team convention" or "best practice" passes it while citing
+      nothing, which is exactly the unbacked nit the gate was added to keep out
+      of the diff. A citation has to name a source — a file path, a rules
+      document, or a section reference — so that is what is required. The bar
+      is deliberately mechanical: it cannot tell whether the cited rule says
+      what the finding claims, only that a source was named at all.
+    #>
+    param([string]$Text)
+
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
+    $trimmed = $Text.Trim()
+
+    # A path-like token: something with a directory separator or a file
+    # extension (CLAUDE.md, rules/pipeline/delegation.mdc, src/Foo.cs:42).
+    if ([regex]::IsMatch($trimmed, '(?i)[\w.\-]+[/\\][\w./\\-]+')) { return $true }
+    if ([regex]::IsMatch($trimmed, '(?i)\b[\w-]+\.(md|mdc|json|yml|yaml|ps1|cs|editorconfig|props|targets|txt)\b')) { return $true }
+
+    # A section reference: "§3.2", "section 4", "rule R-12", "ADR 0008".
+    if ([regex]::IsMatch($trimmed, '(?i)(§\s*[\w.\-]+|\bsection\s+[\w.\-]+|\brule\s+[\w.\-]*\d|\badr[\s-]*\d+)')) { return $true }
+
+    return $false
 }
 
 function Test-IsInlineEligible {
@@ -1328,8 +1816,8 @@ function Test-IsInlineEligible {
     #>
     $severity = [string](Get-PropertyValue -Object $Finding -Name 'severity')
     if ($severity.Equals('Low', [System.StringComparison]::OrdinalIgnoreCase)) {
-        $rule = Get-PropertyValue -Object $Finding -Name 'rule'
-        if ([string]::IsNullOrWhiteSpace([string]$rule)) { return $false }
+        $rule = [string](Get-PropertyValue -Object $Finding -Name 'rule')
+        if (-not (Test-IsRuleCitation -Text $rule)) { return $false }
     }
 
     if ($placement -eq 'inline' -or [string]::IsNullOrWhiteSpace($placement)) { return $true }
@@ -1369,7 +1857,11 @@ function Invoke-BuildPayload {
         [Parameter(Mandatory)][string]$BaseSha,
         [Parameter(Mandatory)][string]$HeadSha,
         [string]$BodyText,
-        [string]$BodyFile
+        [string]$BodyFile,
+        # Writing the payload here (rather than piping stdout to a file) is what
+        # lets the provenance sidecar be written beside it, so -Preflight and
+        # -Post can tell a gated payload from a hand-assembled one.
+        [string]$OutPath
     )
 
     $null = $BaseSha  # reserved for callers/workspace symmetry; payload uses head
@@ -1435,7 +1927,76 @@ function Invoke-BuildPayload {
         exit 1
     }
 
-    Write-Output ($payload | ConvertTo-Json -Depth 100)
+    $json = $payload | ConvertTo-Json -Depth 100
+    if (-not [string]::IsNullOrWhiteSpace($OutPath)) {
+        Set-Content -LiteralPath $OutPath -Value $json -Encoding utf8
+        Write-PayloadProvenance -PayloadPath $OutPath
+        Write-Output "payload: $OutPath"
+        Write-Output "payloadSource: BUILD-PAYLOAD"
+        return
+    }
+    Write-Output $json
+}
+
+function Get-PayloadProvenancePath {
+    param([Parameter(Mandatory)][string]$PayloadPath)
+    return ($PayloadPath + '.provenance.json')
+}
+
+function Get-FileDigest {
+    param([Parameter(Mandatory)][string]$Path)
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
+function Write-PayloadProvenance {
+    <#
+      Record that these exact payload bytes came out of -BuildPayload.
+
+      The inline-placement gates — CONFIRMED-only, the Low+citation rule, the
+      suggestion-fence rules — all live in -BuildPayload. A payload handed
+      straight to -Preflight or -Post skips every one of them: schema
+      validation still runs, and schema validation has no opinion about whether
+      a Low nit cited a rule. Nothing forces the caller through -BuildPayload,
+      and nothing can, so the next best thing is that the two verbs which
+      publish say out loud which kind of payload they were given.
+
+      The digest is what makes the sidecar mean anything. A bare marker file
+      would still be there after the payload beside it was edited by hand,
+      which is exactly the case worth catching.
+    #>
+    param([Parameter(Mandatory)][string]$PayloadPath)
+
+    $provenance = [pscustomobject]@{
+        source    = 'BUILD-PAYLOAD'
+        sha256    = Get-FileDigest -Path $PayloadPath
+        builtAt   = [DateTime]::UtcNow.ToString('o')
+    }
+    Write-JsonFile -Value $provenance -Path (Get-PayloadProvenancePath -PayloadPath $PayloadPath)
+}
+
+function Get-PayloadSource {
+    <#
+      'BUILD-PAYLOAD' when a provenance sidecar vouches for these exact bytes,
+      otherwise 'UNVERIFIED' — which covers a hand-written payload, an edited
+      one, and a -BuildPayload run that streamed to stdout instead of -Out.
+      UNVERIFIED is a statement about what is known, not an accusation.
+    #>
+    param([Parameter(Mandatory)][string]$PayloadPath)
+
+    $sidecar = Get-PayloadProvenancePath -PayloadPath $PayloadPath
+    if (-not (Test-Path -LiteralPath $sidecar)) { return 'UNVERIFIED (no provenance sidecar)' }
+
+    $doc = $null
+    try { $doc = Read-JsonFile -Path $sidecar }
+    catch { return 'UNVERIFIED (provenance sidecar unreadable)' }
+    if ($null -eq $doc) { return 'UNVERIFIED (provenance sidecar unreadable)' }
+
+    $recorded = [string](Get-PropertyValue -Object $doc -Name 'sha256')
+    if ([string]::IsNullOrWhiteSpace($recorded)) { return 'UNVERIFIED (provenance sidecar records no digest)' }
+    if ($recorded.ToLowerInvariant() -ne (Get-FileDigest -Path $PayloadPath)) {
+        return 'UNVERIFIED (payload was modified after -BuildPayload wrote it)'
+    }
+    return 'BUILD-PAYLOAD'
 }
 
 function ConvertTo-ReviewMarkdown {
@@ -1573,6 +2134,13 @@ function Get-DiffLineMap {
             LEFT     = $left
             filename = $filename
             status   = [string](Get-PropertyValue -Object $f -Name 'status')
+            # A file in the diff with no patch text at all is a different thing
+            # from a file whose hunks simply do not cover the cited line, and
+            # the two used to report identically. GitHub omits the patch for a
+            # binary file and for one too large to inline, so the line was
+            # never checkable — telling the reviewer "line 42 not in diff
+            # hunks" sends them to re-derive a location that cannot exist.
+            noPatch  = [string]::IsNullOrEmpty($patch)
         }
     }
     return $map
@@ -1589,6 +2157,12 @@ function Test-CommentAgainstDiff {
     $key = Normalize-PathKey -Path $path
     if (-not $DiffMap.ContainsKey($key)) {
         $Problems.Add("path not in pinned diff: $path")
+        return
+    }
+
+    $entry = $DiffMap[$key]
+    if ($entry.ContainsKey('noPatch') -and $entry['noPatch']) {
+        $Problems.Add("no patch available for $path (binary or oversized), so no line is commentable")
         return
     }
 
@@ -1985,7 +2559,7 @@ function Invoke-Resolve {
     Write-Output "workspace: $workspace"
     Write-Output "changedFiles: $($files.Count)  commits: $($commits.Count)  reviews: $($reviews.Count)  threads: $($threads.threads.Count)"
     if (-not $resolvedFiles.Complete) {
-        Write-Output "fileCoverage: INCOMPLETE — $($resolvedFiles.Reason)"
+        Write-Output "fileMapCoverage: INCOMPLETE — $($resolvedFiles.Reason)"
     }
     if (-not $threads.complete) {
         Write-Output "threadCoverage: INCOMPLETE — $($threads.incompleteReason)"
@@ -1995,6 +2569,65 @@ function Invoke-Resolve {
 # ---------------------------------------------------------------------------
 # Post
 # ---------------------------------------------------------------------------
+
+function Open-PostLock {
+    <#
+      Take an exclusive, OS-enforced lock on the run directory for the whole
+      reconcile → POST → receipt sequence.
+
+      Receipt reconciliation makes a *retry* safe, which is a different problem
+      from concurrency: two -Post processes for one run can both read
+      "unpublished", both pass the run-marker check, and both publish, leaving
+      two public reviews on the PR that no later run can retract. Run-directory
+      isolation does not help — same run, same directory, by construction.
+
+      The lock is a file held open with FileShare.None, because that is the one
+      form of exclusion both Windows and Unix enforce in the kernel rather than
+      by convention, and it is released even if the process is killed. The file
+      itself is left behind on release: deleting it would open a window where a
+      waiter has the path open and a third process creates it fresh, and an
+      empty post.lock in a run directory costs nothing.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$RunDirectory,
+        [int]$TimeoutSeconds = 60
+    )
+
+    $lockPath = Join-Path $RunDirectory 'post.lock'
+    $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
+    while ($true) {
+        try {
+            $stream = [System.IO.File]::Open($lockPath, [System.IO.FileMode]::OpenOrCreate,
+                [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+            # Record who holds it, so a human staring at a blocked run has
+            # something to look up rather than an empty file.
+            $writer = [System.IO.StreamWriter]::new($stream, [System.Text.UTF8Encoding]::new($false), 1024, $true)
+            try {
+                $stream.SetLength(0)
+                $writer.WriteLine("pid=$PID acquiredAt=$([DateTime]::UtcNow.ToString('o'))")
+                $writer.Flush()
+            }
+            finally { $writer.Dispose() }
+            return $stream
+        }
+        catch [System.IO.IOException] {
+            if ([DateTime]::UtcNow -ge $deadline) {
+                throw ("Another pr-review post is already in progress for this run (lock '$lockPath' held " +
+                    "for more than ${TimeoutSeconds}s). Publishing concurrently would post two reviews to the " +
+                    'same PR, so this run stops. Wait for the other post to finish, or re-run -Resolve to ' +
+                    'start a new run.')
+            }
+            Start-Sleep -Milliseconds 250
+        }
+    }
+}
+
+function Close-PostLock {
+    param($Lock)
+
+    if ($null -eq $Lock) { return }
+    try { $Lock.Dispose() } catch { }
+}
 
 function Get-PostResultPath {
     <#
@@ -2510,18 +3143,18 @@ function Get-SubmissionPlan {
     $workspace = Assert-CanonicalRunWorkspace -Owner $owner -Repo $repo -Number $number `
         -HeadSha $pinnedHead -RunId $runId -Workspace $workspace
 
+    # Everything from here to the receipt is one critical section. The caller
+    # owns releasing it: -Preflight drops it as soon as the plan comes back,
+    # -Post holds it across the submission and the receipt write. Taken before
+    # the receipt is read, because a check that another process can invalidate
+    # between the read and the POST is not a check.
+    $lock = Open-PostLock -RunDirectory $workspace
+
     # Idempotent retry: this run already posted. A later -Resolve mints a new run
     # id in its own directory, so re-reviewing an unchanged head still publishes
     # a fresh summary. The runId is re-checked here as well as being implied by
     # the directory, so a legacy flat workspace cannot pass one run's receipt off
     # as another's.
-    #
-    # Sequential, not concurrent: this reconciliation and the marker lookup below
-    # make a *retry* safe, and nothing here is an inter-process lock. Two -Post
-    # processes started together for one run can both read "unpublished" before
-    # either writes, and both publish. Run-directory isolation covers concurrent
-    # runs, not concurrent posts of one run; SKILL.md states the one-post-at-a-
-    # time constraint. A lock would have to cover the read and the POST together.
     $resultPath = Get-PostResultPath -RunDirectory $workspace
     if (Test-Path -LiteralPath $resultPath) {
         # An unreadable receipt is treated as no receipt, not as a fatal error.
@@ -2541,6 +3174,7 @@ function Get-SubmissionPlan {
                     Prior         = $prior
                     RunId         = $runId
                     HeadSha       = $headSha
+                    Lock          = $lock
                 }
             }
         }
@@ -2611,7 +3245,9 @@ function Get-SubmissionPlan {
     return [pscustomobject]@{
         AlreadyPosted   = $false
         Prior           = $null
+        Lock            = $lock
         SourcePayload   = $payload
+        PayloadSource   = Get-PayloadSource -PayloadPath $PayloadPath
         Payload         = $working
         Workspace       = $workspace
         Owner           = $owner
@@ -2638,7 +3274,12 @@ function Invoke-Preflight {
 
     $plan = Get-SubmissionPlan -PayloadPath $PayloadPath -ExpectedRunId $ExpectedRunId -Stage 'preflight'
 
+    # The plan holds the run's post lock. Preflight performs no write to GitHub,
+    # so it releases at every exit rather than holding the run hostage; an
+    # exception on the way out unwinds to the top-level handler, which exits the
+    # process and lets the OS drop the handle.
     if ($plan.AlreadyPosted) {
+        Close-PostLock -Lock $plan.Lock
         Write-Output "PREFLIGHT: run $($plan.RunId) already published review $($plan.Prior.reviewId) at head $($plan.HeadSha)."
         Write-Output 'A -Post would be an idempotent no-op. Run -Resolve again to start a new run.'
         return
@@ -2651,11 +3292,15 @@ function Invoke-Preflight {
     Write-JsonFile -Value $working -Path (Join-Path $workspace 'review.json')
     $mdPath = Join-Path $workspace 'review.md'
     Set-Content -LiteralPath $mdPath -Value (ConvertTo-ReviewMarkdown -Payload $working) -Encoding utf8
+    Close-PostLock -Lock $plan.Lock
 
     Write-Output 'PREFLIGHT PASSED — no GitHub write was performed.'
     Write-Output "target: $($plan.Owner)/$($plan.Repo)#$($plan.Number)"
     Write-Output "runId: $($plan.RunId)"
     Write-Output "pinned: base $($plan.PinnedBase) head $($plan.PinnedHead)"
+    # UNVERIFIED means the inline-placement gates in -BuildPayload were not
+    # proved to have run over these bytes, not that the payload is wrong.
+    Write-Output "payloadSource: $($plan.PayloadSource)"
     Write-Output 'checks:'
     Write-Output '  - payload validated against review-schema.json'
     Write-Output '  - run workspace recomputed from pinned identity and proved canonical'
@@ -2686,7 +3331,14 @@ function Invoke-Post {
 
     $plan = Get-SubmissionPlan -PayloadPath $PayloadPath -ExpectedRunId $ExpectedRunId -Stage 'post'
 
+    # The plan handed over the run's post lock. It is held across the submission
+    # and released only once the receipt exists on disk, so a second -Post for
+    # this run either waits and then sees the receipt, or times out — it never
+    # publishes a second review. Every early exit below releases explicitly;
+    # anything that throws unwinds to the top-level handler, and the process
+    # exit drops the handle.
     if ($plan.AlreadyPosted) {
+        Close-PostLock -Lock $plan.Lock
         $prior = $plan.Prior
         Write-Output "Already posted for run $($plan.RunId) at head $($plan.HeadSha) (idempotent no-op)"
         Write-Output "reviewId: $($prior.reviewId)"
@@ -2817,6 +3469,7 @@ function Invoke-Post {
         $md = ConvertTo-ReviewMarkdown -Payload $working
         Set-Content -LiteralPath $mdPath -Value $md -Encoding utf8
         Write-JsonFile -Value $working -Path (Join-Path $workspace 'review.json')
+        Close-PostLock -Lock $plan.Lock
 
         Write-Output ''
         Write-Output 'Could not post'
@@ -2841,6 +3494,9 @@ function Invoke-Post {
         postedAt   = $postedAt
     }
     Write-JsonFile -Value $result -Path $resultPath
+    # The receipt is on disk: a concurrent -Post can now safely take the lock,
+    # read it, and no-op. Everything below only enriches the receipt.
+    Close-PostLock -Lock $plan.Lock
 
     # Collect comment ids from the review comments endpoint (paginated: a large
     # review exceeds one page, and a short receipt makes retries look wrong).
@@ -2865,6 +3521,7 @@ function Invoke-Post {
     Write-Output ("commentIds: " + ($commentIds -join ', '))
     Write-Output "headSha: $headSha"
     Write-Output "postedAt: $postedAt"
+    Write-Output "payloadSource: $($plan.PayloadSource)"
     Write-Output "fileMapSource: $($fileMap.Source)"
     if (-not [string]::IsNullOrWhiteSpace($coverageNote)) {
         Write-Output "fileMapCoverage: INCOMPLETE — $coverageNote"
@@ -2892,6 +3549,8 @@ try {
     if ($Dedupe) { $verbCount++ }
     if ($BuildPayload) { $verbCount++ }
     if ($MarkdownFallback) { $verbCount++ }
+    if ($Ledger) { $verbCount++ }
+    if ($WatchDecide) { $verbCount++ }
 
     if ($verbCount -eq 0) {
         Show-Usage
@@ -2934,7 +3593,7 @@ try {
         if ([string]::IsNullOrWhiteSpace($Findings) -or [string]::IsNullOrWhiteSpace($Prior)) {
             throw '-Dedupe requires -Findings <path> and -Prior <path>'
         }
-        Invoke-Dedupe -FindingsPath $Findings -PriorPath $Prior
+        Invoke-Dedupe -FindingsPath $Findings -PriorPath $Prior -AllowIncompletePrior:$AllowIncompletePrior
         exit 0
     }
 
@@ -2952,7 +3611,7 @@ try {
             throw '-BuildPayload requires -BodyText <text> or -BodyFile <path>'
         }
         Invoke-BuildPayload -FindingsPath $Findings -BaseSha $BaseSha -HeadSha $HeadSha `
-            -BodyText $BodyText -BodyFile $BodyFile
+            -BodyText $BodyText -BodyFile $BodyFile -OutPath $Out
         exit 0
     }
 
@@ -2961,6 +3620,22 @@ try {
             throw '-MarkdownFallback requires -Payload <path>'
         }
         Invoke-MarkdownFallback -PayloadPath $Payload
+        exit 0
+    }
+
+    if ($Ledger) {
+        if ([string]::IsNullOrWhiteSpace($State)) {
+            throw '-Ledger requires -State <path>'
+        }
+        Invoke-Ledger -StatePath $State
+        exit 0
+    }
+
+    if ($WatchDecide) {
+        if ([string]::IsNullOrWhiteSpace($State)) {
+            throw '-WatchDecide requires -State <path>'
+        }
+        Invoke-WatchDecide -StatePath $State
         exit 0
     }
 

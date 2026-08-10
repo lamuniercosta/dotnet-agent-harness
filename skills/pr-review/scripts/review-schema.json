@@ -6,7 +6,7 @@
   "$defs": {
     "finding": {
       "type": "object",
-      "description": "One review finding. Only CONFIRMED findings are eligible for inline placement; PLAUSIBLE findings must stay in the summary (as questions), never as inline comments. A Low-severity finding is additionally eligible for inline placement only when it carries a non-empty 'rule' citation; otherwise it too is moved to the summary. The helper enforces this in -BuildPayload.",
+      "description": "One review finding. Only CONFIRMED findings are eligible for inline placement; PLAUSIBLE findings must stay in the summary (as questions), never as inline comments. A Low-severity finding is additionally eligible for inline placement only when it carries a non-empty 'rule' citation; otherwise it too is moved to the summary. A suggestion is rendered as a committable GitHub suggestion fence only when 'suggestion_verified' is true; otherwise it renders as a plain fenced code block. The helper enforces both gates in -BuildPayload.",
       "required": ["severity", "category", "file", "verdict"],
       "properties": {
         "severity": {
@@ -65,6 +65,10 @@
           "type": "string",
           "description": "Optional line-independent location context (normalized hunk text) used in place of 'symbol' when no symbol name applies."
         },
+        "hunk_context": {
+          "type": "string",
+          "description": "Normalized text of the enclosing hunk, used as the line-independent discriminator when neither a symbol name nor a shorter context applies."
+        },
         "placement": {
           "type": "string",
           "enum": ["inline", "file", "summary"],
@@ -76,7 +80,12 @@
           "description": "Citation of the explicit repository rule (source path plus the rule text or section) backing this finding. Required for a Low-severity finding to be eligible for inline placement; ignored for other severities."
         },
         "suggestion": {
-          "type": "string"
+          "type": "string",
+          "description": "Candidate replacement text. Suggestion text containing a fence marker is refused outright."
+        },
+        "suggestion_verified": {
+          "type": "boolean",
+          "description": "The suggestion block is emitted as a GitHub ```suggestion fence only when this is true, meaning the replacement was checked to be exact, local, and correct at the pinned head; otherwise the text is rendered as a plain fenced code block that cannot be committed with one click."
         },
         "body": {
           "type": "string",
