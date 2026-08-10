@@ -96,6 +96,10 @@
     "reviewComment": {
       "type": "object",
       "required": ["path", "body"],
+      "dependentRequired": {
+        "line": ["side"],
+        "start_line": ["start_side"]
+      },
       "properties": {
         "path": {
           "type": "string",
@@ -123,7 +127,7 @@
         }
       },
       "additionalProperties": true,
-      "description": "Requires either line (single-line) or start_line+line (multi-line). side/start_side must be LEFT or RIGHT when present."
+      "description": "Requires either line (single-line) or start_line+line (multi-line). GitHub's line-comment API needs the location expressed as line+side (and start_line+start_side for multi-line ranges), so side is required whenever line is present, and start_side whenever start_line is present; side/start_side must be LEFT or RIGHT when present."
     },
     "reviewPayload": {
       "type": "object",

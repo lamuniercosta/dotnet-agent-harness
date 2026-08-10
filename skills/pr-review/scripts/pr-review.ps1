@@ -752,8 +752,20 @@ function Test-ReviewCommentObject {
         }
     }
 
-    foreach ($sideProp in @('side', 'start_side')) {
-        if (Test-HasProperty -Object $Comment -Name $sideProp) {
+    foreach ($pair in @(@{ Line = 'line'; Side = 'side' }, @{ Line = 'start_line'; Side = 'start_side' })) {
+        $sideProp = $pair.Side
+        # An empty or whitespace side is as unusable to the location API as an
+        # absent one, so it is treated as missing rather than falling through to
+        # the enum check, which only fires on a non-empty value.
+        $hasSide = (Test-HasProperty -Object $Comment -Name $sideProp) -and
+                   -not [string]::IsNullOrWhiteSpace([string](Get-PropertyValue -Object $Comment -Name $sideProp))
+        if (-not $hasSide) {
+            $hasLineProp = (Test-HasProperty -Object $Comment -Name $pair.Line) -and ($null -ne (Get-PropertyValue -Object $Comment -Name $pair.Line))
+            if ($hasLineProp) {
+                Add-Violation -List $Violations -Path "$Path.$sideProp" -Message "missing required property '$sideProp'"
+            }
+        }
+        else {
             $sideVal = [string](Get-PropertyValue -Object $Comment -Name $sideProp)
             if ($sideVal -and $sideVal -notin $script:SideEnum) {
                 Add-Violation -List $Violations -Path "$Path.$sideProp" -Message "must be LEFT or RIGHT"

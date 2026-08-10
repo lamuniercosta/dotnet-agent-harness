@@ -576,6 +576,58 @@ finally {
     Remove-Item -LiteralPath $dedupeDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
+Write-Host ''
+Write-Host 'Test-ReviewCommentObject requires side alongside line'
+
+# A payload comment with `line` but no `side` used to pass local validation —
+# -BuildPayload always adds `side: RIGHT`, but -Post and -Preflight accept a
+# hand-built payload directly, so this shape reached GitHub's line-comment API
+# without the location it requires and failed there instead, as a 422, rather
+# than at preflight.
+$lineNoSide = [pscustomobject]@{ path = 'src/a.cs'; body = 'Finding.'; line = 10 }
+$lineNoSideViolations = [System.Collections.Generic.List[string]]::new()
+Test-ReviewCommentObject -Comment $lineNoSide -Path 'comment' -Violations $lineNoSideViolations
+Assert-True 'a comment with line but no side is rejected' ($lineNoSideViolations.Count -gt 0)
+Assert-True 'the violation names side' `
+    (@($lineNoSideViolations | Where-Object { $_ -like 'comment.side:*' }).Count -eq 1)
+
+# Same defect on the multi-line shape: start_line without start_side.
+$rangeNoStartSide = [pscustomobject]@{
+    path = 'src/a.cs'; body = 'Finding.'; start_line = 5; line = 10; side = 'RIGHT'
+}
+$rangeNoStartSideViolations = [System.Collections.Generic.List[string]]::new()
+Test-ReviewCommentObject -Comment $rangeNoStartSide -Path 'comment' -Violations $rangeNoStartSideViolations
+Assert-True 'a comment with start_line but no start_side is rejected' ($rangeNoStartSideViolations.Count -gt 0)
+Assert-True 'the violation names start_side' `
+    (@($rangeNoStartSideViolations | Where-Object { $_ -like 'comment.start_side:*' }).Count -eq 1)
+
+# A present-but-empty side is the shape that slips past a bare presence test:
+# the property exists, so a required-check keyed on presence is satisfied, and
+# the enum check that would otherwise catch it is guarded by `if ($sideVal ...)`,
+# which an empty string fails. A whitespace side is caught by the enum branch
+# because PowerShell counts '  ' as truthy — '' is the hole. GitHub rejects it
+# exactly like an absent side, so validation has to as well.
+$lineEmptySide = [pscustomobject]@{ path = 'src/a.cs'; body = 'Finding.'; line = 10; side = '' }
+$lineEmptySideViolations = [System.Collections.Generic.List[string]]::new()
+Test-ReviewCommentObject -Comment $lineEmptySide -Path 'comment' -Violations $lineEmptySideViolations
+Assert-True 'a comment with line and an empty side is rejected' ($lineEmptySideViolations.Count -gt 0)
+Assert-True 'the empty-side violation names side' `
+    (@($lineEmptySideViolations | Where-Object { $_ -like 'comment.side:*' }).Count -eq 1)
+
+# A fully-specified single-line comment is unaffected.
+$lineWithSide = [pscustomobject]@{ path = 'src/a.cs'; body = 'Finding.'; line = 10; side = 'RIGHT' }
+$lineWithSideViolations = [System.Collections.Generic.List[string]]::new()
+Test-ReviewCommentObject -Comment $lineWithSide -Path 'comment' -Violations $lineWithSideViolations
+Assert-Equal 'a comment with line and side is still accepted' 0 $lineWithSideViolations.Count
+
+# A fully-specified multi-line comment is unaffected.
+$rangeWithBothSides = [pscustomobject]@{
+    path = 'src/a.cs'; body = 'Finding.'; start_line = 5; start_side = 'RIGHT'; line = 10; side = 'RIGHT'
+}
+$rangeWithBothSidesViolations = [System.Collections.Generic.List[string]]::new()
+Test-ReviewCommentObject -Comment $rangeWithBothSides -Path 'comment' -Violations $rangeWithBothSidesViolations
+Assert-Equal 'a multi-line comment with side and start_side is still accepted' 0 $rangeWithBothSidesViolations.Count
+
 # ---------------------------------------------------------------------------
 # End-to-end against a fake gh.
 # ---------------------------------------------------------------------------
@@ -704,10 +756,42 @@ if ($joined -match 'pulls/7$' -or ($joined -match 'pulls/7 ' -and $joined -notma
         title         = 'Test PR'
         html_url      = 'https://github.com/acme/widgets/pull/7'
         changed_files = [int]$env:PRREVIEW_TEST_CHANGED_FILES
-        base          = [ordered]@{ sha = $base; ref = 'main' }
-        head          = [ordered]@{ sha = $env:PRREVIEW_TEST_HEAD; ref = 'feature/x' }
+        base          = [ordered]@{
+            sha  = $base
+            ref  = 'main'
+            repo = [ordered]@{ full_name = $env:PRREVIEW_TEST_BASE_REPO }
+        }
+        head          = [ordered]@{
+            sha  = $env:PRREVIEW_TEST_HEAD
+            ref  = 'feature/x'
+            repo = [ordered]@{ full_name = $env:PRREVIEW_TEST_HEAD_REPO }
+        }
     }
     Write-Output (ConvertTo-Json $pr -Depth 20)
+    exit 0
+}
+
+# `gh pr view --json number,url,baseRefName,headRefName` — the current-branch
+# resolution branch of Parse-PrTarget. Every downstream fixture (pulls/7, its
+# files, its tree) is keyed to PR 7, so this always reports PR 7 too; what the
+# tests exercise is that the call happens at all, not that its number differs.
+if ($joined -eq 'pr view --json number,url,baseRefName,headRefName') {
+    $prView = [ordered]@{
+        number      = 7
+        url         = 'https://github.com/acme/widgets/pull/7'
+        baseRefName = 'main'
+        headRefName = 'feature/x'
+    }
+    Write-Output (ConvertTo-Json $prView -Depth 10)
+    exit 0
+}
+
+# `gh repo view --json nameWithOwner -q .nameWithOwner` — used by both the
+# integer and current-branch resolution branches. Real `gh` with `-q` runs the
+# response through a jq filter and prints the raw string, not a JSON document,
+# so the shim matches that instead of wrapping it in quotes/braces.
+if ($joined -eq 'repo view --json nameWithOwner -q .nameWithOwner') {
+    Write-Output $env:PRREVIEW_TEST_REPO_VIEW
     exit 0
 }
 
@@ -808,6 +892,9 @@ $script:testBaseMoveAfter = '0'
 $script:testPostLandsThenFails = '0'
 $script:testTree = 'tree-301.json'
 $script:testTreeFail = '0'
+$script:testBaseRepo = 'acme/widgets'
+$script:testHeadRepo = 'acme/widgets'
+$script:testRepoView = 'acme/widgets'
 $script:originalPath = $env:PATH
 
 function Use-FakeGhEnv {
@@ -826,6 +913,9 @@ function Use-FakeGhEnv {
     $env:PRREVIEW_TEST_TREE = $script:testTree
     $env:PRREVIEW_TEST_TREE_FAIL = $script:testTreeFail
     $env:PRREVIEW_TEST_PR_READS = $prReads
+    $env:PRREVIEW_TEST_BASE_REPO = $script:testBaseRepo
+    $env:PRREVIEW_TEST_HEAD_REPO = $script:testHeadRepo
+    $env:PRREVIEW_TEST_REPO_VIEW = $script:testRepoView
     Set-Content -LiteralPath $prReads -Value '0' -Encoding UTF8
 }
 
@@ -1253,6 +1343,145 @@ try {
             ($resolve8.Text -match 'trust the gathered evidence')
         Assert-True 'an aborted resolve writes no workspace' `
             (-not ($resolve8.Text -match '(?m)^workspace:'))
+
+        # ── Resolve: the integer PR-number form drives gh repo view only ─────
+        # Issue #83's required scenarios include the PR-number branch of
+        # Parse-PrTarget directly, which the URL-form scenarios above never
+        # touch: it calls `gh repo view` for owner/repo and takes the number
+        # from the argument, with no `gh pr view` call at all. Asserting the
+        # log's shape (repo view present, pr view absent) is what proves this
+        # branch — not the URL branch — actually ran.
+        $resolveIntLogOffset = Get-GhLogLineCount
+        $resolveInt = Invoke-Helper -HelperArgs @('-Resolve', '7')
+        Assert-Equal 'resolve succeeds against the integer PR-number form' 0 $resolveInt.ExitCode
+        if ($resolveInt.ExitCode -ne 0) { Write-Host $resolveInt.Text -ForegroundColor DarkYellow }
+        $workspaceInt = $null
+        if ($resolveInt.Text -match '(?m)^workspace:\s*(.+)$') { $workspaceInt = $Matches[1].Trim() }
+        Assert-True 'the integer form reports a workspace' (-not [string]::IsNullOrWhiteSpace($workspaceInt))
+        if ($workspaceInt -and (Test-Path -LiteralPath $workspaceInt)) {
+            $pinnedInt = Get-Content -LiteralPath (Join-Path $workspaceInt 'pinned.json') -Raw | ConvertFrom-Json
+            Assert-Equal 'the integer form resolves the owner gh repo view reported' 'acme' ([string]$pinnedInt.owner)
+            Assert-Equal 'the integer form resolves the repo gh repo view reported' 'widgets' ([string]$pinnedInt.repo)
+            Assert-Equal 'the integer form resolves the PR number given on the command line' 7 ([int]$pinnedInt.pr)
+        }
+        $resolveIntCalls = Get-GhLogSince -Offset $resolveIntLogOffset
+        Assert-True 'the integer form calls gh repo view to resolve owner/repo' `
+            (@($resolveIntCalls | Where-Object { $_ -match '^repo view' }).Count -ge 1)
+        Assert-Equal 'the integer form never calls gh pr view' 0 `
+            (@($resolveIntCalls | Where-Object { $_ -match '^pr view' }).Count)
+
+        # ── Resolve: the current-branch form drives both gh pr view and gh repo view ─
+        # The empty-target branch is the other required scenario the URL and
+        # integer forms leave unprotected: it needs `gh pr view` for the PR
+        # number and `gh repo view` for owner/repo. Every downstream fixture
+        # (pulls/7, its files, its tree) is keyed to PR 7, so the shim's `pr
+        # view` route also reports PR 7 — making the assertion "the call
+        # happened and the number it returned is what resolution used" rather
+        # than "the number differs from 7", since no fixture in this file can
+        # answer for any PR but 7.
+        $resolveBranchLogOffset = Get-GhLogLineCount
+        $resolveBranch = Invoke-Helper -HelperArgs @('-Resolve', '')
+        Assert-Equal 'resolve succeeds against the current-branch form' 0 $resolveBranch.ExitCode
+        if ($resolveBranch.ExitCode -ne 0) { Write-Host $resolveBranch.Text -ForegroundColor DarkYellow }
+        $workspaceBranch = $null
+        if ($resolveBranch.Text -match '(?m)^workspace:\s*(.+)$') { $workspaceBranch = $Matches[1].Trim() }
+        Assert-True 'the current-branch form reports a workspace' (-not [string]::IsNullOrWhiteSpace($workspaceBranch))
+        if ($workspaceBranch -and (Test-Path -LiteralPath $workspaceBranch)) {
+            $pinnedBranch = Get-Content -LiteralPath (Join-Path $workspaceBranch 'pinned.json') -Raw | ConvertFrom-Json
+            Assert-Equal 'the current-branch form resolves the number gh pr view reported' 7 ([int]$pinnedBranch.pr)
+        }
+        $resolveBranchCalls = Get-GhLogSince -Offset $resolveBranchLogOffset
+        Assert-True 'the current-branch form calls gh pr view for the PR number' `
+            (@($resolveBranchCalls | Where-Object { $_ -match '^pr view' }).Count -ge 1)
+        Assert-True 'the current-branch form calls gh repo view for owner/repo' `
+            (@($resolveBranchCalls | Where-Object { $_ -match '^repo view' }).Count -ge 1)
+
+        # ── Resolve: a same-repository PR resolves entirely against its own repo ─
+        # Issue #83's second required family: base and head both name
+        # acme/widgets. testBig/testChangedFiles are raised to 301 here so the
+        # beyond-300-cap fallback runs and proves its files against the pinned
+        # head tree (repos/<owner>/<repo>/git/trees/<sha>) — the exact call this
+        # scenario and the fork one below need present in the log to assert on.
+        $script:testBig = '1'
+        $script:testChangedFiles = '301'
+        $script:testBaseRepo = 'acme/widgets'
+        $script:testHeadRepo = 'acme/widgets'
+        $resolveSameLogOffset = Get-GhLogLineCount
+        $resolveSame = Invoke-Helper -HelperArgs @('-Resolve', '7')
+        Assert-Equal 'resolve succeeds for a same-repository PR' 0 $resolveSame.ExitCode
+        if ($resolveSame.ExitCode -ne 0) { Write-Host $resolveSame.Text -ForegroundColor DarkYellow }
+        $workspaceSame = $null
+        if ($resolveSame.Text -match '(?m)^workspace:\s*(.+)$') { $workspaceSame = $Matches[1].Trim() }
+        if ($workspaceSame -and (Test-Path -LiteralPath $workspaceSame)) {
+            $pinnedSame = Get-Content -LiteralPath (Join-Path $workspaceSame 'pinned.json') -Raw | ConvertFrom-Json
+            Assert-Equal 'a same-repository PR resolves to the owning repo''s owner' 'acme' ([string]$pinnedSame.owner)
+            Assert-Equal 'a same-repository PR resolves to the owning repo''s name' 'widgets' ([string]$pinnedSame.repo)
+        }
+        $resolveSameCalls = Get-GhLogSince -Offset $resolveSameLogOffset
+        Assert-True 'a same-repository PR proves its pinned tree against its own repo' `
+            (@($resolveSameCalls | Where-Object { $_ -match 'repos/acme/widgets/git/trees/' }).Count -ge 1)
+        $script:testBig = '0'
+        $script:testChangedFiles = '2'
+
+        # ── Resolve: a fork PR still targets the base repository ─────────────
+        # Issue #83's fork scenario. The PR JSON's head.repo now names a fork
+        # that owns none of acme/widgets' git objects. Resolution — and every
+        # downstream repos/{owner}/{repo}/... call, including the pinned tree
+        # proof and the eventual review POST — has to keep targeting the base
+        # repository: pointing either one at the fork would either 404 (the
+        # fork does not share acme/widgets' blob shas) or, worse, silently
+        # land the review on the wrong repository altogether. Owner/repo in
+        # this codebase come only from Parse-PrTarget's resolution
+        # (pinned.owner/pinned.repo), never from pr.head.repo, so this is a
+        # regression guard against a future call site reading the wrong field.
+        $script:testBig = '1'
+        $script:testChangedFiles = '301'
+        $script:testHeadRepo = 'contributor/widgets-fork'
+        $resolveForkLogOffset = Get-GhLogLineCount
+        $resolveFork = Invoke-Helper -HelperArgs @('-Resolve', '7')
+        Assert-Equal 'resolve succeeds for a fork PR' 0 $resolveFork.ExitCode
+        if ($resolveFork.ExitCode -ne 0) { Write-Host $resolveFork.Text -ForegroundColor DarkYellow }
+        $workspaceFork = $null
+        if ($resolveFork.Text -match '(?m)^workspace:\s*(.+)$') { $workspaceFork = $Matches[1].Trim() }
+        if ($workspaceFork -and (Test-Path -LiteralPath $workspaceFork)) {
+            $pinnedFork = Get-Content -LiteralPath (Join-Path $workspaceFork 'pinned.json') -Raw | ConvertFrom-Json
+            Assert-Equal 'a fork PR still resolves owner to the base repository' 'acme' ([string]$pinnedFork.owner)
+            Assert-Equal 'a fork PR still resolves repo to the base repository' 'widgets' ([string]$pinnedFork.repo)
+            Assert-Equal 'the pinned head sha is still the one the base-repo PR view reported' `
+                $headSha ([string]$pinnedFork.headSha)
+
+            $payloadPathFork = Join-Path $workspaceFork 'review.input.json'
+            Set-Content -LiteralPath $payloadPathFork -Encoding UTF8 -Value @"
+{"commit_id":"$headSha","event":"COMMENT","body":"Summary for the fork PR.","comments":[]}
+"@
+            $postsBeforeFork = Get-PostCount
+            $postFork = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadPathFork)
+            Assert-Equal 'posting a fork PR review succeeds' 0 $postFork.ExitCode
+            if ($postFork.ExitCode -ne 0) { Write-Host $postFork.Text -ForegroundColor DarkYellow }
+            Assert-Equal 'a fork PR post reaches GitHub' ($postsBeforeFork + 1) (Get-PostCount)
+        }
+        else {
+            Assert-True 'a fork PR resolve produced a workspace to post from' $false
+        }
+        $resolveForkCalls = Get-GhLogSince -Offset $resolveForkLogOffset
+        Assert-True 'a fork PR proves its pinned tree against the base repository, not the fork' `
+            (@($resolveForkCalls | Where-Object { $_ -match 'repos/acme/widgets/git/trees/' }).Count -ge 1)
+        Assert-Equal 'a fork PR never addresses the fork repository directly' 0 `
+            (@($resolveForkCalls | Where-Object { $_ -match 'contributor/widgets-fork' }).Count)
+        $postForkCalls = Get-GhLogSince -Offset $resolveForkLogOffset
+        Assert-True 'a fork PR review is posted against the base repository' `
+            (@($postForkCalls | Where-Object {
+                    $_ -match 'repos/acme/widgets/pulls/7/reviews' -and $_ -match '--method\s+POST'
+                }).Count -ge 1)
+        $script:testBig = '0'
+        $script:testChangedFiles = '2'
+        $script:testHeadRepo = 'acme/widgets'
+
+        # ── Resolve: an unrecognized target is refused, not silently coerced ─
+        $resolveBad = Invoke-Helper -HelperArgs @('-Resolve', 'not-a-pr')
+        Assert-Equal 'an unrecognized -Resolve target fails' 1 $resolveBad.ExitCode
+        Assert-True 'the failure names the target as unrecognized' `
+            ($resolveBad.Text -match 'Unrecognized -Resolve target')
     }
     else {
         Assert-True 'workspace exists on disk' $false
@@ -1267,7 +1496,8 @@ finally {
             'PRREVIEW_TEST_BASE', 'PRREVIEW_TEST_THREADS', 'PRREVIEW_TEST_REVIEWS_DB',
             'PRREVIEW_TEST_BIG', 'PRREVIEW_TEST_CHANGED_FILES', 'PRREVIEW_TEST_BASE_MOVE_AFTER',
             'PRREVIEW_TEST_POST_LANDS_THEN_FAILS', 'PRREVIEW_TEST_PR_READS',
-            'PRREVIEW_TEST_TREE', 'PRREVIEW_TEST_TREE_FAIL')) {
+            'PRREVIEW_TEST_TREE', 'PRREVIEW_TEST_TREE_FAIL',
+            'PRREVIEW_TEST_BASE_REPO', 'PRREVIEW_TEST_HEAD_REPO', 'PRREVIEW_TEST_REPO_VIEW')) {
         Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue
     }
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
