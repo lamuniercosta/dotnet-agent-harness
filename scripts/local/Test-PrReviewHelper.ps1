@@ -22,6 +22,12 @@
 #      crafted pair pick the destination and route every write through it.
 #  10. The semantic dedupe key dropped location entirely, so two distinct defects
 #      worded the same way collapsed and the second was dropped.
+#  11. The remap retry resubmitted without reconciling, so a POST that GitHub
+#      accepted and then failed on the way back published a second review.
+#  12. The pair check sat far enough before the POST that a base moving in
+#      between went unnoticed, contradicting the documented guarantee.
+#  13. -Resolve gathered six paginated reads of mutable state with no closing
+#      pin check, so evidence from two diffs could land under one pinned pair.
 #
 # Unit checks dot-source the helper's top-level functions out of its AST (the
 # script's own dispatch calls exit, so it cannot be dot-sourced directly).
@@ -366,14 +372,31 @@ function Emit([string]$Name) {
 }
 
 # The PR view is rendered from the environment so a test can move base or head
-# under a run that already pinned them.
+# under a run that already pinned them. PRREVIEW_TEST_BASE_MOVE_AFTER moves it
+# mid-command instead of between commands: reads of this view are counted in a
+# file, and once the count passes N the base comes back moved. That is what
+# distinguishes a check taken at the start of a step from one taken at its end.
 if ($joined -match 'pulls/7$' -or ($joined -match 'pulls/7 ' -and $joined -notmatch 'pulls/7/')) {
+    $base = $env:PRREVIEW_TEST_BASE
+    $moveAfter = 0
+    if (-not [string]::IsNullOrWhiteSpace($env:PRREVIEW_TEST_BASE_MOVE_AFTER)) {
+        $moveAfter = [int]$env:PRREVIEW_TEST_BASE_MOVE_AFTER
+    }
+    if ($moveAfter -gt 0) {
+        $seen = 0
+        if (Test-Path -LiteralPath $env:PRREVIEW_TEST_PR_READS) {
+            $seen = [int](Get-Content -LiteralPath $env:PRREVIEW_TEST_PR_READS -Raw).Trim()
+        }
+        $seen++
+        Set-Content -LiteralPath $env:PRREVIEW_TEST_PR_READS -Value $seen -Encoding UTF8
+        if ($seen -gt $moveAfter) { $base = '9999999999999999999999999999999999999999' }
+    }
     $pr = [ordered]@{
         number        = 7
         title         = 'Test PR'
         html_url      = 'https://github.com/acme/widgets/pull/7'
         changed_files = [int]$env:PRREVIEW_TEST_CHANGED_FILES
-        base          = [ordered]@{ sha = $env:PRREVIEW_TEST_BASE; ref = 'main' }
+        base          = [ordered]@{ sha = $base; ref = 'main' }
         head          = [ordered]@{ sha = $env:PRREVIEW_TEST_HEAD; ref = 'feature/x' }
     }
     Write-Output (ConvertTo-Json $pr -Depth 20)
@@ -397,6 +420,14 @@ if ($joined -match '--method\s+POST' -and $joined -match 'pulls/7/reviews') {
     $next = @($db) + @($review)
     Set-Content -LiteralPath $env:PRREVIEW_TEST_REVIEWS_DB -Encoding UTF8 `
         -Value (ConvertTo-Json @($next) -Depth 20)
+    # The request GitHub accepted, then a failure on the way back. The message
+    # deliberately carries the word "Path" so it matches the broad regex that
+    # sends the helper into its remap retry — that is the reachable route to a
+    # duplicate public review.
+    if ($env:PRREVIEW_TEST_POST_LANDS_THEN_FAILS -eq '1') {
+        Write-Output 'gateway timeout reading response for Path validation'
+        exit 1
+    }
     Write-Output (ConvertTo-Json $review -Depth 20)
     exit 0
 }
@@ -444,10 +475,14 @@ Set-Content -LiteralPath $ghLog -Value '' -Encoding UTF8
 $reviewsDb = Join-Path $sandbox 'reviews-db.json'
 Set-Content -LiteralPath $reviewsDb -Value '[]' -Encoding UTF8
 
+$prReads = Join-Path $sandbox 'pr-view-reads.txt'
+
 $script:testBase = $baseSha
 $script:testThreads = 'threads.json'
 $script:testBig = '0'
 $script:testChangedFiles = '2'
+$script:testBaseMoveAfter = '0'
+$script:testPostLandsThenFails = '0'
 
 function Invoke-Helper {
     param([string[]]$HelperArgs)
@@ -462,6 +497,12 @@ function Invoke-Helper {
     $env:PRREVIEW_TEST_REVIEWS_DB = $reviewsDb
     $env:PRREVIEW_TEST_BIG = $script:testBig
     $env:PRREVIEW_TEST_CHANGED_FILES = $script:testChangedFiles
+    $env:PRREVIEW_TEST_BASE_MOVE_AFTER = $script:testBaseMoveAfter
+    $env:PRREVIEW_TEST_POST_LANDS_THEN_FAILS = $script:testPostLandsThenFails
+    # The mid-command base move counts PR-view reads within one command, so the
+    # counter resets per invocation rather than accumulating across the suite.
+    $env:PRREVIEW_TEST_PR_READS = $prReads
+    Set-Content -LiteralPath $prReads -Value '0' -Encoding UTF8
     # Keep every workspace this test creates inside the sandbox.
     $env:TMPDIR = $tempHome
     $env:TEMP = $tempHome
@@ -656,6 +697,74 @@ try {
         Assert-Equal 'a finding past the 300-file cap stays inline' 1 @($posted5.comments).Count
         Assert-True 'nothing is demoted to the summary on a 301-file PR' `
             (-not ([string]$posted5.body -match 'Unmappable findings'))
+
+        # ── The remap retry must not republish a POST that landed ────────────
+        # A non-zero result from the POST covers two different worlds: the
+        # request never reached GitHub, and the request was accepted but the
+        # response, parse, or transport then failed. The retry branch is
+        # entered on a deliberately broad regex, so the second world is
+        # reachable, and resubmitting without reconciling publishes a second
+        # public review on the PR.
+        $resolve6 = Invoke-Helper -HelperArgs @('-Resolve', $target)
+        Assert-Equal 'a resolve before the landed-POST retry succeeds' 0 $resolve6.ExitCode
+        $workspace6 = $null
+        if ($resolve6.Text -match '(?m)^workspace:\s*(.+)$') { $workspace6 = $Matches[1].Trim() }
+        $payloadPath6 = Join-Path $workspace6 'review.input.json'
+        Set-Content -LiteralPath $payloadPath6 -Encoding UTF8 -Value @"
+{"commit_id":"$headSha","event":"COMMENT","body":"Summary for the landed-then-failed post.","comments":[]}
+"@
+        $postsBefore = Get-PostCount
+        $reviewsBefore = @(Get-Content -LiteralPath $reviewsDb -Raw | ConvertFrom-Json).Count
+        $script:testPostLandsThenFails = '1'
+        $post6 = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadPath6)
+        $script:testPostLandsThenFails = '0'
+        Assert-Equal 'a POST that landed and then failed still ends the run cleanly' 0 $post6.ExitCode
+        if ($post6.ExitCode -ne 0) { Write-Host $post6.Text -ForegroundColor DarkYellow }
+        Assert-True 'the retry reconciles instead of resubmitting' `
+            ($post6.Text -match 'already published review')
+        Assert-Equal 'the retry attempts exactly one POST, not two' ($postsBefore + 1) (Get-PostCount)
+        Assert-Equal 'exactly one review reaches the PR' ($reviewsBefore + 1) `
+            (@(Get-Content -LiteralPath $reviewsDb -Raw | ConvertFrom-Json).Count)
+        Assert-True 'the recovered receipt is written for the landed post' `
+            (Test-Path -LiteralPath (Join-Path $workspace6 'post-result.json'))
+
+        # ── The pair is re-read immediately before the submission itself ─────
+        # Between the check on entering -Post and the POST sit the run-marker
+        # lookup, the file-map fetch, and payload assembly. A base that moves
+        # inside that window has to abort, or the documented guarantee is only
+        # true of where the check happens to sit today.
+        $resolve7 = Invoke-Helper -HelperArgs @('-Resolve', $target)
+        Assert-Equal 'a resolve before the mid-post move succeeds' 0 $resolve7.ExitCode
+        $workspace7 = $null
+        if ($resolve7.Text -match '(?m)^workspace:\s*(.+)$') { $workspace7 = $Matches[1].Trim() }
+        $payloadPath7 = Join-Path $workspace7 'review.input.json'
+        Set-Content -LiteralPath $payloadPath7 -Encoding UTF8 -Value @"
+{"commit_id":"$headSha","event":"COMMENT","body":"Summary for the mid-post base move.","comments":[]}
+"@
+        $postsBefore = Get-PostCount
+        # The entry check reads the pair once and sees it unmoved; the move
+        # lands before the submission's own read.
+        $script:testBaseMoveAfter = '1'
+        $post7 = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadPath7)
+        $script:testBaseMoveAfter = '0'
+        Assert-Equal 'a base that moves after the entry check still aborts the post' 1 $post7.ExitCode
+        Assert-True 'the mid-post abort names the base as the mover' ($post7.Text -match 'base moved')
+        Assert-Equal 'a base that moves mid-post publishes nothing' $postsBefore (Get-PostCount)
+
+        # ── Resolve closes its gather with a pin check ───────────────────────
+        # Files, commits, reviews, threads and checks are six separate reads of
+        # mutable state. A push during them leaves evidence from two diffs under
+        # a pinned.json that still looks valid, and nothing downstream can see
+        # it — so the pair is re-read once the gather is done.
+        $script:testBaseMoveAfter = '1'
+        $resolve8 = Invoke-Helper -HelperArgs @('-Resolve', $target)
+        $script:testBaseMoveAfter = '0'
+        Assert-Equal 'a base that moves during the gather aborts the resolve' 1 $resolve8.ExitCode
+        Assert-True 'the resolve abort names the base as the mover' ($resolve8.Text -match 'base moved')
+        Assert-True 'the resolve abort says the evidence is what cannot be trusted' `
+            ($resolve8.Text -match 'trust the gathered evidence')
+        Assert-True 'an aborted resolve writes no workspace' `
+            (-not ($resolve8.Text -match '(?m)^workspace:'))
     }
     else {
         Assert-True 'workspace exists on disk' $false
@@ -668,7 +777,8 @@ finally {
     $env:TMP = $originalTmp
     foreach ($name in @('PRREVIEW_TEST_FIXTURES', 'PRREVIEW_TEST_LOG', 'PRREVIEW_TEST_HEAD',
             'PRREVIEW_TEST_BASE', 'PRREVIEW_TEST_THREADS', 'PRREVIEW_TEST_REVIEWS_DB',
-            'PRREVIEW_TEST_BIG', 'PRREVIEW_TEST_CHANGED_FILES')) {
+            'PRREVIEW_TEST_BIG', 'PRREVIEW_TEST_CHANGED_FILES', 'PRREVIEW_TEST_BASE_MOVE_AFTER',
+            'PRREVIEW_TEST_POST_LANDS_THEN_FAILS', 'PRREVIEW_TEST_PR_READS')) {
         Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue
     }
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue

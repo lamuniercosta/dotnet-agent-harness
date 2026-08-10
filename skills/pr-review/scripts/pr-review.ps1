@@ -1715,6 +1715,19 @@ function Invoke-Resolve {
         }
     }
 
+    # Everything above is six paginated reads of mutable state taken one after
+    # another. A push — or a push and a revert — during that window leaves files
+    # from one diff beside commits, reviews and checks from another, under a
+    # pinned.json that looks perfectly valid; nothing downstream can tell. Close
+    # the gather by re-reading the pair and abort if either moved, matching what
+    # publication does. Aborting rather than recording partial coverage is
+    # deliberate: this evidence is what every later pass reasons from, and a
+    # resolve is cheap to redo. It runs before the workspace exists, so a run
+    # that fails here leaves nothing half-written behind.
+    [void](Assert-PinnedPair -Owner $owner -Repo $repo -Number $number `
+            -PinnedBase $baseSha -PinnedHead $headSha -PayloadHead $headSha `
+            -Stage 'trust the gathered evidence')
+
     $headWorkspace = New-OrGetWorkspace -Owner $owner -Repo $repo -Pr $number -HeadSha $headSha
 
     # Each explicit -Resolve mints a run id and owns a directory named by it. The
@@ -1845,6 +1858,54 @@ function Find-ReviewByRunMarker {
     return [pscustomobject]@{ Checked = $true; Review = $null }
 }
 
+function Assert-RunUnpublished {
+    <#
+      The gate every submission attempt passes through: reconcile against the
+      run marker and only return when this run has demonstrably published
+      nothing. Returning is the sole "go ahead" path — a review already on the
+      PR recovers its receipt and exits 0, and a failure to list exits 1,
+      because "could not check" has to mean "do not post".
+
+      It is a function rather than a block because both the first attempt and
+      the remap retry need it. The retry originally skipped it and resubmitted
+      on a rejection matched by a deliberately broad regex, so a POST that
+      reached GitHub and then failed in the response, the parse, or the
+      transport published a second public review.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Owner,
+        [Parameter(Mandatory)][string]$Repo,
+        [Parameter(Mandatory)][int]$Number,
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)][string]$HeadSha,
+        [Parameter(Mandatory)][string]$ResultPath
+    )
+
+    $existing = Find-ReviewByRunMarker -Owner $Owner -Repo $Repo -Number $Number -RunId $RunId
+    if (-not $existing.Checked) {
+        Write-Output ''
+        Write-Output 'Could not post'
+        Write-Output "Could not list existing reviews to confirm whether run $RunId already published."
+        Write-Output 'Refusing to post rather than risk a duplicate review. Retry when the API is reachable.'
+        exit 1
+    }
+    if ($null -ne $existing.Review) {
+        $recoveredId = (Get-PropertyValue -Object $existing.Review -Name 'id')
+        $recovered = [pscustomobject]@{
+            reviewId   = $recoveredId
+            commentIds = @()
+            runId      = $RunId
+            headSha    = $HeadSha
+            postedAt   = [string](Get-PropertyValue -Object $existing.Review -Name 'submitted_at')
+            reconciled = $true
+        }
+        Write-JsonFile -Value $recovered -Path $ResultPath
+        Write-Output "Run $RunId already published review $recoveredId; recovered its receipt (no duplicate posted)."
+        Write-Output "reviewId: $recoveredId"
+        exit 0
+    }
+}
+
 function Assert-PinnedPair {
     <#
       Re-read base and head and refuse to act unless both still match what the
@@ -1853,8 +1914,15 @@ function Assert-PinnedPair {
       Checking only head.sha left two holes. A push between gathering and
       posting could validate one diff and publish against the commit it was no
       longer describing, and a base-branch advance — which changes what the diff
-      even means — was never detected at all. Both are re-checked immediately
-      before every submission, not once at the start.
+      even means — was never detected at all.
+
+      Both are re-checked immediately before every submission, not once at the
+      start: the submission-time call lives inside Submit-Review rather than at
+      its call sites, so no amount of work growing between the early check and
+      the POST can widen that window again. The earlier calls — entering -Post,
+      entering the remap retry, and closing the paginated changed-file list —
+      are cheap early aborts that keep expensive work off a PR that has already
+      moved, and Invoke-Resolve closes its gather the same way.
     #>
     param(
         [Parameter(Mandatory)][string]$Owner,
@@ -2128,29 +2196,8 @@ function Invoke-Post {
     #    attempt that died before writing one. Reconcile against the run marker
     #    before publishing anything. "Could not check" is treated as "do not
     #    post": a duplicate public review is worse than a failed run.
-    $existing = Find-ReviewByRunMarker -Owner $owner -Repo $repo -Number $number -RunId $runId
-    if (-not $existing.Checked) {
-        Write-Output ''
-        Write-Output 'Could not post'
-        Write-Output "Could not list existing reviews to confirm whether run $runId already published."
-        Write-Output 'Refusing to post rather than risk a duplicate review. Retry when the API is reachable.'
-        exit 1
-    }
-    if ($null -ne $existing.Review) {
-        $recoveredId = (Get-PropertyValue -Object $existing.Review -Name 'id')
-        $recovered = [pscustomobject]@{
-            reviewId   = $recoveredId
-            commentIds = @()
-            runId      = $runId
-            headSha    = $headSha
-            postedAt   = [string](Get-PropertyValue -Object $existing.Review -Name 'submitted_at')
-            reconciled = $true
-        }
-        Write-JsonFile -Value $recovered -Path $resultPath
-        Write-Output "Run $runId already published review $recoveredId; recovered its receipt (no duplicate posted)."
-        Write-Output "reviewId: $recoveredId"
-        exit 0
-    }
+    Assert-RunUnpublished -Owner $owner -Repo $repo -Number $number `
+        -RunId $runId -HeadSha $headSha -ResultPath $resultPath
 
     # 3. Validate comments against the diff pinned to base...head, not the PR's
     #    mutable files view.
@@ -2200,7 +2247,21 @@ function Invoke-Post {
     }
 
     function Submit-Review {
-        param($ReviewPayload)
+        param(
+            $ReviewPayload,
+            [Parameter(Mandatory)][string]$Stage
+        )
+        # The pair is re-read here, inside the submission itself, rather than at
+        # the call sites. "Immediately before every submission attempt" was true
+        # of the code that first made the claim and had already drifted: between
+        # the outer check and the POST sat the run-marker lookup, the file-map
+        # fetch, and payload assembly, and a truncated map added a whole
+        # pagination plus a nested pin check to that window. Owning the check
+        # here makes the claim structural — a new call site cannot forget it,
+        # and the outer checks stay as the cheap early abort that keeps
+        # expensive work off a PR that has already moved.
+        [void](Assert-PinnedPair -Owner $owner -Repo $repo -Number $number `
+                -PinnedBase $pinnedBase -PinnedHead $pinnedHead -PayloadHead $headSha -Stage $Stage)
         $tmp = Join-Path $workspace 'review.post.json'
         Write-JsonFile -Value $ReviewPayload -Path $tmp
         return Invoke-Gh -Action 'posting pull request review' -GhArgs @(
@@ -2218,11 +2279,20 @@ function Invoke-Post {
     # Preserve exact outgoing payload before attempt.
     Write-JsonFile -Value $working -Path (Join-Path $workspace 'review.json')
 
-    $response = Submit-Review -ReviewPayload $working
+    $response = Submit-Review -ReviewPayload $working -Stage 'post'
 
     # 3. If gh rejects line locations, refresh + remap exactly once.
     if ($response.ExitCode -ne 0 -and $response.Text -match '(?i)(line|position|pull_request_review_thread|Path)') {
         Write-Warning 'GitHub rejected one or more line locations; refreshing diff and retrying once.'
+
+        # A non-zero exit is not proof the POST never landed: it also covers a
+        # request GitHub accepted whose response, parse, or transport then
+        # failed. The regex above is deliberately broad — a 5xx or permission
+        # body containing the word "Path" reaches here — so reconcile against
+        # the run marker again before resubmitting, exactly as the first
+        # attempt did. Without this the retry publishes a second public review.
+        Assert-RunUnpublished -Owner $owner -Repo $repo -Number $number `
+            -RunId $runId -HeadSha $headSha -ResultPath $resultPath
 
         # Re-pin before the second submission too. The rejection may itself be
         # the first sign that the PR moved under us, and this is a separate
@@ -2270,7 +2340,7 @@ function Invoke-Post {
 
         $working = Add-RunMarker -Payload $working -RunId $runId
         Write-JsonFile -Value $working -Path (Join-Path $workspace 'review.json')
-        $response = Submit-Review -ReviewPayload $working
+        $response = Submit-Review -ReviewPayload $working -Stage 'retry the post'
     }
 
     if ($response.ExitCode -ne 0) {
