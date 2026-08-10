@@ -57,6 +57,14 @@
         "fingerprint": {
           "type": "string"
         },
+        "symbol": {
+          "type": "string",
+          "description": "Optional enclosing symbol (method, type, function) the finding sits in. Line-independent, so it discriminates two identically-worded findings in one file across reruns where the line alone would shift."
+        },
+        "context": {
+          "type": "string",
+          "description": "Optional line-independent location context (normalized hunk text) used in place of 'symbol' when no symbol name applies."
+        },
         "placement": {
           "type": "string",
           "enum": ["inline", "file", "summary"],

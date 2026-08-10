@@ -16,6 +16,12 @@
 #   6. GraphQL partial success (data + top-level errors) was recorded as complete
 #      thread coverage, which makes dedupe repost existing comments.
 #   7. `-Body` read its value as a file whenever that value named one.
+#   8. The line map came only from compare/, which caps its file list at 300, so
+#      findings past that cap were demoted out of inline comments.
+#   9. -Post trusted any directory holding a payload and a pinned.json, letting a
+#      crafted pair pick the destination and route every write through it.
+#  10. The semantic dedupe key dropped location entirely, so two distinct defects
+#      worded the same way collapsed and the second was dropped.
 #
 # Unit checks dot-source the helper's top-level functions out of its AST (the
 # script's own dispatch calls exit, so it cannot be dot-sourced directly).
@@ -184,6 +190,101 @@ $findingC = [pscustomobject]@{
 Assert-True 'a different finding still gets a different semantic key' `
     ((Get-FindingSemanticFingerprint -Finding $findingA) -ne (Get-FindingSemanticFingerprint -Finding $findingC))
 
+# Two defects, two sites, one wording. Dropping location from the semantic key
+# made these one finding, and the second one disappeared.
+$sameWordingElsewhere = [pscustomobject]@{
+    repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+    side = 'RIGHT'; line = 480
+    summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+}
+Assert-True 'identical wording at two sites shares the semantic key without context' `
+    ((Get-FindingSemanticFingerprint -Finding $findingA) -eq (Get-FindingSemanticFingerprint -Finding $sameWordingElsewhere))
+
+$withSymbolA = [pscustomobject]@{
+    repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+    side = 'RIGHT'; line = 120; symbol = 'Parse'
+    summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+}
+$withSymbolB = [pscustomobject]@{
+    repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+    side = 'RIGHT'; line = 480; symbol = 'Render'
+    summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+}
+Assert-True 'a symbol tells two identically-worded findings apart' `
+    ((Get-FindingSemanticFingerprint -Finding $withSymbolA) -ne (Get-FindingSemanticFingerprint -Finding $withSymbolB))
+$withSymbolAMoved = [pscustomobject]@{
+    repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+    side = 'RIGHT'; line = 131; symbol = 'Parse'
+    summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+}
+Assert-Equal 'the symbol-keyed finding still survives a line shift' `
+    (Get-FindingSemanticFingerprint -Finding $withSymbolA) (Get-FindingSemanticFingerprint -Finding $withSymbolAMoved)
+
+Write-Host ''
+Write-Host 'Dedupe matches one prior finding to one current finding'
+
+$dedupeDir = Join-Path ([System.IO.Path]::GetTempPath()) ("pr-review-dedupe-{0}" -f [guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Path $dedupeDir -Force | Out-Null
+try {
+    # The prior review raised this defect once, at a line that has since shifted.
+    $priorPath = Join-Path $dedupeDir 'prior.json'
+    Set-Content -LiteralPath $priorPath -Encoding UTF8 -Value (
+        ConvertTo-Json -Depth 10 -InputObject @(
+            [pscustomobject]@{
+                repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+                severity = 'Medium'; verdict = 'CONFIRMED'; side = 'RIGHT'; line = 41
+                summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+            }
+        ))
+
+    # This run finds it at two distinct sites, described in the same words.
+    $currentPath = Join-Path $dedupeDir 'current.json'
+    Set-Content -LiteralPath $currentPath -Encoding UTF8 -Value (
+        ConvertTo-Json -Depth 10 -InputObject @(
+            [pscustomobject]@{
+                repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+                severity = 'Medium'; verdict = 'CONFIRMED'; side = 'RIGHT'; line = 40
+                summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+            },
+            [pscustomobject]@{
+                repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+                severity = 'Medium'; verdict = 'CONFIRMED'; side = 'RIGHT'; line = 200
+                summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+            }
+        ))
+
+    $dedupe = Invoke-Dedupe -FindingsPath $currentPath -PriorPath $priorPath | ConvertFrom-Json
+    Assert-Equal 'one prior finding silences exactly one of two same-wording findings' 1 $dedupe.keptCount
+    Assert-Equal 'the other same-wording finding is dropped as semantic' 1 $dedupe.droppedCount
+    Assert-True 'the surviving finding keeps its own location' `
+        (@($dedupe.kept).Count -eq 1 -and @($dedupe.kept)[0].line -in @(40, 200))
+
+    # An unchanged rerun still dedupes both: two prior occurrences, two drops.
+    $dedupeSelf = Invoke-Dedupe -FindingsPath $currentPath -PriorPath $currentPath | ConvertFrom-Json
+    Assert-Equal 'a rerun against itself still drops every repeat' 0 $dedupeSelf.keptCount
+    Assert-Equal 'both repeats are recognised, not just the first' 2 $dedupeSelf.droppedCount
+
+    # A prior document that lists the same finding twice — once as a finding,
+    # once as a bare semantic fingerprint — is one prior finding, not two, so it
+    # must not buy a second drop.
+    $priorFinding = [pscustomobject]@{
+        repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+        severity = 'Medium'; verdict = 'CONFIRMED'; side = 'RIGHT'; line = 41
+        summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+    }
+    $doubleListedPath = Join-Path $dedupeDir 'prior-double-listed.json'
+    Set-Content -LiteralPath $doubleListedPath -Encoding UTF8 -Value (
+        ConvertTo-Json -Depth 10 -InputObject ([pscustomobject]@{
+                findings            = @($priorFinding)
+                semanticFingerprints = @(Get-FindingSemanticFingerprint -Finding $priorFinding)
+            }))
+    $dedupeDouble = Invoke-Dedupe -FindingsPath $currentPath -PriorPath $doubleListedPath | ConvertFrom-Json
+    Assert-Equal 'one finding listed twice in prior state still silences only one' 1 $dedupeDouble.keptCount
+}
+finally {
+    Remove-Item -LiteralPath $dedupeDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
 # ---------------------------------------------------------------------------
 # End-to-end against a fake gh.
 # ---------------------------------------------------------------------------
@@ -208,12 +309,27 @@ Set-Content -LiteralPath (Join-Path $fixtures 'files.json') -Encoding UTF8 -Valu
 [{"filename":"src/b.cs","status":"modified","patch":"@@ -1,2 +1,3 @@\n context\n+added\n"}]
 '@
 
-# compare/<base>...<head> wraps its files in an envelope, one per page. This is
-# what the post path now builds its line map from.
+# compare/<base>...<head> wraps its files in an envelope and carries that array
+# on the first page only — later pages continue the commit list. Modelling
+# `files` on every page hid the 300-file cap entirely.
 Set-Content -LiteralPath (Join-Path $fixtures 'compare.json') -Encoding UTF8 -Value @'
-{"status":"ahead","files":[{"filename":"src/a.cs","status":"modified","patch":"@@ -1,2 +1,3 @@\n var x = new[] { 1 };\n+added\n"}]}
-{"status":"ahead","files":[{"filename":"src/b.cs","status":"modified","patch":"@@ -1,2 +1,3 @@\n context\n+added\n"}]}
+{"status":"ahead","files":[{"filename":"src/a.cs","status":"modified","patch":"@@ -1,2 +1,3 @@\n var x = new[] { 1 };\n+added\n"},{"filename":"src/b.cs","status":"modified","patch":"@@ -1,2 +1,3 @@\n context\n+added\n"}]}
+{"status":"ahead"}
 '@
+
+# The boundary that a compare-only map cannot see: compare/ truncates its file
+# list at 300 entries, so file 301 of a 301-file PR is simply absent.
+$bigPatch = '"status":"modified","patch":"@@ -1,2 +1,3 @@\n context\n+added\n"'
+$first300 = (1..300 | ForEach-Object { '{"filename":"src/f' + $_ + '.cs",' + $bigPatch + '}' }) -join ','
+$file301 = '{"filename":"src/f301.cs",' + $bigPatch + '}'
+Set-Content -LiteralPath (Join-Path $fixtures 'compare-capped.json') -Encoding UTF8 -Value @(
+    '{"status":"ahead","files":[' + $first300 + ']}'
+    '{"status":"ahead"}'
+)
+Set-Content -LiteralPath (Join-Path $fixtures 'files-301.json') -Encoding UTF8 -Value @(
+    '[' + $first300 + ']'
+    '[' + $file301 + ']'
+)
 
 # A GraphQL partial success: HTTP 200 carrying both data and top-level errors.
 Set-Content -LiteralPath (Join-Path $fixtures 'threads-partial.json') -Encoding UTF8 -Value @'
@@ -253,11 +369,12 @@ function Emit([string]$Name) {
 # under a run that already pinned them.
 if ($joined -match 'pulls/7$' -or ($joined -match 'pulls/7 ' -and $joined -notmatch 'pulls/7/')) {
     $pr = [ordered]@{
-        number   = 7
-        title    = 'Test PR'
-        html_url = 'https://github.com/acme/widgets/pull/7'
-        base     = [ordered]@{ sha = $env:PRREVIEW_TEST_BASE; ref = 'main' }
-        head     = [ordered]@{ sha = $env:PRREVIEW_TEST_HEAD; ref = 'feature/x' }
+        number        = 7
+        title         = 'Test PR'
+        html_url      = 'https://github.com/acme/widgets/pull/7'
+        changed_files = [int]$env:PRREVIEW_TEST_CHANGED_FILES
+        base          = [ordered]@{ sha = $env:PRREVIEW_TEST_BASE; ref = 'main' }
+        head          = [ordered]@{ sha = $env:PRREVIEW_TEST_HEAD; ref = 'feature/x' }
     }
     Write-Output (ConvertTo-Json $pr -Depth 20)
     exit 0
@@ -287,8 +404,14 @@ if ($joined -match '--method\s+POST' -and $joined -match 'pulls/7/reviews') {
 if ($joined -match 'reviews/\d+/comments') { Emit 'empty.json' }
 if ($joined -match '^api graphql')         { Emit $env:PRREVIEW_TEST_THREADS }
 if ($joined -match 'check-runs')           { Emit 'check-runs.json' }
-if ($joined -match 'compare/')             { Emit 'compare.json' }
-if ($joined -match 'pulls/7/files')        { Emit 'files.json' }
+if ($joined -match 'compare/') {
+    if ($env:PRREVIEW_TEST_BIG -eq '1') { Emit 'compare-capped.json' }
+    Emit 'compare.json'
+}
+if ($joined -match 'pulls/7/files') {
+    if ($env:PRREVIEW_TEST_BIG -eq '1') { Emit 'files-301.json' }
+    Emit 'files.json'
+}
 if ($joined -match 'pulls/7/commits')      { Emit 'commits.json' }
 if ($joined -match 'pulls/7/reviews') {
     Write-Output (Get-Content -LiteralPath $env:PRREVIEW_TEST_REVIEWS_DB -Raw)
@@ -323,6 +446,8 @@ Set-Content -LiteralPath $reviewsDb -Value '[]' -Encoding UTF8
 
 $script:testBase = $baseSha
 $script:testThreads = 'threads.json'
+$script:testBig = '0'
+$script:testChangedFiles = '2'
 
 function Invoke-Helper {
     param([string[]]$HelperArgs)
@@ -335,6 +460,8 @@ function Invoke-Helper {
     $env:PRREVIEW_TEST_BASE = $script:testBase
     $env:PRREVIEW_TEST_THREADS = $script:testThreads
     $env:PRREVIEW_TEST_REVIEWS_DB = $reviewsDb
+    $env:PRREVIEW_TEST_BIG = $script:testBig
+    $env:PRREVIEW_TEST_CHANGED_FILES = $script:testChangedFiles
     # Keep every workspace this test creates inside the sandbox.
     $env:TMPDIR = $tempHome
     $env:TEMP = $tempHome
@@ -478,6 +605,57 @@ try {
             ([string]$threadState4.incompleteReason -match 'OAuth App access restrictions')
         Assert-True 'incomplete thread coverage is reported to the caller' `
             ($resolve4.Text -match 'threadCoverage: INCOMPLETE')
+
+        # ── A payload outside its canonical run directory is refused ─────────
+        # pinned.json was trusted purely for sitting beside the payload, so a
+        # crafted pair could name the authenticated destination while routing
+        # the review, the receipt, and the fallback through a directory this
+        # helper never created.
+        $forgedDir = Join-Path $sandbox 'forged-run'
+        New-Item -ItemType Directory -Path $forgedDir -Force | Out-Null
+        Copy-Item -LiteralPath (Join-Path $workspace 'pinned.json') -Destination $forgedDir
+        $forgedPayload = Join-Path $forgedDir 'review.input.json'
+        Set-Content -LiteralPath $forgedPayload -Encoding UTF8 -Value @"
+{"commit_id":"$headSha","event":"COMMENT","body":"Summary from a directory the helper never created.","comments":[]}
+"@
+        $postsBefore = Get-PostCount
+        $forgedPost = Invoke-Helper -HelperArgs @('-Post', '-Payload', $forgedPayload)
+        Assert-Equal 'posting from outside the canonical run directory fails' 1 $forgedPost.ExitCode
+        Assert-True 'the refusal says where the run belongs' ($forgedPost.Text -match 'belongs in')
+        Assert-Equal 'a non-canonical workspace publishes nothing' $postsBefore (Get-PostCount)
+        Assert-True 'no receipt is written into the non-canonical directory' `
+            (-not (Test-Path -LiteralPath (Join-Path $forgedDir 'post-result.json')))
+        Assert-True 'no review payload is written into the non-canonical directory' `
+            (-not (Test-Path -LiteralPath (Join-Path $forgedDir 'review.json')))
+
+        # ── A 301-file PR still maps inline ─────────────────────────────────
+        # compare/ stops at 300 files, so a compare-only map treated every
+        # finding past the cap as an unmappable location.
+        $script:testBig = '1'
+        $script:testChangedFiles = '301'
+        $resolve5 = Invoke-Helper -HelperArgs @('-Resolve', $target)
+        Assert-Equal 'resolve succeeds on a 301-file PR' 0 $resolve5.ExitCode
+        $workspace5 = $null
+        if ($resolve5.Text -match '(?m)^workspace:\s*(.+)$') { $workspace5 = $Matches[1].Trim() }
+        $payloadPath5 = Join-Path $workspace5 'review.input.json'
+        Set-Content -LiteralPath $payloadPath5 -Encoding UTF8 -Value @"
+{"commit_id":"$headSha","event":"COMMENT","body":"Summary for the large PR.","comments":[{"path":"src/f301.cs","line":2,"side":"RIGHT","body":"Past the compare cap."}]}
+"@
+        $post5 = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadPath5)
+        $script:testBig = '0'
+        $script:testChangedFiles = '2'
+        Assert-Equal 'the 301-file PR posts' 0 $post5.ExitCode
+        if ($post5.ExitCode -ne 0) { Write-Host $post5.Text -ForegroundColor DarkYellow }
+        Assert-True 'the map falls back to the paginated file list past the cap' `
+            ($post5.Text -match 'fileMapSource: pulls/7/files')
+        Assert-True 'the fallback map is not reported incomplete' `
+            (-not ($post5.Text -match 'fileMapCoverage: INCOMPLETE'))
+        $map5 = @(Get-Content -LiteralPath (Join-Path $workspace5 'changed-files.json') -Raw | ConvertFrom-Json)
+        Assert-Equal 'the pinned map holds every changed file, not the first 300' 301 $map5.Count
+        $posted5 = Get-Content -LiteralPath (Join-Path $workspace5 'review.json') -Raw | ConvertFrom-Json
+        Assert-Equal 'a finding past the 300-file cap stays inline' 1 @($posted5.comments).Count
+        Assert-True 'nothing is demoted to the summary on a 301-file PR' `
+            (-not ([string]$posted5.body -match 'Unmappable findings'))
     }
     else {
         Assert-True 'workspace exists on disk' $false
@@ -489,7 +667,8 @@ finally {
     $env:TEMP = $originalTemp
     $env:TMP = $originalTmp
     foreach ($name in @('PRREVIEW_TEST_FIXTURES', 'PRREVIEW_TEST_LOG', 'PRREVIEW_TEST_HEAD',
-            'PRREVIEW_TEST_BASE', 'PRREVIEW_TEST_THREADS', 'PRREVIEW_TEST_REVIEWS_DB')) {
+            'PRREVIEW_TEST_BASE', 'PRREVIEW_TEST_THREADS', 'PRREVIEW_TEST_REVIEWS_DB',
+            'PRREVIEW_TEST_BIG', 'PRREVIEW_TEST_CHANGED_FILES')) {
         Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue
     }
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue

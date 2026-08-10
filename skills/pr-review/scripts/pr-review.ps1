@@ -490,6 +490,72 @@ function Find-WorkspaceForPr {
     return $candidates[0].FullName
 }
 
+function Get-NormalizedFullPath {
+    param([Parameter(Mandatory)][string]$Path)
+    $full = [System.IO.Path]::GetFullPath($Path)
+    if ($full.Length -gt 3) { $full = $full.TrimEnd([char]'\', [char]'/') }
+    return $full
+}
+
+function Assert-CanonicalRunWorkspace {
+    <#
+      -Post is handed a payload path and reads pinned.json from beside it, which
+      made the containing directory an input rather than a fact. A crafted
+      payload/pinned pair could name the authenticated destination — owner,
+      repo, PR — while routing review.json, the receipt, and the markdown
+      fallback through a directory this helper never created, a junction
+      included.
+
+      So recompute where the run must live from the pinned identity, require an
+      exact match, and re-run the workspace safety checks on every ancestor
+      before anything is read from or written to it. Returns the canonical path
+      for callers to use in place of whatever they were handed.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Owner,
+        [Parameter(Mandatory)][string]$Repo,
+        [Parameter(Mandatory)][int]$Number,
+        [Parameter(Mandatory)][string]$HeadSha,
+        [Parameter(Mandatory)][string]$RunId,
+        [Parameter(Mandatory)][string]$Workspace
+    )
+
+    $safeRun = ($RunId -replace '[^A-Za-z0-9._-]', '_')
+    if ([string]::IsNullOrWhiteSpace($safeRun)) {
+        throw "pinned.json runId must contain at least one usable character; got: $RunId"
+    }
+
+    $canonicalHead = Get-WorkspaceRoot -Owner $Owner -Repo $Repo -Pr $Number -HeadSha $HeadSha
+    $runsDir = Join-Path $canonicalHead 'runs'
+    $canonicalRun = Get-NormalizedFullPath (Join-Path $runsDir $safeRun)
+    $actual = Get-NormalizedFullPath $Workspace
+
+    $comparison = if ($IsWindows) {
+        [System.StringComparison]::OrdinalIgnoreCase
+    }
+    else {
+        [System.StringComparison]::Ordinal
+    }
+    if (-not [string]::Equals($actual, $canonicalRun, $comparison)) {
+        throw ("Refusing to post from '$actual': the run this payload claims " +
+            "($Owner/$Repo#$Number run $RunId at head $HeadSha) belongs in '$canonicalRun'. " +
+            'Post from the workspace -Resolve created.')
+    }
+
+    # Every level this script owns, outermost first, so a hostile parent is
+    # caught before the run directory is trusted.
+    $repoDir = Split-Path -Parent $canonicalHead
+    $baseDir = Split-Path -Parent $repoDir
+    foreach ($dir in @($baseDir, $repoDir, $canonicalHead, $runsDir, $canonicalRun)) {
+        if (-not (Test-Path -LiteralPath $dir)) {
+            throw "Refusing to post: expected run directory '$dir' does not exist. Re-run -Resolve."
+        }
+        Assert-SafeWorkspacePath -Path $dir
+    }
+
+    return $canonicalRun
+}
+
 # ---------------------------------------------------------------------------
 # Schema validation (native walk — required/enum/const/line shape)
 # ---------------------------------------------------------------------------
@@ -785,7 +851,39 @@ function Get-FindingFingerprint {
     return Get-Sha256Hex -Text $material
 }
 
+function Get-FindingContextKey {
+    <#
+      A line-independent location discriminator: the enclosing symbol, or any
+      context/hunk text the reviewer supplied. Line numbers are deliberately
+      excluded — surviving an unrelated line shift is the whole point of the
+      semantic key. Where a finding carries none of these the key is 'none',
+      and one-for-one matching in Invoke-Dedupe is what keeps two
+      identically-worded findings apart.
+    #>
+    param($Finding)
+
+    foreach ($name in @('symbol', 'context', 'hunk_context')) {
+        $value = [string](Get-PropertyValue -Object $Finding -Name $name)
+        if (-not [string]::IsNullOrWhiteSpace($value)) {
+            return ([regex]::Replace($value.ToLowerInvariant(), '\s+', ' ')).Trim()
+        }
+    }
+    return 'none'
+}
+
 function Get-FindingSemanticFingerprint {
+    <#
+      A location-independent key, so a finding whose line only shifted is
+      recognised as the same defect on a rerun.
+
+      Removing location entirely went one step too far: repo + pr + category +
+      file + wording cannot tell two separate defects apart when the reviewer
+      describes them identically — two methods with the same empty-input null
+      deref and the same summary collapsed, and the second finding vanished.
+      Any line-independent context the finding carries is folded back in, and
+      Invoke-Dedupe matches one-for-one so two sites can never both be spent
+      against a single prior finding.
+    #>
     param(
         $Finding,
         [string]$Repo,
@@ -801,10 +899,39 @@ function Get-FindingSemanticFingerprint {
     $prVal = if ($Pr) { $Pr } else { [string](Get-PropertyValue -Object $Finding -Name 'pr') }
     $category = [string](Get-PropertyValue -Object $Finding -Name 'category')
     $file = Normalize-PathKey -Path ([string](Get-PropertyValue -Object $Finding -Name 'file'))
+    $context = Get-FindingContextKey -Finding $Finding
     $substance = Get-NormalizedSubstance -Finding $Finding
 
-    $material = (@($repoVal, $prVal, $category, $file, $substance) -join '|')
+    $material = (@($repoVal, $prVal, $category, $file, $context, $substance) -join '|')
     return Get-Sha256Hex -Text $material
+}
+
+function Add-SemanticOccurrence {
+    param(
+        [Parameter(Mandatory)][System.Collections.Generic.Dictionary[string, int]]$Counts,
+        [string]$Key
+    )
+    if ([string]::IsNullOrWhiteSpace($Key)) { return }
+    if ($Counts.ContainsKey($Key)) { $Counts[$Key] = $Counts[$Key] + 1 }
+    else { $Counts[$Key] = 1 }
+}
+
+function Use-SemanticOccurrence {
+    <#
+      Consume one prior occurrence of a semantic key, returning whether one was
+      available. Semantic matching is one-for-one: a prior review that raised a
+      defect once can silence exactly one current finding, so a second distinct
+      site described in the same words survives instead of disappearing.
+    #>
+    param(
+        [Parameter(Mandatory)][System.Collections.Generic.Dictionary[string, int]]$Counts,
+        [string]$Key
+    )
+    if ([string]::IsNullOrWhiteSpace($Key)) { return $false }
+    if (-not $Counts.ContainsKey($Key)) { return $false }
+    if ($Counts[$Key] -le 0) { return $false }
+    $Counts[$Key] = $Counts[$Key] - 1
+    return $true
 }
 
 function Invoke-Fingerprint {
@@ -831,10 +958,19 @@ function Get-PriorFingerprints {
 
     $exactSet = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
-    $semanticSet = [System.Collections.Generic.HashSet[string]]::new(
+    # Semantic keys are counted, not just present: the count is how many current
+    # findings a prior review is entitled to silence for that key.
+    $semanticCounts = [System.Collections.Generic.Dictionary[string, int]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
 
-    if ($null -eq $PriorDocument) { return [pscustomobject]@{ exact = $exactSet; semantic = $semanticSet } }
+    if ($null -eq $PriorDocument) { return [pscustomobject]@{ exact = $exactSet; semantic = $semanticCounts } }
+
+    # Each shape below is an independent *view* of the same prior review, so the
+    # counts are merged by maximum, not by sum. A document carrying both a
+    # findings array and a matching semanticFingerprints list describes one
+    # finding twice, and summing would hand it a budget of two — enough to
+    # silence a genuinely distinct second site all over again.
+    $views = [System.Collections.Generic.List[System.Collections.Generic.Dictionary[string, int]]]::new()
 
     # Accept: findings array/object, { fingerprints: [...] }, { findings: [...] },
     # or prior review state with nested findings.
@@ -844,36 +980,51 @@ function Get-PriorFingerprints {
         }
     }
     if (Test-HasProperty -Object $PriorDocument -Name 'semanticFingerprints') {
+        $view = [System.Collections.Generic.Dictionary[string, int]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase)
         foreach ($sfp in @((Get-PropertyValue -Object $PriorDocument -Name 'semanticFingerprints'))) {
-            if (-not [string]::IsNullOrWhiteSpace([string]$sfp)) { [void]$semanticSet.Add([string]$sfp) }
+            Add-SemanticOccurrence -Counts $view -Key ([string]$sfp)
         }
+        $views.Add($view)
     }
 
     try {
         $items = Get-FindingsArray -Document $PriorDocument
+        $view = [System.Collections.Generic.Dictionary[string, int]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase)
         foreach ($f in $items) {
             $fp = Get-FindingFingerprint -Finding $f
             if ($fp) { [void]$exactSet.Add($fp) }
 
-            $sfp = Get-FindingSemanticFingerprint -Finding $f
-            if ($sfp) { [void]$semanticSet.Add($sfp) }
+            Add-SemanticOccurrence -Counts $view -Key (Get-FindingSemanticFingerprint -Finding $f)
         }
+        $views.Add($view)
     }
     catch {
         # Prior may be a posting-result style object without findings — ignore.
     }
 
     if (Test-HasProperty -Object $PriorDocument -Name 'priorFindings') {
+        $view = [System.Collections.Generic.Dictionary[string, int]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase)
         foreach ($f in @((Get-PropertyValue -Object $PriorDocument -Name 'priorFindings'))) {
             $fp = Get-FindingFingerprint -Finding $f
             if ($fp) { [void]$exactSet.Add($fp) }
 
-            $sfp = Get-FindingSemanticFingerprint -Finding $f
-            if ($sfp) { [void]$semanticSet.Add($sfp) }
+            Add-SemanticOccurrence -Counts $view -Key (Get-FindingSemanticFingerprint -Finding $f)
+        }
+        $views.Add($view)
+    }
+
+    foreach ($view in $views) {
+        foreach ($pair in $view.GetEnumerator()) {
+            if (-not $semanticCounts.ContainsKey($pair.Key) -or $semanticCounts[$pair.Key] -lt $pair.Value) {
+                $semanticCounts[$pair.Key] = $pair.Value
+            }
         }
     }
 
-    return [pscustomobject]@{ exact = $exactSet; semantic = $semanticSet }
+    return [pscustomobject]@{ exact = $exactSet; semantic = $semanticCounts }
 }
 
 function Invoke-Dedupe {
@@ -902,10 +1053,15 @@ function Invoke-Dedupe {
         $hash['semanticFingerprint'] = $sfp
 
         if ($priorSets.exact.Contains($fp)) {
+            # An identical prior finding also accounts for one occurrence of the
+            # semantic key. Without spending it here, a second distinct site
+            # worded the same way would be dropped against a budget this
+            # finding already consumed.
+            [void](Use-SemanticOccurrence -Counts $priorSets.semantic -Key $sfp)
             $hash['dedupe'] = 'dropped-identical'
             $dropped.Add([pscustomobject]$hash)
         }
-        elseif ($priorSets.semantic.Contains($sfp)) {
+        elseif (Use-SemanticOccurrence -Counts $priorSets.semantic -Key $sfp) {
             $hash['dedupe'] = 'dropped-semantic'
             $dropped.Add([pscustomobject]$hash)
         }
@@ -1728,28 +1884,50 @@ function Assert-PinnedPair {
         throw ("Refusing to $Stage — " + ($problems -join '; ') + '. Re-run -Resolve and revalidate.')
     }
 
-    return [pscustomobject]@{ BaseSha = $liveBase; HeadSha = $liveHead }
+    return [pscustomobject]@{
+        BaseSha      = $liveBase
+        HeadSha      = $liveHead
+        ChangedFiles = [int](Get-PropertyValue -Object $live -Name 'changed_files')
+    }
 }
 
-function Get-PinnedCompareFiles {
+# GitHub's compare endpoint carries `files` on the first page only and caps that
+# list at 300 entries, whatever the PR's real size.
+$script:CompareFileCap = 300
+
+function Get-PinnedDiffFiles {
     <#
       Build the line map from the pinned base...head pair rather than the PR's
       mutable files view. /pulls/<n>/files always describes whatever the PR
       points at right now, so a push mid-run silently remapped comments onto a
       diff nobody reviewed. The compare endpoint is addressed by SHA, so it
       returns the same diff every time or nothing at all.
+
+      That pin alone was not enough coverage. compare/ returns `files` on its
+      first page only and truncates at 300 entries, so on a larger PR every file
+      past the cap was missing from the map and its findings were demoted out of
+      inline comments — reported as unmappable locations when the real cause was
+      a map that stopped early.
+
+      Past the cap, fall back to the paginated /pulls/<n>/files list, which is
+      complete but mutable, and bracket it with a closing base/head check so a
+      push during the fetch is caught rather than silently mixed in. If even
+      that comes up short of the PR's own changed_files count, say so: an
+      incomplete map is reported, never presented as a clean one.
     #>
     param(
         [Parameter(Mandatory)][string]$Owner,
         [Parameter(Mandatory)][string]$Repo,
+        [Parameter(Mandatory)][int]$Number,
         [Parameter(Mandatory)][string]$BaseSha,
-        [Parameter(Mandatory)][string]$HeadSha
+        [Parameter(Mandatory)][string]$HeadSha,
+        [int]$ExpectedFileCount = 0
     )
 
     $result = Invoke-GhPaginated -Action 'fetching the pinned base...head diff' `
         -Path "repos/$Owner/$Repo/compare/$BaseSha...$HeadSha"
 
-    # compare/ wraps its file array in an envelope, one envelope per page.
+    # compare/ wraps its file array in an envelope; only the first page carries one.
     $files = [System.Collections.Generic.List[object]]::new()
     foreach ($page in @($result.Pages)) {
         if (-not (Test-HasProperty -Object $page -Name 'files')) { continue }
@@ -1757,13 +1935,53 @@ function Get-PinnedCompareFiles {
             if ($null -ne $f) { $files.Add($f) }
         }
     }
-    return $files.ToArray()
+
+    $source = "compare/$BaseSha...$HeadSha"
+    $complete = $true
+    $reason = ''
+
+    $capped = $files.Count -ge $script:CompareFileCap
+    $short = $ExpectedFileCount -gt 0 -and $files.Count -lt $ExpectedFileCount
+    if ($capped -or $short) {
+        $prResult = Invoke-GhPaginated -Action 'fetching the full changed-file list' `
+            -Path "repos/$Owner/$Repo/pulls/$Number/files" -AllowFailure
+        $prFiles = @($prResult.Items)
+
+        if ($prResult.ExitCode -eq 0 -and $prFiles.Count -gt $files.Count) {
+            # Closing pin: the list above is the PR's live view, so it is only
+            # usable if base and head are still what the compare was pinned to.
+            [void](Assert-PinnedPair -Owner $Owner -Repo $Repo -Number $Number `
+                    -PinnedBase $BaseSha -PinnedHead $HeadSha -PayloadHead $HeadSha `
+                    -Stage 'trust the paginated changed-file list')
+            $files = [System.Collections.Generic.List[object]]::new()
+            foreach ($f in $prFiles) { if ($null -ne $f) { $files.Add($f) } }
+            $source = "pulls/$Number/files (bracketed by the pinned base/head pair)"
+        }
+        elseif ($prResult.ExitCode -ne 0) {
+            $complete = $false
+            $reason = ("compare/ returned $($files.Count) files (its cap is $script:CompareFileCap) " +
+                'and the paginated changed-file list could not be fetched')
+        }
+
+        if ($complete -and $ExpectedFileCount -gt 0 -and $files.Count -lt $ExpectedFileCount) {
+            $complete = $false
+            $reason = "the changed-file map holds $($files.Count) of the PR's $ExpectedFileCount files"
+        }
+    }
+
+    return [pscustomobject]@{
+        Files    = $files.ToArray()
+        Source   = $source
+        Complete = $complete
+        Reason   = $reason
+    }
 }
 
 function Move-UnmappableToSummary {
     param(
         $Payload,
-        [object[]]$UnmappableComments
+        [object[]]$UnmappableComments,
+        [string]$CoverageNote
     )
 
     $body = [string]$Payload.body
@@ -1773,6 +1991,13 @@ function Move-UnmappableToSummary {
     $section.Add('')
     $section.Add('The following findings could not be mapped to a current diff location and were moved out of inline comments:')
     $section.Add('')
+    if (-not [string]::IsNullOrWhiteSpace($CoverageNote)) {
+        # Say which cause applies. A demotion because the map ran out of files is
+        # a coverage gap, not a stale location, and reading it as the latter
+        # sends the reader looking for a defect that is not there.
+        $section.Add("Note: the changed-file map was incomplete — $CoverageNote. Some of these may be map gaps rather than stale locations.")
+        $section.Add('')
+    }
     foreach ($c in $UnmappableComments) {
         $path = [string](Get-PropertyValue -Object $c -Name 'path')
         $line = Get-PropertyValue -Object $c -Name 'line'
@@ -1830,8 +2055,15 @@ function Invoke-Post {
 
     $headSha = [string]$payload.commit_id
 
-    # Prefer workspace pinned metadata next to the payload; else scan temp workspaces.
+    # The payload's own directory is where pinned.json is read from, so guard it
+    # before reading: a junction here would redirect that read and every later
+    # write. Canonicality is proved below, once the pinned identity is known.
     $workspace = Split-Path -Parent $PayloadPath
+    if ([string]::IsNullOrWhiteSpace($workspace)) {
+        $workspace = (Get-Location).Path
+    }
+    Assert-SafeWorkspacePath -Path $workspace
+
     $pinnedPath = Join-Path $workspace 'pinned.json'
     $pinned = $null
     if (Test-Path -LiteralPath $pinnedPath) {
@@ -1864,6 +2096,11 @@ function Invoke-Post {
         throw "-RunId '$ExpectedRunId' does not match the run that owns this payload ('$runId'). Post from that run's own workspace."
     }
 
+    # The pinned identity now decides where this run lives — not the path the
+    # caller happened to pass. Everything below writes to the canonical path.
+    $workspace = Assert-CanonicalRunWorkspace -Owner $owner -Repo $repo -Number $number `
+        -HeadSha $pinnedHead -RunId $runId -Workspace $workspace
+
     # Idempotent retry: this run already posted. A later -Resolve mints a new run
     # id in its own directory, so re-reviewing an unchanged head still publishes
     # a fresh summary. The runId is re-checked here as well as being implied by
@@ -1884,8 +2121,8 @@ function Invoke-Post {
     }
 
     # 1. Re-fetch base and head; refuse if either moved.
-    [void](Assert-PinnedPair -Owner $owner -Repo $repo -Number $number `
-            -PinnedBase $pinnedBase -PinnedHead $pinnedHead -PayloadHead $headSha -Stage 'post')
+    $pinCheck = Assert-PinnedPair -Owner $owner -Repo $repo -Number $number `
+        -PinnedBase $pinnedBase -PinnedHead $pinnedHead -PayloadHead $headSha -Stage 'post'
 
     # 2. No receipt, but the POST may still have reached GitHub on an earlier
     #    attempt that died before writing one. Reconcile against the run marker
@@ -1917,8 +2154,16 @@ function Invoke-Post {
 
     # 3. Validate comments against the diff pinned to base...head, not the PR's
     #    mutable files view.
-    $files = @(Get-PinnedCompareFiles -Owner $owner -Repo $repo -BaseSha $pinnedBase -HeadSha $pinnedHead)
+    $fileMap = Get-PinnedDiffFiles -Owner $owner -Repo $repo -Number $number `
+        -BaseSha $pinnedBase -HeadSha $pinnedHead -ExpectedFileCount $pinCheck.ChangedFiles
+    $files = @($fileMap.Files)
     Write-JsonFile -Value $files -Path (Join-Path $workspace 'changed-files.json')
+    $coverageNote = ''
+    if (-not $fileMap.Complete) {
+        $coverageNote = $fileMap.Reason
+        Write-Warning ("Changed-file map is incomplete — $($fileMap.Reason). " +
+            'Findings in the missing files cannot be placed inline.')
+    }
     $diffMap = Get-DiffLineMap -Files $files
 
     $working = $payload
@@ -1942,7 +2187,8 @@ function Invoke-Post {
 
     if ($unmappable.Count -gt 0) {
         # Pre-flight remap: drop known-bad from inline before first post attempt.
-        $working = Move-UnmappableToSummary -Payload $working -UnmappableComments @($unmappable)
+        $working = Move-UnmappableToSummary -Payload $working -UnmappableComments @($unmappable) `
+            -CoverageNote $coverageNote
     }
     else {
         $working = [pscustomobject]@{
@@ -1984,8 +2230,11 @@ function Invoke-Post {
         [void](Assert-PinnedPair -Owner $owner -Repo $repo -Number $number `
                 -PinnedBase $pinnedBase -PinnedHead $pinnedHead -PayloadHead $headSha -Stage 'retry the post')
 
-        $files2 = @(Get-PinnedCompareFiles -Owner $owner -Repo $repo -BaseSha $pinnedBase -HeadSha $pinnedHead)
+        $fileMap2 = Get-PinnedDiffFiles -Owner $owner -Repo $repo -Number $number `
+            -BaseSha $pinnedBase -HeadSha $pinnedHead -ExpectedFileCount $pinCheck.ChangedFiles
+        $files2 = @($fileMap2.Files)
         Write-JsonFile -Value $files2 -Path (Join-Path $workspace 'changed-files.json')
+        if (-not $fileMap2.Complete) { $coverageNote = $fileMap2.Reason }
         $diffMap2 = Get-DiffLineMap -Files $files2
 
         $stillBad = [System.Collections.Generic.List[object]]::new()
@@ -2015,7 +2264,8 @@ function Invoke-Post {
             comments  = @($stillGood)
         }
         if ($stillBad.Count -gt 0) {
-            $working = Move-UnmappableToSummary -Payload $working -UnmappableComments @($stillBad)
+            $working = Move-UnmappableToSummary -Payload $working -UnmappableComments @($stillBad) `
+                -CoverageNote $coverageNote
         }
 
         $working = Add-RunMarker -Payload $working -RunId $runId
@@ -2077,6 +2327,10 @@ function Invoke-Post {
     Write-Output ("commentIds: " + ($commentIds -join ', '))
     Write-Output "headSha: $headSha"
     Write-Output "postedAt: $postedAt"
+    Write-Output "fileMapSource: $($fileMap.Source)"
+    if (-not [string]::IsNullOrWhiteSpace($coverageNote)) {
+        Write-Output "fileMapCoverage: INCOMPLETE — $coverageNote"
+    }
 }
 
 # ---------------------------------------------------------------------------
