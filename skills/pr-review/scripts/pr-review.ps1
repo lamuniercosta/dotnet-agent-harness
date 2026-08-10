@@ -817,15 +817,29 @@ function Get-Sha256Hex {
 }
 
 function Get-FindingFingerprint {
+    <#
+      Exact dedupe key: repo, pr, category, file, range, and normalized substance.
+
+      Current findings are model-produced after reading untrusted PR content, so
+      any fingerprint already present on the input is ignored — a prompt-injected
+      PR can steer a finding to carry an older key and make Invoke-Dedupe drop a
+      genuinely new defect as dropped-identical. Keys are always derived for
+      current findings; pass -HonorStored only when reading prior review state
+      written by an earlier run, which may carry stored keys for backward
+      compatibility, falling back to recompute when absent.
+    #>
     param(
         $Finding,
         [string]$Repo,
-        [string]$Pr
+        [string]$Pr,
+        [switch]$HonorStored
     )
 
-    $existing = Get-PropertyValue -Object $Finding -Name 'fingerprint'
-    if (-not [string]::IsNullOrWhiteSpace([string]$existing)) {
-        return [string]$existing
+    if ($HonorStored) {
+        $existing = Get-PropertyValue -Object $Finding -Name 'fingerprint'
+        if (-not [string]::IsNullOrWhiteSpace([string]$existing)) {
+            return [string]$existing
+        }
     }
 
     $repoVal = if ($Repo) { $Repo } else { [string](Get-PropertyValue -Object $Finding -Name 'repo') }
@@ -883,16 +897,24 @@ function Get-FindingSemanticFingerprint {
       Any line-independent context the finding carries is folded back in, and
       Invoke-Dedupe matches one-for-one so two sites can never both be spent
       against a single prior finding.
+
+      Current findings are untrusted input for the same reason as the exact
+      key: a supplied semanticFingerprint is ignored unless -HonorStored is set
+      while reading prior review state. Keys are derived, never accepted from
+      model output.
     #>
     param(
         $Finding,
         [string]$Repo,
-        [string]$Pr
+        [string]$Pr,
+        [switch]$HonorStored
     )
 
-    $existing = Get-PropertyValue -Object $Finding -Name 'semanticFingerprint'
-    if (-not [string]::IsNullOrWhiteSpace([string]$existing)) {
-        return [string]$existing
+    if ($HonorStored) {
+        $existing = Get-PropertyValue -Object $Finding -Name 'semanticFingerprint'
+        if (-not [string]::IsNullOrWhiteSpace([string]$existing)) {
+            return [string]$existing
+        }
     }
 
     $repoVal = if ($Repo) { $Repo } else { [string](Get-PropertyValue -Object $Finding -Name 'repo') }
@@ -993,10 +1015,10 @@ function Get-PriorFingerprints {
         $view = [System.Collections.Generic.Dictionary[string, int]]::new(
             [System.StringComparer]::OrdinalIgnoreCase)
         foreach ($f in $items) {
-            $fp = Get-FindingFingerprint -Finding $f
+            $fp = Get-FindingFingerprint -Finding $f -HonorStored
             if ($fp) { [void]$exactSet.Add($fp) }
 
-            Add-SemanticOccurrence -Counts $view -Key (Get-FindingSemanticFingerprint -Finding $f)
+            Add-SemanticOccurrence -Counts $view -Key (Get-FindingSemanticFingerprint -Finding $f -HonorStored)
         }
         $views.Add($view)
     }
@@ -1008,10 +1030,10 @@ function Get-PriorFingerprints {
         $view = [System.Collections.Generic.Dictionary[string, int]]::new(
             [System.StringComparer]::OrdinalIgnoreCase)
         foreach ($f in @((Get-PropertyValue -Object $PriorDocument -Name 'priorFindings'))) {
-            $fp = Get-FindingFingerprint -Finding $f
+            $fp = Get-FindingFingerprint -Finding $f -HonorStored
             if ($fp) { [void]$exactSet.Add($fp) }
 
-            Add-SemanticOccurrence -Counts $view -Key (Get-FindingSemanticFingerprint -Finding $f)
+            Add-SemanticOccurrence -Counts $view -Key (Get-FindingSemanticFingerprint -Finding $f -HonorStored)
         }
         $views.Add($view)
     }
@@ -1963,6 +1985,95 @@ function Assert-PinnedPair {
 # list at 300 entries, whatever the PR's real size.
 $script:CompareFileCap = 300
 
+function Get-PinnedHeadTreeBlobMap {
+    <#
+      Fetch the pinned head commit's tree in one non-paginated Git trees API call.
+      Returns a path→blob-sha map when the response is complete; $null when the
+      fetch fails or GitHub marks the tree truncated.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Owner,
+        [Parameter(Mandatory)][string]$Repo,
+        [Parameter(Mandatory)][string]$HeadSha
+    )
+
+    $raw = Invoke-Gh -Action 'fetching the pinned head tree' -GhArgs @(
+        'api', "repos/$Owner/$Repo/git/trees/$HeadSha", '-f', 'recursive=1'
+    ) -AllowFailure
+    if ($raw.ExitCode -ne 0) { return $null }
+
+    $tree = ConvertFrom-GhJson -Text $raw.Text -Action 'parsing the pinned head tree'
+    if ([bool](Get-PropertyValue -Object $tree -Name 'truncated')) { return $null }
+
+    $map = [System.Collections.Generic.Dictionary[string, string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in @((Get-PropertyValue -Object $tree -Name 'tree'))) {
+        if ($null -eq $entry) { continue }
+        if ([string](Get-PropertyValue -Object $entry -Name 'type') -ne 'blob') { continue }
+        $path = Normalize-PathKey -Path ([string](Get-PropertyValue -Object $entry -Name 'path'))
+        if (-not $path) { continue }
+        $map[$path] = [string](Get-PropertyValue -Object $entry -Name 'sha')
+    }
+    return $map
+}
+
+function Assert-FallbackFilesMatchPinnedTree {
+    <#
+      Prove a mutable /pulls/<n>/files list describes the pinned head before it
+      replaces the compare-derived map. compare/ is SHA-addressed; pulls/files
+      follows whatever the PR points at right now, so an ABA race can leave a
+      closing Assert-PinnedPair satisfied while the file entries came from an
+      intermediate push. The pinned head tree is addressed by HeadSha and is the
+      proof source: every non-removed entry's path must exist with the same blob
+      sha, and every removed entry's path must be absent.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Owner,
+        [Parameter(Mandatory)][string]$Repo,
+        [Parameter(Mandatory)][string]$HeadSha,
+        [Parameter(Mandatory)][object[]]$Files,
+        [Parameter(Mandatory)][string]$Stage
+    )
+
+    $treeMap = Get-PinnedHeadTreeBlobMap -Owner $Owner -Repo $Repo -HeadSha $HeadSha
+    if ($null -eq $treeMap) {
+        return [pscustomobject]@{
+            Proven  = $false
+            Reason  = 'the beyond-300 fallback could not be proven against the pinned head tree'
+        }
+    }
+
+    $problems = [System.Collections.Generic.List[string]]::new()
+    foreach ($f in $Files) {
+        if ($null -eq $f) { continue }
+        $status = [string](Get-PropertyValue -Object $f -Name 'status')
+        $path = Normalize-PathKey -Path ([string](Get-PropertyValue -Object $f -Name 'filename'))
+        if (-not $path) { continue }
+
+        if ($status -eq 'removed') {
+            if ($treeMap.ContainsKey($path)) {
+                $problems.Add("removed file still present in the pinned head tree ($path)")
+            }
+            continue
+        }
+
+        $entrySha = [string](Get-PropertyValue -Object $f -Name 'sha')
+        if (-not $treeMap.ContainsKey($path)) {
+            $problems.Add("file missing from the pinned head tree ($path)")
+            continue
+        }
+        if ($entrySha -and $treeMap[$path] -ne $entrySha) {
+            $problems.Add("blob sha mismatch at $path (list=$entrySha tree=$($treeMap[$path]))")
+        }
+    }
+
+    if ($problems.Count -gt 0) {
+        throw ("Refusing to $Stage — " + ($problems -join '; ') + '. Re-run -Resolve and revalidate.')
+    }
+
+    return [pscustomobject]@{ Proven = $true; Reason = '' }
+}
+
 function Get-PinnedDiffFiles {
     <#
       Build the line map from the pinned base...head pair rather than the PR's
@@ -1978,10 +2089,13 @@ function Get-PinnedDiffFiles {
       a map that stopped early.
 
       Past the cap, fall back to the paginated /pulls/<n>/files list, which is
-      complete but mutable, and bracket it with a closing base/head check so a
-      push during the fetch is caught rather than silently mixed in. If even
-      that comes up short of the PR's own changed_files count, say so: an
-      incomplete map is reported, never presented as a clean one.
+      complete but mutable. A closing base/head check catches a push that stays
+      moved, but not an ABA race: the PR can move to B while the endpoint
+      responds, then be force-pushed back to the pinned base/head before that
+      check, leaving a B file map that passes as A. Before trusting the fallback,
+      every entry is verified against the pinned head tree (itself addressed by
+      HeadSha); mismatch aborts, and a truncated or unavailable tree keeps the
+      compare-derived files and reports the map incomplete.
     #>
     param(
         [Parameter(Mandatory)][string]$Owner,
@@ -2021,9 +2135,19 @@ function Get-PinnedDiffFiles {
             [void](Assert-PinnedPair -Owner $Owner -Repo $Repo -Number $Number `
                     -PinnedBase $BaseSha -PinnedHead $HeadSha -PayloadHead $HeadSha `
                     -Stage 'trust the paginated changed-file list')
-            $files = [System.Collections.Generic.List[object]]::new()
-            foreach ($f in $prFiles) { if ($null -ne $f) { $files.Add($f) } }
-            $source = "pulls/$Number/files (bracketed by the pinned base/head pair)"
+            $proof = Assert-FallbackFilesMatchPinnedTree -Owner $Owner -Repo $Repo `
+                -HeadSha $HeadSha -Files $prFiles `
+                -Stage 'trust the paginated changed-file list against the pinned head tree'
+            if ($proof.Proven) {
+                $files = [System.Collections.Generic.List[object]]::new()
+                foreach ($f in $prFiles) { if ($null -ne $f) { $files.Add($f) } }
+                $source = "pulls/$Number/files (bracketed by the pinned base/head pair)"
+            }
+            else {
+                $complete = $false
+                $reason = ("compare/ returned $($files.Count) files (its cap is $script:CompareFileCap) " +
+                    "and $($proof.Reason)")
+            }
         }
         elseif ($prResult.ExitCode -ne 0) {
             $complete = $false

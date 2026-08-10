@@ -77,6 +77,7 @@ if ($parseErrors -and $parseErrors.Count -gt 0) {
 foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     . ([scriptblock]::Create($fn.Extent.Text))
 }
+$script:CompareFileCap = 300
 
 Write-Host ''
 Write-Host 'pr-review helper: pagination, receipts, and workspace safety'
@@ -286,6 +287,68 @@ try {
             }))
     $dedupeDouble = Invoke-Dedupe -FindingsPath $currentPath -PriorPath $doubleListedPath | ConvertFrom-Json
     Assert-Equal 'one finding listed twice in prior state still silences only one' 1 $dedupeDouble.keptCount
+
+    # Prior state may carry stored fingerprint fields from an earlier run; those
+    # are honored when reading prior state so an unchanged finding still dedupes.
+    $storedPriorPath = Join-Path $dedupeDir 'prior-stored-keys.json'
+    $storedFp = Get-FindingFingerprint -Finding $priorFinding
+    $storedSfp = Get-FindingSemanticFingerprint -Finding $priorFinding
+    Set-Content -LiteralPath $storedPriorPath -Encoding UTF8 -Value (
+        ConvertTo-Json -Depth 10 -InputObject @(
+            [pscustomobject]@{
+                repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+                severity = 'Medium'; verdict = 'CONFIRMED'; side = 'RIGHT'; line = 41
+                summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+                fingerprint = $storedFp; semanticFingerprint = $storedSfp
+            }
+        ))
+    $unchangedCurrentPath = Join-Path $dedupeDir 'current-unchanged.json'
+    Set-Content -LiteralPath $unchangedCurrentPath -Encoding UTF8 -Value (
+        ConvertTo-Json -Depth 10 -InputObject @(
+            [pscustomobject]@{
+                repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+                severity = 'Medium'; verdict = 'CONFIRMED'; side = 'RIGHT'; line = 41
+                summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+            }
+        ))
+    $dedupeStored = Invoke-Dedupe -FindingsPath $unchangedCurrentPath -PriorPath $storedPriorPath | ConvertFrom-Json
+    Assert-Equal 'prior stored fingerprint fields still dedupe an unchanged finding' 0 $dedupeStored.keptCount
+    Assert-Equal 'the unchanged finding is dropped as identical' 1 $dedupeStored.droppedCount
+
+    # Current findings are untrusted: an injected exact fingerprint must not
+    # masquerade as a prior finding when the substance differs.
+    $injectedExactPath = Join-Path $dedupeDir 'current-injected-exact.json'
+    Set-Content -LiteralPath $injectedExactPath -Encoding UTF8 -Value (
+        ConvertTo-Json -Depth 10 -InputObject @(
+            [pscustomobject]@{
+                repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+                severity = 'Medium'; verdict = 'CONFIRMED'; side = 'RIGHT'; line = 999
+                summary = 'Brand new defect the prior never saw'
+                failure_scenario = 'Totally different failure mode'
+                fingerprint = $storedFp
+            }
+        ))
+    $dedupeInjectedExact = Invoke-Dedupe -FindingsPath $injectedExactPath -PriorPath $storedPriorPath | ConvertFrom-Json
+    Assert-Equal 'an injected exact fingerprint on a new finding is still published' 1 $dedupeInjectedExact.keptCount
+    Assert-True 'the recomputed fingerprint is attached, not the injected one' `
+        (@($dedupeInjectedExact.kept)[0].fingerprint -ne $storedFp)
+
+    # Same threat model for semanticFingerprint / dropped-semantic.
+    $injectedSemanticPath = Join-Path $dedupeDir 'current-injected-semantic.json'
+    Set-Content -LiteralPath $injectedSemanticPath -Encoding UTF8 -Value (
+        ConvertTo-Json -Depth 10 -InputObject @(
+            [pscustomobject]@{
+                repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/other.cs'
+                severity = 'Medium'; verdict = 'CONFIRMED'; side = 'RIGHT'; line = 12
+                summary = 'A different file and defect entirely'
+                failure_scenario = 'Not the prior failure at all'
+                semanticFingerprint = $storedSfp
+            }
+        ))
+    $dedupeInjectedSemantic = Invoke-Dedupe -FindingsPath $injectedSemanticPath -PriorPath $storedPriorPath | ConvertFrom-Json
+    Assert-Equal 'an injected semantic fingerprint on a new finding is still published' 1 $dedupeInjectedSemantic.keptCount
+    Assert-True 'the recomputed semantic fingerprint is attached, not the injected one' `
+        (@($dedupeInjectedSemantic.kept)[0].semanticFingerprint -ne $storedSfp)
 }
 finally {
     Remove-Item -LiteralPath $dedupeDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -325,9 +388,15 @@ Set-Content -LiteralPath (Join-Path $fixtures 'compare.json') -Encoding UTF8 -Va
 
 # The boundary that a compare-only map cannot see: compare/ truncates its file
 # list at 300 entries, so file 301 of a 301-file PR is simply absent.
-$bigPatch = '"status":"modified","patch":"@@ -1,2 +1,3 @@\n context\n+added\n"'
-$first300 = (1..300 | ForEach-Object { '{"filename":"src/f' + $_ + '.cs",' + $bigPatch + '}' }) -join ','
-$file301 = '{"filename":"src/f301.cs",' + $bigPatch + '}'
+function Get-TestBlobSha {
+    param([int]$Index)
+    return ('{0:D40}' -f $Index)
+}
+$bigPatchSuffix = '"patch":"@@ -1,2 +1,3 @@\n context\n+added\n"'
+$first300 = (1..300 | ForEach-Object {
+    '{"filename":"src/f' + $_ + '.cs","status":"modified","sha":"' + (Get-TestBlobSha $_) + '",' + $bigPatchSuffix + '}'
+}) -join ','
+$file301 = '{"filename":"src/f301.cs","status":"modified","sha":"' + (Get-TestBlobSha 301) + '",' + $bigPatchSuffix + '}'
 Set-Content -LiteralPath (Join-Path $fixtures 'compare-capped.json') -Encoding UTF8 -Value @(
     '{"status":"ahead","files":[' + $first300 + ']}'
     '{"status":"ahead"}'
@@ -335,6 +404,23 @@ Set-Content -LiteralPath (Join-Path $fixtures 'compare-capped.json') -Encoding U
 Set-Content -LiteralPath (Join-Path $fixtures 'files-301.json') -Encoding UTF8 -Value @(
     '[' + $first300 + ']'
     '[' + $file301 + ']'
+)
+$treeEntries = (1..301 | ForEach-Object {
+    '{"path":"src/f' + $_ + '.cs","mode":"100644","type":"blob","sha":"' + (Get-TestBlobSha $_) + '","size":10}'
+}) -join ','
+Set-Content -LiteralPath (Join-Path $fixtures 'tree-301.json') -Encoding UTF8 -Value @(
+    '{"sha":"tree301","truncated":false,"tree":[' + $treeEntries + ']}'
+)
+Set-Content -LiteralPath (Join-Path $fixtures 'tree-truncated.json') -Encoding UTF8 -Value @(
+    '{"sha":"treetrunc","truncated":true,"tree":[{"path":"src/f1.cs","mode":"100644","type":"blob","sha":"' +
+    (Get-TestBlobSha 1) + '","size":10}]}'
+)
+$treeMismatch301 = Get-TestBlobSha 999999
+Set-Content -LiteralPath (Join-Path $fixtures 'tree-mismatch.json') -Encoding UTF8 -Value @(
+    '{"sha":"treemismatch","truncated":false,"tree":[' +
+    ((1..300 | ForEach-Object {
+        '{"path":"src/f' + $_ + '.cs","mode":"100644","type":"blob","sha":"' + (Get-TestBlobSha $_) + '","size":10}'
+    }) -join ',') + ',{"path":"src/f301.cs","mode":"100644","type":"blob","sha":"' + $treeMismatch301 + '","size":10}]}'
 )
 
 # A GraphQL partial success: HTTP 200 carrying both data and top-level errors.
@@ -443,6 +529,13 @@ if ($joined -match 'pulls/7/files') {
     if ($env:PRREVIEW_TEST_BIG -eq '1') { Emit 'files-301.json' }
     Emit 'files.json'
 }
+if ($joined -match 'git/trees/') {
+    if ($env:PRREVIEW_TEST_TREE_FAIL -eq '1') {
+        Write-Error 'fake gh: pinned head tree unavailable'
+        exit 1
+    }
+    Emit $env:PRREVIEW_TEST_TREE
+}
 if ($joined -match 'pulls/7/commits')      { Emit 'commits.json' }
 if ($joined -match 'pulls/7/reviews') {
     Write-Output (Get-Content -LiteralPath $env:PRREVIEW_TEST_REVIEWS_DB -Raw)
@@ -483,10 +576,11 @@ $script:testBig = '0'
 $script:testChangedFiles = '2'
 $script:testBaseMoveAfter = '0'
 $script:testPostLandsThenFails = '0'
+$script:testTree = 'tree-301.json'
+$script:testTreeFail = '0'
+$script:originalPath = $env:PATH
 
-function Invoke-Helper {
-    param([string[]]$HelperArgs)
-
+function Use-FakeGhEnv {
     $sep = [System.IO.Path]::PathSeparator
     $env:PATH = "$shimDir$sep$($script:originalPath)"
     $env:PRREVIEW_TEST_FIXTURES = $fixtures
@@ -499,10 +593,16 @@ function Invoke-Helper {
     $env:PRREVIEW_TEST_CHANGED_FILES = $script:testChangedFiles
     $env:PRREVIEW_TEST_BASE_MOVE_AFTER = $script:testBaseMoveAfter
     $env:PRREVIEW_TEST_POST_LANDS_THEN_FAILS = $script:testPostLandsThenFails
-    # The mid-command base move counts PR-view reads within one command, so the
-    # counter resets per invocation rather than accumulating across the suite.
+    $env:PRREVIEW_TEST_TREE = $script:testTree
+    $env:PRREVIEW_TEST_TREE_FAIL = $script:testTreeFail
     $env:PRREVIEW_TEST_PR_READS = $prReads
     Set-Content -LiteralPath $prReads -Value '0' -Encoding UTF8
+}
+
+function Invoke-Helper {
+    param([string[]]$HelperArgs)
+
+    Use-FakeGhEnv
     # Keep every workspace this test creates inside the sandbox.
     $env:TMPDIR = $tempHome
     $env:TEMP = $tempHome
@@ -516,7 +616,6 @@ function Get-PostCount {
     return @(Get-Content -LiteralPath $ghLog | Where-Object { $_ -match '--method POST' }).Count
 }
 
-$script:originalPath = $env:PATH
 $originalTmpdir = $env:TMPDIR
 $originalTemp = $env:TEMP
 $originalTmp = $env:TMP
@@ -669,6 +768,51 @@ try {
         Assert-True 'no review payload is written into the non-canonical directory' `
             (-not (Test-Path -LiteralPath (Join-Path $forgedDir 'review.json')))
 
+        # ── Get-PinnedDiffFiles proves the mutable fallback ────────────────
+        Write-Host ''
+        Write-Host 'Get-PinnedDiffFiles tree proof against mutable fallback'
+
+        $script:testBig = '1'
+        $script:testChangedFiles = '301'
+        $script:testTree = 'tree-301.json'
+        $script:testTreeFail = '0'
+        Use-FakeGhEnv
+        $mapOk = Get-PinnedDiffFiles -Owner 'acme' -Repo 'widgets' -Number 7 `
+            -BaseSha $baseSha -HeadSha $headSha -ExpectedFileCount 301
+        Assert-True 'entries matching the pinned head tree use the fallback' `
+            ($mapOk.Source -match 'pulls/7/files')
+        Assert-True 'a proven fallback map is complete' ([bool]$mapOk.Complete)
+        Assert-Equal 'a proven fallback holds every changed file' 301 $mapOk.Files.Count
+
+        $script:testTree = 'tree-mismatch.json'
+        Use-FakeGhEnv
+        $mapMismatchThrew = $false
+        try {
+            [void](Get-PinnedDiffFiles -Owner 'acme' -Repo 'widgets' -Number 7 `
+                    -BaseSha $baseSha -HeadSha $headSha -ExpectedFileCount 301)
+        }
+        catch { $mapMismatchThrew = $true }
+        Assert-True 'a blob sha mismatch aborts before trusting the fallback' $mapMismatchThrew
+
+        $script:testTree = 'tree-truncated.json'
+        Use-FakeGhEnv
+        $mapTruncated = Get-PinnedDiffFiles -Owner 'acme' -Repo 'widgets' -Number 7 `
+            -BaseSha $baseSha -HeadSha $headSha -ExpectedFileCount 301
+        Assert-True 'a truncated head tree refuses the fallback' (-not [bool]$mapTruncated.Complete)
+        Assert-True 'the incomplete reason names the unproven fallback' `
+            ($mapTruncated.Reason -match 'could not be proven against the pinned head tree')
+        Assert-Equal 'a truncated tree keeps the compare-derived file count' 300 $mapTruncated.Files.Count
+
+        $script:testTreeFail = '1'
+        Use-FakeGhEnv
+        $mapNoTree = Get-PinnedDiffFiles -Owner 'acme' -Repo 'widgets' -Number 7 `
+            -BaseSha $baseSha -HeadSha $headSha -ExpectedFileCount 301
+        $script:testTreeFail = '0'
+        $script:testTree = 'tree-301.json'
+        Assert-True 'an unavailable head tree refuses the fallback' (-not [bool]$mapNoTree.Complete)
+        Assert-True 'the unavailable-tree reason names the unproven fallback' `
+            ($mapNoTree.Reason -match 'could not be proven against the pinned head tree')
+
         # ── A 301-file PR still maps inline ─────────────────────────────────
         # compare/ stops at 300 files, so a compare-only map treated every
         # finding past the cap as an unmappable location.
@@ -778,7 +922,8 @@ finally {
     foreach ($name in @('PRREVIEW_TEST_FIXTURES', 'PRREVIEW_TEST_LOG', 'PRREVIEW_TEST_HEAD',
             'PRREVIEW_TEST_BASE', 'PRREVIEW_TEST_THREADS', 'PRREVIEW_TEST_REVIEWS_DB',
             'PRREVIEW_TEST_BIG', 'PRREVIEW_TEST_CHANGED_FILES', 'PRREVIEW_TEST_BASE_MOVE_AFTER',
-            'PRREVIEW_TEST_POST_LANDS_THEN_FAILS', 'PRREVIEW_TEST_PR_READS')) {
+            'PRREVIEW_TEST_POST_LANDS_THEN_FAILS', 'PRREVIEW_TEST_PR_READS',
+            'PRREVIEW_TEST_TREE', 'PRREVIEW_TEST_TREE_FAIL')) {
         Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue
     }
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue

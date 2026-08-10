@@ -99,11 +99,13 @@ Never switch, reset, or dirty the user's checkout.
 
 ### 1. Resolve and gather
 
-Run the bundled helper to resolve the target and pin SHAs (it uses the host's native GitHub connector when available and falls back to `gh api`):
+Run the bundled helper to resolve the target and pin SHAs:
 
 ```
 pwsh ./scripts/pr-review.ps1 -Resolve <number-or-url>   # from the skill directory
 ```
+
+The helper requires an authenticated `gh` CLI, and that is deliberate rather than a gap: the pinned-pair checks, run markers, retry reconciliation, and receipts all live in the helper's resolve/post paths, so publishing through any other channel would bypass every one of them. A host with a native GitHub connector may use it for the read-only gathering below, but never as a substitute for the helper's pinned resolve or for publication. A host without an authenticated `gh` can complete the review through its connector but cannot publish through this skill — say so up front instead of failing at helper startup.
 
 Gather, where available: PR title, body, author, labels, draft/state, base/head branches and SHAs; full base-to-head diff and changed-file metadata; commit list and messages; linked issues and specs; existing top-level comments, review submissions, and inline threads with resolved/unresolved state; current CI/check state; repository languages and detected tooling; and relevant base-branch standards, architecture docs, ADRs, contribution guides, public contracts, and test conventions.
 
@@ -208,7 +210,7 @@ Maintain disposable audit state keyed by repository, PR number, and head SHA, **
 
 ## Deterministic helper
 
-`scripts/pr-review.ps1` plus `scripts/review-schema.json` own the deterministic mechanics so the model owns only semantic analysis. The helper resolves PR metadata/head (native connector or `gh api`); creates, hardens, and locates the workspace; normalizes and validates finding JSON against the schema; parses and validates current diff locations; fingerprints findings; detects duplicates from prior review state; builds one atomic review payload; posts the `COMMENT` review; retries remapped locations once; records posting results per run id; and generates the Markdown fallback. Scripts must not contain pattern matching presented as semantic review. JSON (not YAML) is used throughout for PowerShell-native parsing without a PyYAML dependency.
+`scripts/pr-review.ps1` plus `scripts/review-schema.json` own the deterministic mechanics so the model owns only semantic analysis. The helper resolves PR metadata/head through `gh api` (an authenticated `gh` CLI is required); creates, hardens, and locates the workspace; normalizes and validates finding JSON against the schema; parses and validates current diff locations; fingerprints findings; detects duplicates from prior review state; builds one atomic review payload; posts the `COMMENT` review; retries remapped locations once; records posting results per run id; and generates the Markdown fallback. Scripts must not contain pattern matching presented as semantic review. JSON (not YAML) is used throughout for PowerShell-native parsing without a PyYAML dependency.
 
 **Pagination is a correctness requirement, not a nicety.** `gh api --paginate` emits one JSON document per page, so every REST fetch parses page by page and concatenates; review threads are cursor-paged. Coverage that stopped short — a failed GraphQL call, the page cap, a thread with more comments than one page holds — is reported as incomplete rather than dropped, because dedupe reads "no prior thread" as "new finding" and would repost comments that already exist.
 
