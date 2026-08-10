@@ -39,7 +39,7 @@ This is a **post-PR** workflow. It is a supporting skill, not a pipeline gate, a
 
 **Flags**
 
-- `--dry-run` — run the complete workflow but suppress every GitHub write.
+- `--dry-run` — run the complete workflow through **preflight** and stop: gather, review, converge, build the payload, then run every pre-publication check via `-Preflight` (below). Zero GitHub writes. Do not implement this by skipping the post — that leaves the validation unexecuted, which is the part worth rehearsing.
 - `--trust-pr` — permit executing PR-provided code, builds, tests, restores, and repository tooling **only inside the isolated review worktree**.
 - `--try-fix` — force the alternative-fix phase even when automatic selection would skip it.
 - `--deep` — add independent challengers plus deeper repository-native verification/mutation where supported, without creating more public review rounds.
@@ -172,17 +172,27 @@ Run **two independent probes by default** via the `fix-prober` agent, each in it
 
 **Review summary** must contain: the intent contract and confidence; the coverage ledger; findings grouped by severity; CI/tooling status; reviewer/probe status including failures; the try-fix comparison when activated; unresolved questions and unsupported specialist checks; the completion verdict; counts by axis and the worst finding per axis; and the pinned base/head SHAs.
 
-**Publishing** — validate the entire outgoing review, then submit **one batched `COMMENT` review** (never automatic approve/request-changes) via the helper:
+**Publishing** is two stages, and the split is what makes `--dry-run` real.
+
+**Preflight** runs every pre-publication check and writes nothing to GitHub — payload schema, the canonical run workspace recomputed from pinned identity, run-id binding, the closing base/head re-read, run-marker reconciliation, and diff-location validation — then preserves `review.json` and the Markdown fallback:
+
+```
+pwsh ./scripts/pr-review.ps1 -Preflight -Payload <run-workspace>/review.input.json -RunId <runId>
+```
+
+It reads from the API; it never writes. It proves the payload is internally valid and correctly located against the pinned diff, and it deliberately does not claim GitHub would accept it — only the submission proves that. On `--dry-run`, stop here and report what preflight printed.
+
+**Submission** then sends **one batched `COMMENT` review** (never automatic approve/request-changes), reusing the payload preflight produced:
 
 ```
 pwsh ./scripts/pr-review.ps1 -Post -Payload <run-workspace>/review.json -RunId <runId>
 ```
 
-Verify every inline path/range belongs to the pinned current diff. If the head changed, refresh and revalidate before any write. If GitHub rejects one or more line locations, refresh/remap **once**, then move only still-unmappable findings to the summary — never silently drop findings and never fall back to many independent comments. If authentication, authorization, rate limiting, or API failure prevents submission, preserve the exact payload, emit a Markdown fallback for manual posting, and report `Could not post` prominently. Never claim the workflow completed merely because analysis completed. Record returned review/comment identifiers after success so retries are safe. Even with no new findings, post an auditable summary (unless `--dry-run`).
+Every inline path/range must belong to the pinned current diff. If either pinned SHA moved, refresh and revalidate before any write. If GitHub rejects one or more line locations, refresh/remap **once**, then move only still-unmappable findings to the summary — never silently drop findings and never fall back to many independent comments. If authentication, authorization, rate limiting, or API failure prevents submission, preserve the exact payload, emit a Markdown fallback for manual posting, and report `Could not post` prominently. Never claim the workflow completed merely because analysis completed. Record returned review/comment identifiers after success so retries are safe. Even with no new findings, post an auditable summary (unless `--dry-run`).
 
 ### 9. Incremental review and deduplication
 
-Repeated runs stay incremental without becoming narrow: always re-evaluate the complete current base-to-head diff; gather existing reviews and inline threads; fingerprint normalized findings by repository, PR, root cause/category, path/range, and normalized substance; do not repost a materially identical finding; re-evaluate unresolved prior findings against the latest head; mention still-valid prior findings in the summary without duplicating their threads; distinguish resolved / stale-outdated / still-valid / newly-introduced findings; **never resolve human discussion threads automatically**; and post a new summary for each explicit run even when there are no new findings.
+Repeated runs stay incremental without becoming narrow: always re-evaluate the complete current base-to-head diff; gather existing reviews and inline threads; fingerprint normalized findings under the two keys described below; do not repost a materially identical finding; re-evaluate unresolved prior findings against the latest head; mention still-valid prior findings in the summary without duplicating their threads; distinguish resolved / stale-outdated / still-valid / newly-introduced findings; **never resolve human discussion threads automatically**; and post a new summary for each explicit run even when there are no new findings.
 
 Dedupe carries two keys, and neither may swallow a distinct defect. The exact key includes the path and range; the semantic key drops the line so a finding that only shifted is still recognised, but keeps any line-independent context the finding supplies (`symbol`, `context`, `hunk_context`) and matches **one-for-one** — a prior review that raised a defect once can silence exactly one current finding. Without that, two separate defects in the same file and category described in the same words collapsed into one and the second disappeared. Set `symbol` on a finding whenever one file carries more than one finding in the same category — it is the discriminator that survives a rebase.
 

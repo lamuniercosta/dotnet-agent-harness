@@ -60,9 +60,11 @@ re-brief the cheap agent. If partial edits already exist, review the current dif
 and continue from it; do not roll back automatically.
 
 `fix-prober` is the one other writable agent, and only `$pr-review` may use it.
-It explores one bounded alternative in its own disposable worktree, never pushes,
-commits, posts, or touches the user's checkout, and its patch is review evidence
-rather than an implementation. Everywhere else, `edit-applier` remains the only
+It explores one bounded alternative in its own disposable worktree with no write
+that outlives the probe; never pushes, commits, posts, or touches the user's
+checkout or another probe's worktree; and its patch is review evidence rather
+than an implementation. Parallel probes are allowed because their worktrees are
+disjoint by construction. Everywhere else, `edit-applier` remains the only
 writable errand.
 
 ## Coding conventions

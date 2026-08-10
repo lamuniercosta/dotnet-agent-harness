@@ -651,6 +651,41 @@ try {
         Assert-True 'the run directory sits under runs/' `
             ((Split-Path -Leaf (Split-Path -Parent $workspace)) -eq 'runs')
 
+        # ── Preflight: the --dry-run path ────────────────────────────────────
+        # A dry run implemented by skipping the POST proves nothing, so the
+        # contract under test is that every pre-publication check runs and no
+        # write does. Two comments: one that maps, one that cannot.
+        $preflightPayload = Join-Path $workspace 'review.preflight.json'
+        Set-Content -LiteralPath $preflightPayload -Encoding UTF8 -Value @"
+{"commit_id":"$headSha","event":"COMMENT","body":"Dry run summary.","comments":[{"path":"src/a.cs","line":2,"side":"RIGHT","body":"Inline finding."},{"path":"src/gone.cs","line":9,"side":"RIGHT","body":"Not in this diff."}]}
+"@
+        $postsBefore = Get-PostCount
+        $pre1 = Invoke-Helper -HelperArgs @('-Preflight', '-Payload', $preflightPayload)
+        Assert-Equal 'preflight with findings succeeds' 0 $pre1.ExitCode
+        if ($pre1.ExitCode -ne 0) { Write-Host $pre1.Text -ForegroundColor DarkYellow }
+        Assert-Equal 'preflight writes nothing to GitHub' $postsBefore (Get-PostCount)
+        Assert-True 'preflight reports it passed' ($pre1.Text -match 'PREFLIGHT PASSED')
+        Assert-True 'preflight re-reads the pinned pair' ($pre1.Text -match 'base and head re-read')
+        Assert-True 'preflight reconciles the run marker' ($pre1.Text -match 'run marker reconciled')
+        Assert-True 'preflight locates comments against the pinned diff' `
+            ($pre1.Text -match 'located against the pinned diff')
+        Assert-True 'preflight keeps the mappable finding inline' ($pre1.Text -match '(?m)^inlineComments:\s*1\s*$')
+        Assert-True 'preflight demotes the unmappable finding' ($pre1.Text -match '(?m)^movedToSummary:\s*1\s*$')
+        Assert-True 'preflight refuses to claim GitHub would have accepted it' `
+            ($pre1.Text -match 'cannot prove GitHub would accept')
+        Assert-True 'preflight preserves the exact outgoing payload' `
+            (Test-Path -LiteralPath (Join-Path $workspace 'review.json'))
+        Assert-True 'preflight renders the markdown fallback' `
+            (Test-Path -LiteralPath (Join-Path $workspace 'review.md'))
+        Assert-True 'the preflighted payload already carries the run marker' `
+            ((Get-Content -LiteralPath (Join-Path $workspace 'review.json') -Raw) -match [regex]::Escape($pinned1.runId))
+        Assert-True 'preflight leaves no receipt behind' `
+            (-not (Test-Path -LiteralPath (Join-Path $workspace 'post-result.json')))
+
+        $preWrongRun = Invoke-Helper -HelperArgs @('-Preflight', '-Payload', $preflightPayload, '-RunId', 'not-this-run')
+        Assert-Equal 'preflight with a foreign run id fails' 1 $preWrongRun.ExitCode
+        Assert-Equal 'a failed preflight still writes nothing to GitHub' $postsBefore (Get-PostCount)
+
         # ── Post: first publish ──────────────────────────────────────────────
         $payloadPath = Join-Path $workspace 'review.input.json'
         Set-Content -LiteralPath $payloadPath -Encoding UTF8 -Value @"
@@ -667,6 +702,15 @@ try {
             (@(Get-Content -LiteralPath $ghLog | Where-Object { $_ -match "compare/$baseSha\.\.\.$headSha" }).Count -ge 1)
         Assert-True 'the published body carries the run marker' `
             ((Get-Content -LiteralPath (Join-Path $workspace 'review.json') -Raw) -match [regex]::Escape($pinned1.runId))
+
+        # A preflight after this run published must say so rather than rehearse
+        # a review that already exists.
+        $postsBefore = Get-PostCount
+        $preAfter = Invoke-Helper -HelperArgs @('-Preflight', '-Payload', $preflightPayload)
+        Assert-Equal 'preflight after publication succeeds' 0 $preAfter.ExitCode
+        Assert-True 'preflight after publication reports the existing review' `
+            ($preAfter.Text -match 'already published review')
+        Assert-Equal 'preflight after publication still writes nothing' $postsBefore (Get-PostCount)
 
         # ── Post again, same run: a retry must stay idempotent ───────────────
         $postsBefore = Get-PostCount

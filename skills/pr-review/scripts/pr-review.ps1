@@ -14,6 +14,7 @@
 
   Verbs (exactly one per invocation):
     -Resolve [number-or-url]
+    -Preflight -Payload <path>
     -Post -Payload <path>
     -NewWorkspace -Owner <o> -Repo <r> -Pr <n> -HeadSha <sha>
     -Validate -Findings <path> | -Payload <path>
@@ -34,6 +35,7 @@ param(
     [Parameter(Position = 0)]
     [string]$Resolve,
 
+    [switch]$Preflight,
     [switch]$Post,
     [switch]$NewWorkspace,
     [switch]$Validate,
@@ -84,6 +86,7 @@ pr-review.ps1 — deterministic helper for /pr-review
 USAGE (exactly one verb):
   -Help
   -Resolve [<number-or-url>]
+  -Preflight -Payload <path> [-RunId <id>]
   -Post -Payload <path> [-RunId <id>]
   -NewWorkspace -Owner <o> -Repo <r> -Pr <n> -HeadSha <sha>
   -Validate (-Findings <path> | -Payload <path>)
@@ -93,7 +96,13 @@ USAGE (exactly one verb):
   -MarkdownFallback -Payload <path>
 
 NOTES
-  - Requires PowerShell 7+ and (for -Resolve/-Post) an authenticated gh CLI.
+  - Requires PowerShell 7+ and (for -Resolve/-Preflight/-Post) an authenticated
+    gh CLI. There is no connector fallback: every publication guarantee lives in
+    this script, so a second path would have to reimplement all of them.
+  - -Preflight is the --dry-run path. It runs every pre-publication check -Post
+    runs — schema, canonical workspace, run-id binding, closing base/head re-read,
+    run-marker reconciliation, diff-location validation — writes review.json and
+    review.md, and stops. It reads from the API and writes nothing to GitHub.
   - Each -Resolve mints a run id and owns one run directory:
       <temp>/pr-review/<owner>-<repo>/<pr>-<headsha>/runs/<runid>/
     Pinned state, the outgoing payload, and the receipt live there, so
@@ -2228,10 +2237,19 @@ function Move-UnmappableToSummary {
     }
 }
 
-function Invoke-Post {
+# Everything publication needs, proved, with no GitHub write performed.
+#
+# This is split out of Invoke-Post so that --dry-run can mean something. A dry
+# run implemented by skipping the POST leaves schema validation, the canonical
+# workspace proof, the closing pinned-pair check, run-marker reconciliation and
+# diff-location validation unexecuted — which is precisely the part worth
+# rehearsing before a public review. -Preflight runs this and stops; -Post runs
+# it and submits the payload it returns. API *reads* happen here; writes do not.
+function Get-SubmissionPlan {
     param(
         [Parameter(Mandatory)][string]$PayloadPath,
-        [string]$ExpectedRunId
+        [string]$ExpectedRunId,
+        [Parameter(Mandatory)][string]$Stage
     )
 
     Assert-GhPresent
@@ -2303,18 +2321,18 @@ function Invoke-Post {
         $prior = Read-JsonFile -Path $resultPath
         $priorRun = [string](Get-PropertyValue -Object $prior -Name 'runId')
         if ($priorRun -eq $runId -and [string]$prior.headSha -eq $headSha -and $prior.reviewId) {
-            Write-Output "Already posted for run $runId at head $headSha (idempotent no-op)"
-            Write-Output "reviewId: $($prior.reviewId)"
-            Write-Output ("commentIds: " + ((@($prior.commentIds) | ForEach-Object { $_ }) -join ', '))
-            Write-Output "postedAt: $($prior.postedAt)"
-            Write-Output 'Run -Resolve again to start a new run against this head.'
-            exit 0
+            return [pscustomobject]@{
+                AlreadyPosted = $true
+                Prior         = $prior
+                RunId         = $runId
+                HeadSha       = $headSha
+            }
         }
     }
 
     # 1. Re-fetch base and head; refuse if either moved.
     $pinCheck = Assert-PinnedPair -Owner $owner -Repo $repo -Number $number `
-        -PinnedBase $pinnedBase -PinnedHead $pinnedHead -PayloadHead $headSha -Stage 'post'
+        -PinnedBase $pinnedBase -PinnedHead $pinnedHead -PayloadHead $headSha -Stage $Stage
 
     # 2. No receipt, but the POST may still have reached GitHub on an earlier
     #    attempt that died before writing one. Reconcile against the run marker
@@ -2370,6 +2388,113 @@ function Invoke-Post {
         }
     }
 
+    # Stamp the run marker here rather than at the submission, so preflight
+    # validates and preserves the exact bytes -Post sends instead of a near-copy.
+    $working = Add-RunMarker -Payload $working -RunId $runId
+
+    return [pscustomobject]@{
+        AlreadyPosted   = $false
+        Prior           = $null
+        SourcePayload   = $payload
+        Payload         = $working
+        Workspace       = $workspace
+        Owner           = $owner
+        Repo            = $repo
+        Number          = $number
+        RunId           = $runId
+        HeadSha         = $headSha
+        PinnedBase      = $pinnedBase
+        PinnedHead      = $pinnedHead
+        ResultPath      = $resultPath
+        PinCheck        = $pinCheck
+        FileMap         = $fileMap
+        CoverageNote    = $coverageNote
+        MappableCount   = $mappable.Count
+        UnmappableCount = $unmappable.Count
+    }
+}
+
+function Invoke-Preflight {
+    param(
+        [Parameter(Mandatory)][string]$PayloadPath,
+        [string]$ExpectedRunId
+    )
+
+    $plan = Get-SubmissionPlan -PayloadPath $PayloadPath -ExpectedRunId $ExpectedRunId -Stage 'preflight'
+
+    if ($plan.AlreadyPosted) {
+        Write-Output "PREFLIGHT: run $($plan.RunId) already published review $($plan.Prior.reviewId) at head $($plan.HeadSha)."
+        Write-Output 'A -Post would be an idempotent no-op. Run -Resolve again to start a new run.'
+        return
+    }
+
+    $workspace = $plan.Workspace
+    $working = $plan.Payload
+
+    # The same artefacts -Post preserves, minus the submission itself.
+    Write-JsonFile -Value $working -Path (Join-Path $workspace 'review.json')
+    $mdPath = Join-Path $workspace 'review.md'
+    Set-Content -LiteralPath $mdPath -Value (ConvertTo-ReviewMarkdown -Payload $working) -Encoding utf8
+
+    Write-Output 'PREFLIGHT PASSED — no GitHub write was performed.'
+    Write-Output "target: $($plan.Owner)/$($plan.Repo)#$($plan.Number)"
+    Write-Output "runId: $($plan.RunId)"
+    Write-Output "pinned: base $($plan.PinnedBase) head $($plan.PinnedHead)"
+    Write-Output 'checks:'
+    Write-Output '  - payload validated against review-schema.json'
+    Write-Output '  - run workspace recomputed from pinned identity and proved canonical'
+    Write-Output '  - run id bound to this payload'
+    Write-Output '  - base and head re-read; neither moved'
+    Write-Output '  - run marker reconciled against existing reviews; this run has not published'
+    Write-Output "  - diff line map built from $($plan.FileMap.Source)"
+    Write-Output '  - every inline comment located against the pinned diff'
+    Write-Output '  - run marker stamped on the outgoing body'
+    Write-Output "inlineComments: $($plan.MappableCount)"
+    Write-Output "movedToSummary: $($plan.UnmappableCount)"
+    if (-not [string]::IsNullOrWhiteSpace($plan.CoverageNote)) {
+        Write-Output "fileMapCoverage: INCOMPLETE — $($plan.CoverageNote)"
+    }
+    Write-Output "payload: $(Join-Path $workspace 'review.json')"
+    Write-Output "fallback: $mdPath"
+    Write-Output ''
+    Write-Output 'Preflight proves the payload is internally valid and correctly located'
+    Write-Output 'against the pinned diff. It cannot prove GitHub would accept it — only'
+    Write-Output 'the submission itself does that.'
+}
+
+function Invoke-Post {
+    param(
+        [Parameter(Mandatory)][string]$PayloadPath,
+        [string]$ExpectedRunId
+    )
+
+    $plan = Get-SubmissionPlan -PayloadPath $PayloadPath -ExpectedRunId $ExpectedRunId -Stage 'post'
+
+    if ($plan.AlreadyPosted) {
+        $prior = $plan.Prior
+        Write-Output "Already posted for run $($plan.RunId) at head $($plan.HeadSha) (idempotent no-op)"
+        Write-Output "reviewId: $($prior.reviewId)"
+        Write-Output ("commentIds: " + ((@($prior.commentIds) | ForEach-Object { $_ }) -join ', '))
+        Write-Output "postedAt: $($prior.postedAt)"
+        Write-Output 'Run -Resolve again to start a new run against this head.'
+        return
+    }
+
+    $payload = $plan.SourcePayload
+    $working = $plan.Payload
+    $workspace = $plan.Workspace
+    $owner = $plan.Owner
+    $repo = $plan.Repo
+    $number = $plan.Number
+    $runId = $plan.RunId
+    $headSha = $plan.HeadSha
+    $pinnedBase = $plan.PinnedBase
+    $pinnedHead = $plan.PinnedHead
+    $resultPath = $plan.ResultPath
+    $pinCheck = $plan.PinCheck
+    $fileMap = $plan.FileMap
+    $coverageNote = $plan.CoverageNote
+
     function Submit-Review {
         param(
             $ReviewPayload,
@@ -2396,11 +2521,9 @@ function Invoke-Post {
         ) -AllowFailure
     }
 
-    # Stamp the run marker so a retry that lost its receipt can still recognise
-    # this review on GitHub.
-    $working = Add-RunMarker -Payload $working -RunId $runId
-
-    # Preserve exact outgoing payload before attempt.
+    # Preserve exact outgoing payload before attempt. The run marker — which lets
+    # a retry that lost its receipt recognise this review on GitHub — is already
+    # stamped by Get-SubmissionPlan, so these bytes are the ones preflight saw.
     Write-JsonFile -Value $working -Path (Join-Path $workspace 'review.json')
 
     $response = Submit-Review -ReviewPayload $working -Stage 'post'
@@ -2540,6 +2663,7 @@ try {
     $resolveRequested = Test-ResolveRequested -BoundParameters $PSBoundParameters
     $verbCount = 0
     if ($resolveRequested) { $verbCount++ }
+    if ($Preflight) { $verbCount++ }
     if ($Post) { $verbCount++ }
     if ($NewWorkspace) { $verbCount++ }
     if ($Validate) { $verbCount++ }
@@ -2616,6 +2740,14 @@ try {
             throw '-MarkdownFallback requires -Payload <path>'
         }
         Invoke-MarkdownFallback -PayloadPath $Payload
+        exit 0
+    }
+
+    if ($Preflight) {
+        if ([string]::IsNullOrWhiteSpace($Payload)) {
+            throw '-Preflight requires -Payload <path>'
+        }
+        Invoke-Preflight -PayloadPath $Payload -ExpectedRunId $RunId
         exit 0
     }
 

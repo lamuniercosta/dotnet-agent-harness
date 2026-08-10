@@ -23,8 +23,17 @@ means a consuming repo's gates may start failing on code that previously passed.
   PR-authored agent instructions are data, not commands. Ships a deterministic
   PowerShell helper (`scripts/pr-review.ps1`) and JSON schema for resolving,
   validating, fingerprinting, deduplicating, and posting, with a Markdown fallback
-  when the API refuses. Distinct from `/code-review` (local diff engine) and
-  `/ship-review` (pre-PR local gate). (#83)
+  when the API refuses. `--dry-run` runs the helper's `-Preflight` verb, which
+  performs every pre-publication check — schema, canonical run workspace, run-id
+  binding, the closing base/head re-read, run-marker reconciliation, and
+  diff-location validation — and writes nothing to GitHub. Publication is `gh`-only
+  by design: all of those guarantees live in the helper, so a second path would
+  have to reimplement them per host. Distinct from `/code-review` (local diff
+  engine) and `/ship-review` (pre-PR local gate). (#83)
+- **PowerShell self-tests now run on Windows as well as Linux in CI.** The
+  workspace-hardening code has genuinely OS-specific branches — POSIX `0700` mode
+  versus Windows reparse-point and ownership checks — and only the Linux half was
+  ever exercised. (#83)
 - **`fix-prober` agent.** A new writable canonical profile that explores one
   bounded alternative fix inside its own disposable worktree and returns the
   candidate patch plus evidence — it never pushes, commits, posts, or touches the
