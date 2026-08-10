@@ -6,7 +6,7 @@
   "$defs": {
     "finding": {
       "type": "object",
-      "description": "One review finding. Only CONFIRMED findings are eligible for inline placement; PLAUSIBLE findings must stay in the summary (as questions), never as inline comments. The helper enforces this in -BuildPayload.",
+      "description": "One review finding. Only CONFIRMED findings are eligible for inline placement; PLAUSIBLE findings must stay in the summary (as questions), never as inline comments. A Low-severity finding is additionally eligible for inline placement only when it carries a non-empty 'rule' citation; otherwise it too is moved to the summary. The helper enforces this in -BuildPayload.",
       "required": ["severity", "category", "file", "verdict"],
       "properties": {
         "severity": {
@@ -69,6 +69,11 @@
           "type": "string",
           "enum": ["inline", "file", "summary"],
           "description": "Requested placement. Inline is valid only when verdict is CONFIRMED and a diff location is present."
+        },
+        "rule": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Citation of the explicit repository rule (source path plus the rule text or section) backing this finding. Required for a Low-severity finding to be eligible for inline placement; ignored for other severities."
         },
         "suggestion": {
           "type": "string"

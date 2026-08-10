@@ -68,7 +68,15 @@ function Assert-Equal {
 }
 
 # ---------------------------------------------------------------------------
-# Load the helper's top-level functions without running its dispatch block.
+# Load the helper's top-level functions and constants without running its
+# dispatch block.
+#
+# The constants are replayed out of the AST rather than restated here. Several
+# validators read $script:SeverityEnum and friends, so a hand-copied duplicate
+# would let the helper's real enum drift while these checks kept asserting
+# against the stale copy — the tests would still pass, just no longer about the
+# shipped schema. Assignments referencing $PSScriptRoot are skipped: that would
+# resolve to this test's directory, not the helper's.
 # ---------------------------------------------------------------------------
 
 $parseErrors = $null
@@ -80,7 +88,19 @@ if ($parseErrors -and $parseErrors.Count -gt 0) {
 foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
     . ([scriptblock]::Create($fn.Extent.Text))
 }
-$script:CompareFileCap = 300
+$constantsLoaded = 0
+foreach ($statement in $ast.EndBlock.Statements) {
+    if ($statement -isnot [System.Management.Automation.Language.AssignmentStatementAst]) { continue }
+    $target = $statement.Left
+    if ($target -isnot [System.Management.Automation.Language.VariableExpressionAst]) { continue }
+    if (-not $target.VariablePath.UserPath.StartsWith('script:')) { continue }
+    if ($statement.Right.Extent.Text -match '\$PSScriptRoot') { continue }
+    . ([scriptblock]::Create($statement.Extent.Text))
+    $constantsLoaded++
+}
+if ($constantsLoaded -lt 6) {
+    throw "Expected the helper's top-level script constants to load; got $constantsLoaded."
+}
 
 Write-Host ''
 Write-Host 'pr-review helper: pagination, receipts, and workspace safety'
@@ -169,6 +189,38 @@ Set-Content -LiteralPath $insideFile -Value 'body from an owned file' -Encoding 
 $outsideFile = Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review-outside-secret.txt'
 Set-Content -LiteralPath $outsideFile -Value 'SECRET' -Encoding utf8
 
+# The containment check above is purely lexical: it only rejects a leaf whose
+# full path fails to start with the root, and only the leaf itself is checked
+# for a reparse point. A junction on an *ancestor* directory still redirects
+# the read outside the workspace while the leaf's path string stays "inside"
+# it. `real/` is a plain nested directory (the positive case); `link` is a
+# sibling that junctions to a directory outside the pr-review root entirely.
+$realNestedDir = Join-Path $bodyDir 'real'
+New-Item -ItemType Directory -Path $realNestedDir -Force | Out-Null
+$realNestedFile = Join-Path $realNestedDir 'nested.md'
+Set-Content -LiteralPath $realNestedFile -Value 'nested body text' -Encoding utf8
+
+$secretOutsideDir = Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review-bodytext-ancestor-secret'
+Remove-Item -LiteralPath $secretOutsideDir -Recurse -Force -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Path $secretOutsideDir -Force | Out-Null
+$secretFile = Join-Path $secretOutsideDir 'SECRET'
+Set-Content -LiteralPath $secretFile -Value 'super secret ancestor-junction payload' -Encoding utf8
+
+$linkDir = Join-Path $bodyDir 'link'
+$linkCreated = $false
+try {
+    if ($IsWindows) {
+        New-Item -ItemType Junction -Path $linkDir -Target $secretOutsideDir -ErrorAction Stop | Out-Null
+    }
+    else {
+        New-Item -ItemType SymbolicLink -Path $linkDir -Target $secretOutsideDir -ErrorAction Stop | Out-Null
+    }
+    $linkCreated = $true
+}
+catch {
+    Write-Host "  SKIP     could not create a directory junction/symlink to test ancestor containment ($($_.Exception.Message))" -ForegroundColor Yellow
+}
+
 try {
     Assert-Equal 'body text naming an existing file is used verbatim' `
         $insideFile (Get-BodyText -BodyText $insideFile)
@@ -178,10 +230,106 @@ try {
     $threw = $false
     try { [void](Get-BodyText -BodyFile $outsideFile) } catch { $threw = $true }
     Assert-True 'a body file outside the workspace root is refused' $threw
+
+    Assert-Equal 'a plain nested path with no reparse point in any ancestor still reads fine' `
+        'nested body text' ((Get-BodyText -BodyFile $realNestedFile).Trim())
+
+    if ($linkCreated) {
+        $linkedSecretPath = Join-Path $linkDir 'SECRET'
+        $ancestorThrew = $false
+        $leaked = $null
+        try { $leaked = Get-BodyText -BodyFile $linkedSecretPath } catch { $ancestorThrew = $true }
+        Assert-True 'a reparse point on an ancestor directory is refused, not just the leaf' $ancestorThrew
+        Assert-True 'the secret behind the ancestor junction is never returned' `
+            ([string]::IsNullOrEmpty($leaked) -or $leaked -notmatch 'super secret ancestor-junction payload')
+    }
+    else {
+        Write-Host '  SKIP     ancestor-reparse containment assertions (junction/symlink unavailable in this environment)' -ForegroundColor Yellow
+    }
 }
 finally {
     Remove-Item -LiteralPath $bodyDir -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $outsideFile -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $secretOutsideDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host ''
+Write-Host 'Test-IsInlineEligible (Low findings need a cited repository rule)'
+
+# Verdict and placement alone let a CONFIRMED Low finding with a file and line
+# through inline with nothing behind it. Issue #83's acceptance criteria and
+# SKILL.md's Minimality section both say Low/nit feedback is not posted inline
+# unless it violates an explicit repository rule, so a Low finding needs a
+# 'rule' citation to earn the placement a Medium+ finding gets automatically.
+$lowNoRule = [pscustomobject]@{
+    severity = 'Low'; category = 'standards'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+    placement = 'inline'; line = 5; summary = 'trailing whitespace'
+}
+Assert-True 'a CONFIRMED Low finding with no rule is not inline-eligible' `
+    (-not (Test-IsInlineEligible -Finding $lowNoRule))
+
+$lowWithRule = [pscustomobject]@{
+    severity = 'Low'; category = 'standards'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+    placement = 'inline'; line = 5; summary = 'trailing whitespace'
+    rule      = 'CONTRIBUTING.md#L12: no trailing whitespace'
+}
+Assert-True 'the same Low finding with a non-empty rule citation is inline-eligible' `
+    (Test-IsInlineEligible -Finding $lowWithRule)
+
+$mediumNoRule = [pscustomobject]@{
+    severity = 'Medium'; category = 'risk'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+    placement = 'inline'; line = 5; summary = 'possible null deref'
+}
+Assert-True 'a CONFIRMED Medium finding needs no rule to stay inline-eligible' `
+    (Test-IsInlineEligible -Finding $mediumNoRule)
+
+$lowBlankRule = [pscustomobject]@{
+    severity = 'Low'; category = 'standards'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+    placement = 'inline'; line = 5; summary = 'trailing whitespace'; rule = '   '
+}
+Assert-True 'a whitespace-only rule does not count as a citation' `
+    (-not (Test-IsInlineEligible -Finding $lowBlankRule))
+
+$lowLowercaseSeverity = [pscustomobject]@{
+    severity = 'low'; category = 'standards'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+    placement = 'inline'; line = 5; summary = 'trailing whitespace'
+}
+Assert-True 'a lowercase "low" severity is still gated (case-insensitive)' `
+    (-not (Test-IsInlineEligible -Finding $lowLowercaseSeverity))
+
+Write-Host ''
+Write-Host 'Invoke-BuildPayload routes an un-cited Low finding to the summary'
+
+# End-to-end: the demotion Test-IsInlineEligible performs above needs no extra
+# plumbing to reach the payload — Invoke-BuildPayload already routes anything
+# it rejects into the '## Questions / non-inline findings' section. Prove that
+# rather than assume it.
+$buildPayloadSandbox = Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review-buildpayload-selftest'
+New-Item -ItemType Directory -Path $buildPayloadSandbox -Force | Out-Null
+$bpFindingsPath = Join-Path $buildPayloadSandbox 'findings.json'
+Set-Content -LiteralPath $bpFindingsPath -Encoding UTF8 -Value (
+    , @(
+        [pscustomobject]@{
+            severity = 'Low'; category = 'standards'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+            placement = 'inline'; line = 5; summary = 'trailing whitespace, no cited rule'
+        }
+    ) | ConvertTo-Json -Depth 20
+)
+
+try {
+    $bpJson = Invoke-BuildPayload -FindingsPath $bpFindingsPath `
+        -BaseSha '1111111111111111111111111111111111111111' `
+        -HeadSha '2222222222222222222222222222222222222222' `
+        -BodyText 'Summary body.'
+    $bpPayload = $bpJson | ConvertFrom-Json
+    Assert-Equal 'the un-cited Low finding produces zero inline comments' 0 @($bpPayload.comments).Count
+    Assert-True 'the un-cited Low finding appears in the non-inline summary section' `
+        ([string]$bpPayload.body -match '(?m)^## Questions / non-inline findings')
+    Assert-True 'the summary names the demoted finding' `
+        ([string]$bpPayload.body -match 'trailing whitespace, no cited rule')
+}
+finally {
+    Remove-Item -LiteralPath $buildPayloadSandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host ''
@@ -606,6 +754,14 @@ if ($joined -match 'pulls/7/files') {
 if ($joined -match 'git/trees/') {
     if ($env:PRREVIEW_TEST_TREE_FAIL -eq '1') {
         Write-Error 'fake gh: pinned head tree unavailable'
+        exit 1
+    }
+    # Real `gh api` treats `-f` as a request field, which switches the call to
+    # POST unless `--method GET` overrides it. The Git Trees endpoint rejects
+    # that as POST with a 404, so a shim that served the fixture regardless of
+    # method would hide the exact bug this scenario exists to catch.
+    if ($joined -match '(^|\s)-f(\s|$)' -and $joined -notmatch '--method\s+GET') {
+        Write-Error 'fake gh: HTTP 404: Not Found (POST https://api.github.com/repos/.../git/trees/...)'
         exit 1
     }
     Emit $env:PRREVIEW_TEST_TREE

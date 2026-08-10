@@ -1215,13 +1215,37 @@ function Get-BodyText {
         return $BodyText
     }
 
-    $full = [System.IO.Path]::GetFullPath($BodyFile)
-    $root = [System.IO.Path]::GetFullPath((Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review'))
-    $rootPrefix = $root.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) +
-        [System.IO.Path]::DirectorySeparatorChar
+    $full = Get-NormalizedFullPath -Path $BodyFile
+    $root = Get-NormalizedFullPath -Path (Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review')
+    $rootPrefix = $root + [System.IO.Path]::DirectorySeparatorChar
     $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
     if (-not $full.StartsWith($rootPrefix, $comparison)) {
         throw "-BodyFile must live inside the review workspace root '$root'; refusing to read '$full'."
+    }
+
+    <#
+      The prefix check above is purely lexical and only tells us the leaf's
+      *name* sits under the root; it says nothing about whether an ancestor
+      directory got there by a symlink or NTFS junction. A junction on any
+      directory between the root and the file rewrites the read to wherever
+      that junction points, so `<root>/run/link/hosts.yml` can resolve outside
+      the workspace entirely while `$full` still starts with `$rootPrefix`.
+      Walk every level the workspace owns, outermost first, and apply the same
+      real-directory / not-a-reparse-point / owned-by-current-user check
+      Assert-CanonicalRunWorkspace already applies to the run tree, so a
+      redirect anywhere in the chain is caught before the leaf is trusted.
+    #>
+    $parentDir = Split-Path -Parent $full
+    $relative = $parentDir.Substring($root.Length).Trim([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $segments = @()
+    if ($relative) {
+        $segments = @($relative -split '[\\/]+' | Where-Object { $_ -ne '' })
+    }
+    $current = $root
+    Assert-SafeWorkspacePath -Path $current
+    foreach ($segment in $segments) {
+        $current = Join-Path $current $segment
+        Assert-SafeWorkspacePath -Path $current
     }
 
     $item = Get-Item -LiteralPath $full -Force -ErrorAction Stop
@@ -1279,6 +1303,23 @@ function Test-IsInlineEligible {
     $line = Get-PropertyValue -Object $Finding -Name 'line'
     if ([string]::IsNullOrWhiteSpace($file)) { return $false }
     if ($null -eq $line) { return $false }
+
+    <#
+      Verdict and placement alone let a CONFIRMED Low finding with a file and
+      line post inline with nothing behind it but the model's say-so. The
+      Minimality rule (SKILL.md) and issue #83's acceptance criteria both say
+      Low/nit feedback is not posted inline unless it violates an explicit
+      repository rule, so a Low finding needs a citation to earn the same
+      placement a Medium+ finding gets for free. Comparison is
+      case-insensitive because severity casing is not something callers are
+      required to normalize before this runs.
+    #>
+    $severity = [string](Get-PropertyValue -Object $Finding -Name 'severity')
+    if ($severity.Equals('Low', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $rule = Get-PropertyValue -Object $Finding -Name 'rule'
+        if ([string]::IsNullOrWhiteSpace([string]$rule)) { return $false }
+    }
+
     if ($placement -eq 'inline' -or [string]::IsNullOrWhiteSpace($placement)) { return $true }
     return $false
 }
@@ -2145,7 +2186,11 @@ function Get-PinnedHeadTreeBlobMap {
     )
 
     $raw = Invoke-Gh -Action 'fetching the pinned head tree' -GhArgs @(
-        'api', "repos/$Owner/$Repo/git/trees/$HeadSha", '-f', 'recursive=1'
+        # `-f` supplies a request field, which switches `gh api` to POST unless
+        # `--method GET` is given explicitly. The Git Trees endpoint only
+        # accepts GET, so without this the pinned-tree proof 404s on every PR
+        # past the 300-file compare cap and the fallback is refused outright.
+        'api', '--method', 'GET', "repos/$Owner/$Repo/git/trees/$HeadSha", '-f', 'recursive=1'
     ) -AllowFailure
     if ($raw.ExitCode -ne 0) { return $null }
 
