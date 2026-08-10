@@ -10,6 +10,14 @@ counterpart of the root `CLAUDE.md` — not the consumer `AGENTS.md` that
 ([ADR 0001](docs/adr/0001-codex-adapter-distills-rather-than-imports.md)), so no
 installer run rewrites this file.
 
+## GitHub writes
+
+For GitHub write operations in this repo — posting PR reviews/comments, creating
+or updating PRs/issues, requesting reviewers, labels, or project changes — do not
+use the GitHub connector. Use the authenticated `gh api` CLI path instead. The
+GitHub connector may still be used for read-only metadata, diff, and discussion
+lookups.
+
 ## Task intake in this repo
 
 When starting work from a GitHub issue **in this repository**, use
