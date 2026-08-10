@@ -54,10 +54,14 @@ for and unused. It establishes what each one's allowance actually permits and
 where it sits in a chain relative to the floor. Two evening sessions, with "what
 we know so far" acceptable at the end.
 
-**Concluded — see `spike-findings.md`.** Both are routed, as reserve hosts above
-the floor: `antigravity` (which replaced the deprecated standalone Gemini CLI)
-and `junie`. Neither is a quality step down, since both reach Claude Opus and
-Sonnet; their position is a billing order.
+**Concluded — see `spike-findings.md`.** Two judgment reserves are routed in
+`route-map.json` above the floor: `antigravity` and `junie`. Neither is a
+quality step down, since both reach Claude Opus and Sonnet; their position is a
+billing order. A **third reserve lane**, `gemini-api` (Gemini CLI + API key on
+Google AI Studio Free Tier), is routed into mechanical commands only
+(`/task`, `/speckit-specify`, `/speckit-tasks`, `/gherkin`, `/refactor`) at
+`fast` → Flash Lite; Pro is unavailable and Flash's 20 RPD stays off these
+rows.
 
 Two corrections the spike forced, recorded because they change how later work
 should read this brief:
@@ -68,6 +72,12 @@ should read this brief:
 - **A host may hold several billing pools.** Antigravity meters Gemini models
   and Claude/GPT models separately, so exhausting one need not block the other.
   Tier choice therefore selects a pool, not only a capability.
+- **Gemini CLI free tier is a third capacity lane, not an `agy` auth mode.**
+  Login with a Gemini API key attaches Google AI Studio Free Tier beside
+  `agy` (Plus) and `junie`. Pro is unavailable there; prefer Gemini 3.1 Flash
+  Lite for mechanical / high-frequency work and hold Flash (20 RPD) for rare
+  reasoning. Free-tier prompts/responses may train Google products — keep
+  enterprise-private work off that lane.
 
 The PowerShell implementation is disposable. The route map is not: it is the
 artifact this work exists to produce, and it ports to #26 as data if the .NET

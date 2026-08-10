@@ -1,11 +1,12 @@
 {
   "schemaVersion": 1,
-  "notes": "Reserve hosts (antigravity, junie) sit between the primary hosts and the floor. Their position below the primaries is a BILLING order, not a quality one: flat-rate subscription capacity is spent first because it is already paid for whether used or not, and metered capacity is held back. They sit ABOVE the floor because both still clear the quality bar the floor defines -- reaching for reserve beats dropping a tier. They are absent from cheap commands, where the floor costs little anyway. ORDERING BETWEEN THE TWO RESERVES: junie reaches a newer Claude generation (Opus 5, Sonnet 5) than antigravity (Opus 4.6, Sonnet 4.6, GPT-OSS 120B), but junie's budget is 10-20 credits per 30 days against antigravity's weekly allowance. Antigravity goes first because both clear the floor by construction, and spending the plentiful pool on work the scarcer one need not touch is the whole point of holding a reserve. Reach past antigravity to junie when the work genuinely wants the newer generation. ANTIGRAVITY (Google AI Plus, binary 'agy') replaces the deprecated Gemini CLI and holds TWO independent weekly pools -- one for Gemini Flash/Pro, one for Claude/GPT-OSS. Choosing a tier therefore also chooses which pool drains, so an exhausted Claude pool does not block Gemini-model work and vice versa. JUNIE draws JetBrains AI credits (All Products Pack -> AI Pro). On both reserves consumption is proportional to token cost, unlike the flat-rate primaries, so the tier changes spend directly. Neither reserve is in agents.tiers, so their tiers resolve unpinned: the tier is advice about what to select in that tool, not a resolved model. Both expose model and effort controls, so they would populate agents.tiers cleanly if the closed host set is ever opened -- see #76. Standalone Gemini CLI is deliberately absent; it is deprecated in favour of antigravity. See spike-findings.md.",
+  "notes": "Reserve hosts (antigravity, junie) sit between the primary hosts and the floor. Their position below the primaries is a BILLING order, not a quality one: flat-rate subscription capacity is spent first because it is already paid for whether used or not, and metered capacity is held back. They sit ABOVE the floor because both still clear the quality bar the floor defines -- reaching for reserve beats dropping a tier. They are absent from cheap commands, where the floor costs little anyway. ORDERING BETWEEN THE TWO RESERVES: junie reaches a newer Claude generation (Opus 5, Sonnet 5) than antigravity (Opus 4.6, Sonnet 4.6, GPT-OSS 120B), but junie's budget is 10-20 credits per 30 days against antigravity's weekly allowance. Antigravity goes first because both clear the floor by construction, and spending the plentiful pool on work the scarcer one need not touch is the whole point of holding a reserve. Reach past antigravity to junie when the work genuinely wants the newer generation. ANTIGRAVITY (binary 'agy') is the Google AI Plus successor path after consumer Login-with-Google Gemini CLI was deprecated; under Plus it exposes separate Gemini Flash/Pro and Claude/GPT-OSS weekly pools. JUNIE draws JetBrains AI credits (All Products Pack -> AI Pro). On both reserves consumption is proportional to token cost, unlike the flat-rate primaries, so the tier changes spend directly. Neither reserve is in agents.tiers, so their tiers resolve unpinned: the tier is advice about what to select in that tool, not a resolved model. Both expose model and effort controls, so they would populate agents.tiers cleanly if the closed host set is ever opened -- see #76. THIRD RESERVE LANE (gemini-api): Gemini CLI authenticated with a Gemini API key on Google AI Studio Free Tier. This is a separate capacity pool on top of agy and junie, not a reconfiguration of either. Free-tier reach is Flash and Flash-Lite only (Pro needs Pay-As-You-Go). Observed caps: Gemini 3.1 Flash Lite 15 RPM / 250K TPM / 500 RPD; Gemini 3 / 3.5 Flash 5 RPM / 250K TPM / 20 RPD; plus a shared 1.5M tokens/day workspace quota. Tier mapping: fast = Flash Lite (500 RPD, mechanical workhorse), balanced = Flash 3.5 (20 RPD, reserve for isolated reasoning). Routed only into mechanical commands where Flash Lite clears the floor; reasoning-heavy commands (/grill-with-docs, /speckit-plan, /speckit-analyze, /implement, /code-review, /architect) stay off this lane. Free-tier prompts/responses may be used for Google product training -- keep enterprise-private work off this lane. See spike-findings.md.",
   "commands": {
     "/task": {
       "why": "Reading an issue and naming a branch is deterministic script execution; no reasoning tier does this better than another.",
       "route": [
         { "host": "cursor", "tier": "fast" },
+        { "host": "gemini-api", "tier": "fast" },
         { "host": "claude", "tier": "fast", "floor": true }
       ]
     },
@@ -23,6 +24,7 @@
       "route": [
         { "host": "claude", "tier": "balanced" },
         { "host": "cursor", "tier": "balanced" },
+        { "host": "gemini-api", "tier": "fast" },
         { "host": "claude", "tier": "fast", "floor": true }
       ]
     },
@@ -47,6 +49,7 @@
       "why": "Decomposes an approved plan into a task list; largely mechanical once the plan states the shape of the work.",
       "route": [
         { "host": "claude", "tier": "balanced" },
+        { "host": "gemini-api", "tier": "fast" },
         { "host": "cursor", "tier": "fast", "floor": true }
       ]
     },
@@ -73,6 +76,7 @@
       "why": "Translates settled scenarios into Gherkin; opt-in stage with moderate reasoning and a small, checkable surface.",
       "route": [
         { "host": "claude", "tier": "balanced" },
+        { "host": "gemini-api", "tier": "fast" },
         { "host": "cursor", "tier": "balanced", "floor": true }
       ]
     },
@@ -80,6 +84,7 @@
       "why": "Reduces complexity and duplication against numeric gate thresholds; the target is measurable, so the model mainly needs to satisfy a check it can verify itself.",
       "route": [
         { "host": "cursor", "tier": "balanced" },
+        { "host": "gemini-api", "tier": "fast" },
         { "host": "claude", "tier": "fast", "floor": true }
       ]
     },

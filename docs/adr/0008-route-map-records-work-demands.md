@@ -85,11 +85,12 @@ not part of this work. It is tracked in #76, where the metered-versus-flat-rate
 distinction those hosts introduce is the open schema question.
 
 That openness turned out to be load-bearing rather than theoretical. The spike
-routed two hosts the closed set could not have expressed, and one of them —
-`antigravity` — did not exist under that name when this decision was taken: it
-replaced the standalone Gemini CLI, which was deprecated mid-flight. A closed
-host axis would have required a packaged schema change to record a fact that
-changed within a week.
+routed three hosts the closed set could not have expressed: `antigravity`,
+`junie`, and later `gemini-api` (Gemini CLI on AI Studio Free Tier, mechanical
+rows only). One of them — `antigravity` — did not exist under that name when
+this decision was taken: it replaced the consumer Login-with-Google Gemini CLI
+path, which was deprecated mid-flight. A closed host axis would have required a
+packaged schema change to record facts that changed within a week.
 
 Issue #26's note that `agents.tiers` is "schema-validated but not consumed" is
 stale. `install.ps1` consumes it today to stamp `model` and `effort` into

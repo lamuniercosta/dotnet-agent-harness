@@ -112,6 +112,12 @@ Assert-That "a host outside agents.tiers resolves without error" ($null -ne $jun
 Assert-That "a host outside agents.tiers is flagged KnownHost=false" ($null -ne $junieEntry -and $junieEntry.KnownHost -eq $false)
 Assert-That "a host outside agents.tiers carries no model" ($null -ne $junieEntry -and $null -eq $junieEntry.Model)
 
+$geminiApiTask = Resolve-RouteChain -Command '/task' -Map $map -RepoRoot $unpinnedRoot
+$geminiApiEntry = $geminiApiTask.Chain | Where-Object { $_.Host -eq 'gemini-api' } | Select-Object -First 1
+Assert-That "gemini-api appears on mechanical /task" ($null -ne $geminiApiEntry)
+Assert-That "gemini-api resolves as KnownHost=false" ($null -ne $geminiApiEntry -and $geminiApiEntry.KnownHost -eq $false)
+Assert-That "gemini-api mechanical rows use fast (Flash Lite)" ($null -ne $geminiApiEntry -and $geminiApiEntry.Tier -eq 'fast')
+
 $claudeKnown = $resolvedUnpinned.Chain | Where-Object { $_.Host -eq 'claude' } | Select-Object -First 1
 Assert-That "a host inside agents.tiers is flagged KnownHost=true" ($claudeKnown.KnownHost -eq $true)
 
