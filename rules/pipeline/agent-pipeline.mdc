@@ -65,7 +65,7 @@ Use `/pipeline` to determine the current stage. Extension hooks in `.specify/ext
 ## Agents
 
 Delegate noisy stages and eligible mid-task errands so raw material does not
-consume the main context. All seven profiles ship in the native discovery tree
+consume the main context. All eight profiles ship in the native discovery tree
 for Claude Code, Cursor, and Codex. The always-on `delegation.mdc` rule decides
 when spawning a cheap errand actually saves context and cost.
 
@@ -77,6 +77,7 @@ when spawning a cheap errand actually saves context and cost.
 | Writing or extending tests | `test-writer` (writable; tests only) |
 | Interpreting Stryker survivors | `mutation-analyst` (read-only) |
 | Reviewing a diff | `code-reviewer` · `security-reviewer` (read-only) |
+| Exploring one bounded alternative fix for a confirmed `/pr-review` finding | `fix-prober` (writable) |
 
 ## Supporting Skills (non-gated)
 

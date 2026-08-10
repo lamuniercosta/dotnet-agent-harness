@@ -159,6 +159,7 @@ implicitly. Named agents are generated separately for each host under
 | `mutation-analyst` | read-only | Triages Stryker survivors: real gap vs equivalent mutant |
 | `code-reviewer` | read-only | One named axis per call — Risk, Standards, or Spec |
 | `security-reviewer` | read-only | Supply chain, authz, injection, data exposure |
+| `fix-prober` | **writable** | Explores one bounded alternative fix in an isolated worktree for `/pr-review`; returns evidence, never ships |
 
 ## Cost
 

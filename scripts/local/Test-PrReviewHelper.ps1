@@ -1,12 +1,21 @@
 #!/usr/bin/env pwsh
 # Self-test for skills/pr-review/scripts/pr-review.ps1.
 #
-# Guards the two defects that shipped in #86 and that no test caught:
+# Guards the defects found in review of #86 that no test caught:
 #
 #   1. `gh api --paginate` emits one JSON document per page, so any PR crossing a
 #      page of files/commits/reviews/check-runs aborted resolve and post.
 #   2. The posting receipt was keyed by head SHA, so a deliberate re-review of an
 #      unchanged head exited as an idempotent no-op and published nothing.
+#   3. A run id alone did not isolate a run: concurrent runs over one head shared
+#      pinned.json and traded receipts.
+#   4. Publication checked only head.sha against a mutable PR files view, so a
+#      base advance went undetected and a mid-run push remapped comments.
+#   5. A POST that reached GitHub but died before its receipt was written
+#      republished on retry.
+#   6. GraphQL partial success (data + top-level errors) was recorded as complete
+#      thread coverage, which makes dedupe repost existing comments.
+#   7. `-Body` read its value as a file whenever that value named one.
 #
 # Unit checks dot-source the helper's top-level functions out of its AST (the
 # script's own dispatch calls exit, so it cannot be dot-sourced directly).
@@ -99,15 +108,81 @@ Assert-Equal 'a page without check_runs is skipped, not fatal' 1 `
     @((Merge-CheckRunPages -Pages @($page1, ('{"message":"Not Found"}' | ConvertFrom-Json))).check_runs).Count
 
 Write-Host ''
-Write-Host 'Get-PostResultPath'
+Write-Host 'Receipts and run markers'
 
 $ws = Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review-receipt-shape'
-Assert-True 'a run id keys the receipt' `
-    ((Get-PostResultPath -Workspace $ws -RunId 'aaaa1111') -match 'post-result-aaaa1111\.json$')
+Assert-True 'the receipt lives in the run directory' `
+    ((Get-PostResultPath -RunDirectory (Join-Path $ws 'runs/aaaa1111')) -match 'post-result\.json$')
 Assert-True 'two runs get two receipts' `
-    ((Get-PostResultPath -Workspace $ws -RunId 'aaaa1111') -ne (Get-PostResultPath -Workspace $ws -RunId 'bbbb2222'))
-Assert-True 'a workspace without a run id keeps the legacy path' `
-    ((Get-PostResultPath -Workspace $ws) -match 'post-result\.json$')
+    ((Get-PostResultPath -RunDirectory (Join-Path $ws 'runs/aaaa1111')) -ne
+     (Get-PostResultPath -RunDirectory (Join-Path $ws 'runs/bbbb2222')))
+
+# The run marker is what makes an unreceipted retry safe, so it has to be
+# deterministic and it must not accumulate on a payload that already carries it.
+Assert-Equal 'the run marker is deterministic' (Get-RunMarker -RunId 'abc123') (Get-RunMarker -RunId 'abc123')
+Assert-True 'two runs get different markers' ((Get-RunMarker -RunId 'abc123') -ne (Get-RunMarker -RunId 'def456'))
+
+$markerPayload = [pscustomobject]@{ commit_id = 'aa'; event = 'COMMENT'; body = 'Summary.'; comments = @() }
+$stamped = Add-RunMarker -Payload $markerPayload -RunId 'abc123'
+Assert-True 'the marker is stamped into the body' ($stamped.body -like "*$(Get-RunMarker -RunId 'abc123')*")
+$stampedTwice = Add-RunMarker -Payload $stamped -RunId 'abc123'
+Assert-Equal 'stamping twice does not duplicate the marker' $stamped.body $stampedTwice.body
+
+Write-Host ''
+Write-Host 'Get-BodyText (body text is not a file path)'
+
+# The defect: -Body read its value as a file whenever that value named one, so a
+# review body naming a local path published that file's contents.
+$bodyRoot = Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review'
+$bodyDir = Join-Path $bodyRoot 'bodytext-selftest'
+New-Item -ItemType Directory -Path $bodyDir -Force | Out-Null
+$insideFile = Join-Path $bodyDir 'summary.md'
+Set-Content -LiteralPath $insideFile -Value 'body from an owned file' -Encoding utf8
+$outsideFile = Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review-outside-secret.txt'
+Set-Content -LiteralPath $outsideFile -Value 'SECRET' -Encoding utf8
+
+try {
+    Assert-Equal 'body text naming an existing file is used verbatim' `
+        $insideFile (Get-BodyText -BodyText $insideFile)
+    Assert-Equal 'a body file inside the workspace root is read' `
+        'body from an owned file' ((Get-BodyText -BodyFile $insideFile).Trim())
+
+    $threw = $false
+    try { [void](Get-BodyText -BodyFile $outsideFile) } catch { $threw = $true }
+    Assert-True 'a body file outside the workspace root is refused' $threw
+}
+finally {
+    Remove-Item -LiteralPath $bodyDir -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $outsideFile -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host ''
+Write-Host 'Fingerprints survive an unrelated line shift'
+
+# A finding whose line moved because an unrelated line was inserted above it is
+# the same finding; reposting it is the defect the semantic key exists to stop.
+$findingA = [pscustomobject]@{
+    repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+    side = 'RIGHT'; line = 120
+    summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+}
+$findingB = [pscustomobject]@{
+    repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+    side = 'RIGHT'; line = 124
+    summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+}
+Assert-True 'the exact key changes when the line moves' `
+    ((Get-FindingFingerprint -Finding $findingA) -ne (Get-FindingFingerprint -Finding $findingB))
+Assert-Equal 'the semantic key survives the line move' `
+    (Get-FindingSemanticFingerprint -Finding $findingA) (Get-FindingSemanticFingerprint -Finding $findingB)
+
+$findingC = [pscustomobject]@{
+    repo = 'acme/widgets'; pr = '7'; category = 'risk'; file = 'src/a.cs'
+    side = 'RIGHT'; line = 120
+    summary = 'Unrelated defect'; failure_scenario = 'Something else entirely'
+}
+Assert-True 'a different finding still gets a different semantic key' `
+    ((Get-FindingSemanticFingerprint -Finding $findingA) -ne (Get-FindingSemanticFingerprint -Finding $findingC))
 
 # ---------------------------------------------------------------------------
 # End-to-end against a fake gh.
@@ -127,15 +202,23 @@ New-Item -ItemType Directory -Path $tempHome -Force | Out-Null
 $headSha = '2222222222222222222222222222222222222222'
 $baseSha = '1111111111111111111111111111111111111111'
 
-Set-Content -LiteralPath (Join-Path $fixtures 'pr.json') -Encoding UTF8 -Value @"
-{"number":7,"title":"Test PR","html_url":"https://github.com/acme/widgets/pull/7",
- "base":{"sha":"$baseSha","ref":"main"},"head":{"sha":"$headSha","ref":"feature/x"}}
-"@
-
 # Two pages, one file each — plus brackets inside a patch string.
 Set-Content -LiteralPath (Join-Path $fixtures 'files.json') -Encoding UTF8 -Value @'
 [{"filename":"src/a.cs","status":"modified","patch":"@@ -1,2 +1,3 @@\n var x = new[] { 1 };\n+added\n"}]
 [{"filename":"src/b.cs","status":"modified","patch":"@@ -1,2 +1,3 @@\n context\n+added\n"}]
+'@
+
+# compare/<base>...<head> wraps its files in an envelope, one per page. This is
+# what the post path now builds its line map from.
+Set-Content -LiteralPath (Join-Path $fixtures 'compare.json') -Encoding UTF8 -Value @'
+{"status":"ahead","files":[{"filename":"src/a.cs","status":"modified","patch":"@@ -1,2 +1,3 @@\n var x = new[] { 1 };\n+added\n"}]}
+{"status":"ahead","files":[{"filename":"src/b.cs","status":"modified","patch":"@@ -1,2 +1,3 @@\n context\n+added\n"}]}
+'@
+
+# A GraphQL partial success: HTTP 200 carrying both data and top-level errors.
+Set-Content -LiteralPath (Join-Path $fixtures 'threads-partial.json') -Encoding UTF8 -Value @'
+{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}},
+ "errors":[{"message":"Although you appear to have the correct authorization credentials, the org has enabled OAuth App access restrictions"}]}
 '@
 
 Set-Content -LiteralPath (Join-Path $fixtures 'commits.json') -Encoding UTF8 -Value @"
@@ -153,8 +236,6 @@ Set-Content -LiteralPath (Join-Path $fixtures 'check-runs.json') -Encoding UTF8 
 {"total_count":1,"check_runs":[{"name":"lint","conclusion":"success"}]}
 '@
 
-Set-Content -LiteralPath (Join-Path $fixtures 'post-review.json') -Encoding UTF8 -Value '{"id":4242,"state":"COMMENTED"}'
-
 $shimScript = Join-Path $shimDir 'gh-shim.ps1'
 Set-Content -LiteralPath $shimScript -Encoding UTF8 -Value @'
 [CmdletBinding(PositionalBinding = $false)]
@@ -168,18 +249,51 @@ function Emit([string]$Name) {
     exit 0
 }
 
-if ($joined -match '--method\s+POST' -and $joined -match 'pulls/7/reviews') { Emit 'post-review.json' }
-if ($joined -match 'reviews/\d+/comments')                                 { Emit 'empty.json' }
-if ($joined -match '^api graphql')                                         { Emit 'threads.json' }
-if ($joined -match 'check-runs')                                           { Emit 'check-runs.json' }
-if ($joined -match 'pulls/7/files')                                        { Emit 'files.json' }
-if ($joined -match 'pulls/7/commits')                                      { Emit 'commits.json' }
-if ($joined -match 'pulls/7/reviews')                                      { Emit 'empty.json' }
-if ($joined -match 'pulls/7' -and $joined -match '\.head\.sha') {
-    Write-Output $env:PRREVIEW_TEST_HEAD
+# The PR view is rendered from the environment so a test can move base or head
+# under a run that already pinned them.
+if ($joined -match 'pulls/7$' -or ($joined -match 'pulls/7 ' -and $joined -notmatch 'pulls/7/')) {
+    $pr = [ordered]@{
+        number   = 7
+        title    = 'Test PR'
+        html_url = 'https://github.com/acme/widgets/pull/7'
+        base     = [ordered]@{ sha = $env:PRREVIEW_TEST_BASE; ref = 'main' }
+        head     = [ordered]@{ sha = $env:PRREVIEW_TEST_HEAD; ref = 'feature/x' }
+    }
+    Write-Output (ConvertTo-Json $pr -Depth 20)
     exit 0
 }
-if ($joined -match 'pulls/7')                                              { Emit 'pr.json' }
+
+# Posting appends to a mutable review list, so a later GET sees what was posted.
+# That is what lets the test simulate a crash after a successful POST.
+if ($joined -match '--method\s+POST' -and $joined -match 'pulls/7/reviews') {
+    $inputPath = $null
+    for ($i = 0; $i -lt $CommandArgs.Count - 1; $i++) {
+        if ($CommandArgs[$i] -eq '--input') { $inputPath = $CommandArgs[$i + 1]; break }
+    }
+    $body = ''
+    if ($inputPath -and (Test-Path -LiteralPath $inputPath)) {
+        $body = [string](Get-Content -LiteralPath $inputPath -Raw | ConvertFrom-Json).body
+    }
+    $db = @(Get-Content -LiteralPath $env:PRREVIEW_TEST_REVIEWS_DB -Raw | ConvertFrom-Json)
+    $id = 4242 + $db.Count
+    $review = [pscustomobject]@{ id = $id; state = 'COMMENTED'; body = $body; submitted_at = '2026-08-10T00:00:00Z' }
+    $next = @($db) + @($review)
+    Set-Content -LiteralPath $env:PRREVIEW_TEST_REVIEWS_DB -Encoding UTF8 `
+        -Value (ConvertTo-Json @($next) -Depth 20)
+    Write-Output (ConvertTo-Json $review -Depth 20)
+    exit 0
+}
+
+if ($joined -match 'reviews/\d+/comments') { Emit 'empty.json' }
+if ($joined -match '^api graphql')         { Emit $env:PRREVIEW_TEST_THREADS }
+if ($joined -match 'check-runs')           { Emit 'check-runs.json' }
+if ($joined -match 'compare/')             { Emit 'compare.json' }
+if ($joined -match 'pulls/7/files')        { Emit 'files.json' }
+if ($joined -match 'pulls/7/commits')      { Emit 'commits.json' }
+if ($joined -match 'pulls/7/reviews') {
+    Write-Output (Get-Content -LiteralPath $env:PRREVIEW_TEST_REVIEWS_DB -Raw)
+    exit 0
+}
 
 Write-Error "fake gh: unexpected arguments: $joined"
 exit 1
@@ -204,6 +318,12 @@ else {
 $ghLog = Join-Path $sandbox 'gh-calls.log'
 Set-Content -LiteralPath $ghLog -Value '' -Encoding UTF8
 
+$reviewsDb = Join-Path $sandbox 'reviews-db.json'
+Set-Content -LiteralPath $reviewsDb -Value '[]' -Encoding UTF8
+
+$script:testBase = $baseSha
+$script:testThreads = 'threads.json'
+
 function Invoke-Helper {
     param([string[]]$HelperArgs)
 
@@ -212,6 +332,9 @@ function Invoke-Helper {
     $env:PRREVIEW_TEST_FIXTURES = $fixtures
     $env:PRREVIEW_TEST_LOG = $ghLog
     $env:PRREVIEW_TEST_HEAD = $headSha
+    $env:PRREVIEW_TEST_BASE = $script:testBase
+    $env:PRREVIEW_TEST_THREADS = $script:testThreads
+    $env:PRREVIEW_TEST_REVIEWS_DB = $reviewsDb
     # Keep every workspace this test creates inside the sandbox.
     $env:TMPDIR = $tempHome
     $env:TEMP = $tempHome
@@ -256,6 +379,10 @@ try {
 
         $pinned1 = Get-Content -LiteralPath (Join-Path $workspace 'pinned.json') -Raw | ConvertFrom-Json
         Assert-True 'resolve mints a run id' (-not [string]::IsNullOrWhiteSpace([string]$pinned1.runId))
+        Assert-True 'the run owns its own directory' `
+            ((Split-Path -Leaf $workspace) -eq [string]$pinned1.runId)
+        Assert-True 'the run directory sits under runs/' `
+            ((Split-Path -Leaf (Split-Path -Parent $workspace)) -eq 'runs')
 
         # ── Post: first publish ──────────────────────────────────────────────
         $payloadPath = Join-Path $workspace 'review.input.json'
@@ -265,9 +392,14 @@ try {
         $postsBefore = Get-PostCount
         $post1 = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadPath)
         Assert-Equal 'first post succeeds' 0 $post1.ExitCode
+        if ($post1.ExitCode -ne 0) { Write-Host $post1.Text -ForegroundColor DarkYellow }
         Assert-Equal 'first post reaches GitHub' ($postsBefore + 1) (Get-PostCount)
-        Assert-True 'the receipt is keyed by run id' `
-            (Test-Path -LiteralPath (Join-Path $workspace "post-result-$($pinned1.runId).json"))
+        $receipt1 = Join-Path $workspace 'post-result.json'
+        Assert-True 'the receipt lands in the run directory' (Test-Path -LiteralPath $receipt1)
+        Assert-True 'the line map is built from the pinned compare, not the PR files view' `
+            (@(Get-Content -LiteralPath $ghLog | Where-Object { $_ -match "compare/$baseSha\.\.\.$headSha" }).Count -ge 1)
+        Assert-True 'the published body carries the run marker' `
+            ((Get-Content -LiteralPath (Join-Path $workspace 'review.json') -Raw) -match [regex]::Escape($pinned1.runId))
 
         # ── Post again, same run: a retry must stay idempotent ───────────────
         $postsBefore = Get-PostCount
@@ -276,19 +408,76 @@ try {
         Assert-True 'retrying the same run is a no-op' ($post2.Text -match 'idempotent no-op')
         Assert-Equal 'retrying the same run posts nothing new' $postsBefore (Get-PostCount)
 
+        # ── Crash after a successful POST: the retry must reconcile ──────────
+        # The receipt is written after GitHub creates the review, so a process
+        # that died in between used to republish. The run marker closes that.
+        Remove-Item -LiteralPath $receipt1 -Force
+        $postsBefore = Get-PostCount
+        $post2b = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadPath)
+        Assert-Equal 'a retry with no receipt succeeds' 0 $post2b.ExitCode
+        Assert-Equal 'a retry with no receipt posts no duplicate' $postsBefore (Get-PostCount)
+        Assert-True 'the retry recovers the receipt from the run marker' `
+            ($post2b.Text -match 'already published review')
+        Assert-True 'the recovered receipt is written back' (Test-Path -LiteralPath $receipt1)
+
+        # ── -RunId must match the run that owns the payload ──────────────────
+        $wrongRun = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadPath, '-RunId', 'not-this-run')
+        Assert-Equal 'posting with a foreign run id fails' 1 $wrongRun.ExitCode
+        Assert-True 'the foreign run id is named in the error' ($wrongRun.Text -match 'not-this-run')
+
         # ── Re-review the same head: a new run must publish ──────────────────
         $resolve2 = Invoke-Helper -HelperArgs @('-Resolve', $target)
         Assert-Equal 'a second resolve on the same head succeeds' 0 $resolve2.ExitCode
-        $pinned2 = Get-Content -LiteralPath (Join-Path $workspace 'pinned.json') -Raw | ConvertFrom-Json
+        $workspace2 = $null
+        if ($resolve2.Text -match '(?m)^workspace:\s*(.+)$') { $workspace2 = $Matches[1].Trim() }
+        Assert-True 'the second run gets a different directory' ($workspace2 -ne $workspace)
+        $pinned2 = Get-Content -LiteralPath (Join-Path $workspace2 'pinned.json') -Raw | ConvertFrom-Json
         Assert-True 'a second resolve mints a different run id' ([string]$pinned2.runId -ne [string]$pinned1.runId)
+        $pinned1Again = Get-Content -LiteralPath (Join-Path $workspace 'pinned.json') -Raw | ConvertFrom-Json
+        Assert-Equal 'the first run''s pinned state is untouched by the second' `
+            ([string]$pinned1.runId) ([string]$pinned1Again.runId)
 
-        Set-Content -LiteralPath $payloadPath -Encoding UTF8 -Value @"
+        $payloadPath2 = Join-Path $workspace2 'review.input.json'
+        Set-Content -LiteralPath $payloadPath2 -Encoding UTF8 -Value @"
 {"commit_id":"$headSha","event":"COMMENT","body":"Summary for run two, with a new finding.","comments":[]}
 "@
         $postsBefore = Get-PostCount
-        $post3 = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadPath)
+        $post3 = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadPath2)
         Assert-Equal 'the new run posts successfully' 0 $post3.ExitCode
         Assert-Equal 'an explicit re-review of an unchanged head still publishes' ($postsBefore + 1) (Get-PostCount)
+
+        # ── A base-branch advance must abort publication ─────────────────────
+        # Checking only head.sha left this undetected, yet moving the base
+        # changes what the diff means.
+        $resolve3 = Invoke-Helper -HelperArgs @('-Resolve', $target)
+        Assert-Equal 'a third resolve succeeds' 0 $resolve3.ExitCode
+        $workspace3 = $null
+        if ($resolve3.Text -match '(?m)^workspace:\s*(.+)$') { $workspace3 = $Matches[1].Trim() }
+        $payloadPath3 = Join-Path $workspace3 'review.input.json'
+        Set-Content -LiteralPath $payloadPath3 -Encoding UTF8 -Value @"
+{"commit_id":"$headSha","event":"COMMENT","body":"Summary for run three.","comments":[]}
+"@
+        $script:testBase = '9999999999999999999999999999999999999999'
+        $postsBefore = Get-PostCount
+        $post4 = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadPath3)
+        $script:testBase = $baseSha
+        Assert-Equal 'a moved base aborts the post' 1 $post4.ExitCode
+        Assert-True 'the abort names the base as the mover' ($post4.Text -match 'base moved')
+        Assert-Equal 'a moved base publishes nothing' $postsBefore (Get-PostCount)
+
+        # ── GraphQL partial success is incomplete coverage, not clean ────────
+        $script:testThreads = 'threads-partial.json'
+        $resolve4 = Invoke-Helper -HelperArgs @('-Resolve', $target)
+        $script:testThreads = 'threads.json'
+        Assert-Equal 'resolve survives a partial GraphQL response' 0 $resolve4.ExitCode
+        $workspace4 = $null
+        if ($resolve4.Text -match '(?m)^workspace:\s*(.+)$') { $workspace4 = $Matches[1].Trim() }
+        $threadState4 = Get-Content -LiteralPath (Join-Path $workspace4 'review-threads.json') -Raw | ConvertFrom-Json
+        Assert-True 'top-level GraphQL errors mark coverage incomplete' (-not [bool]$threadState4.complete)
+        Assert-True 'the GraphQL error message is preserved' `
+            ([string]$threadState4.incompleteReason -match 'OAuth App access restrictions')
+        Assert-True 'incomplete thread coverage is reported to the caller' `
+            ($resolve4.Text -match 'threadCoverage: INCOMPLETE')
     }
     else {
         Assert-True 'workspace exists on disk' $false
@@ -299,9 +488,10 @@ finally {
     $env:TMPDIR = $originalTmpdir
     $env:TEMP = $originalTemp
     $env:TMP = $originalTmp
-    Remove-Item Env:\PRREVIEW_TEST_FIXTURES -ErrorAction SilentlyContinue
-    Remove-Item Env:\PRREVIEW_TEST_LOG -ErrorAction SilentlyContinue
-    Remove-Item Env:\PRREVIEW_TEST_HEAD -ErrorAction SilentlyContinue
+    foreach ($name in @('PRREVIEW_TEST_FIXTURES', 'PRREVIEW_TEST_LOG', 'PRREVIEW_TEST_HEAD',
+            'PRREVIEW_TEST_BASE', 'PRREVIEW_TEST_THREADS', 'PRREVIEW_TEST_REVIEWS_DB')) {
+        Remove-Item -LiteralPath "Env:\$name" -ErrorAction SilentlyContinue
+    }
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 

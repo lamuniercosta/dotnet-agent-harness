@@ -19,7 +19,7 @@
     -Validate -Findings <path> | -Payload <path>
     -Fingerprint -Findings <path>
     -Dedupe -Findings <path> -Prior <path>
-    -BuildPayload -Findings <path> -BaseSha <sha> -HeadSha <sha> -Body <path-or-string>
+    -BuildPayload -Findings <path> -BaseSha <sha> -HeadSha <sha> (-BodyText <text> | -BodyFile <path>)
     -MarkdownFallback -Payload <path>
     -Help
 
@@ -51,7 +51,16 @@ param(
     [int]$Pr,
     [string]$HeadSha,
     [string]$BaseSha,
-    [string]$Body
+
+    # Body text and body file are deliberately separate. A single -Body that read
+    # its value as a file whenever that value happened to name one turned review
+    # prose into a local-file read primitive.
+    [string]$BodyText,
+    [string]$BodyFile,
+
+    # Optional guard: -Post refuses a payload whose workspace belongs to a
+    # different run.
+    [string]$RunId
 )
 
 Set-StrictMode -Version Latest
@@ -75,17 +84,22 @@ pr-review.ps1 — deterministic helper for /pr-review
 USAGE (exactly one verb):
   -Help
   -Resolve [<number-or-url>]
-  -Post -Payload <path>
+  -Post -Payload <path> [-RunId <id>]
   -NewWorkspace -Owner <o> -Repo <r> -Pr <n> -HeadSha <sha>
   -Validate (-Findings <path> | -Payload <path>)
   -Fingerprint -Findings <path>
   -Dedupe -Findings <path> -Prior <path>
-  -BuildPayload -Findings <path> -BaseSha <sha> -HeadSha <sha> -Body <path-or-string>
+  -BuildPayload -Findings <path> -BaseSha <sha> -HeadSha <sha> (-BodyText <text> | -BodyFile <path>)
   -MarkdownFallback -Payload <path>
 
 NOTES
   - Requires PowerShell 7+ and (for -Resolve/-Post) an authenticated gh CLI.
-  - Workspace lives under the OS temp dir: <temp>/pr-review/<owner>-<repo>/<pr>-<headsha>/
+  - Each -Resolve mints a run id and owns one run directory:
+      <temp>/pr-review/<owner>-<repo>/<pr>-<headsha>/runs/<runid>/
+    Pinned state, the outgoing payload, and the receipt live there, so
+    concurrent runs over one head cannot overwrite each other.
+  - -BodyText is used verbatim and is never probed as a path. -BodyFile is read
+    only from inside the workspace root this script owns.
   - Exit 0 on success; non-zero on failure. Offline verbs do no network I/O.
 '@ | Write-Output
 }
@@ -406,6 +420,38 @@ function New-OrGetWorkspace {
     return $path
 }
 
+function New-RunWorkspace {
+    <#
+      Each -Resolve gets its own directory under <head-workspace>/runs/<runId>.
+
+      A run id alone did not isolate anything while every run still wrote the
+      same pinned.json, payload, and evidence files: if run A resolved, run B
+      resolved before A posted, then A read B's run id, published under it, and
+      B later found that receipt and no-opped — losing B's review entirely.
+      Separate directories make that race impossible rather than unlikely.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Workspace,
+        [Parameter(Mandatory)][string]$RunId
+    )
+
+    $safeRun = ($RunId -replace '[^A-Za-z0-9._-]', '_')
+    if ([string]::IsNullOrWhiteSpace($safeRun)) {
+        throw "RunId must contain at least one usable character; got: $RunId"
+    }
+
+    $runsDir = Join-Path $Workspace 'runs'
+    $runDir = Join-Path $runsDir $safeRun
+    foreach ($dir in @($runsDir, $runDir)) {
+        if (-not (Test-Path -LiteralPath $dir)) {
+            New-Item -ItemType Directory -Path $dir -ErrorAction Stop | Out-Null
+        }
+        Assert-SafeWorkspacePath -Path $dir
+        Set-PrivateDirectoryMode -Path $dir
+    }
+    return $runDir
+}
+
 function Get-WorkspaceMetaPath {
     param([Parameter(Mandatory)][string]$Workspace)
     return Join-Path $Workspace 'pinned.json'
@@ -691,6 +737,19 @@ function Get-NormalizedSubstance {
     return $text
 }
 
+function Get-Sha256Hex {
+    param([string]$Text)
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hash = $sha.ComputeHash($bytes)
+    }
+    finally {
+        $sha.Dispose()
+    }
+    return ([System.BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
+}
+
 function Get-FindingFingerprint {
     param(
         $Finding,
@@ -723,15 +782,29 @@ function Get-FindingFingerprint {
     $substance = Get-NormalizedSubstance -Finding $Finding
 
     $material = (@($repoVal, $prVal, $category, $file, $range, $substance) -join '|')
-    $bytes = [System.Text.Encoding]::UTF8.GetBytes($material)
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try {
-        $hash = $sha.ComputeHash($bytes)
+    return Get-Sha256Hex -Text $material
+}
+
+function Get-FindingSemanticFingerprint {
+    param(
+        $Finding,
+        [string]$Repo,
+        [string]$Pr
+    )
+
+    $existing = Get-PropertyValue -Object $Finding -Name 'semanticFingerprint'
+    if (-not [string]::IsNullOrWhiteSpace([string]$existing)) {
+        return [string]$existing
     }
-    finally {
-        $sha.Dispose()
-    }
-    return ([System.BitConverter]::ToString($hash) -replace '-', '').ToLowerInvariant()
+
+    $repoVal = if ($Repo) { $Repo } else { [string](Get-PropertyValue -Object $Finding -Name 'repo') }
+    $prVal = if ($Pr) { $Pr } else { [string](Get-PropertyValue -Object $Finding -Name 'pr') }
+    $category = [string](Get-PropertyValue -Object $Finding -Name 'category')
+    $file = Normalize-PathKey -Path ([string](Get-PropertyValue -Object $Finding -Name 'file'))
+    $substance = Get-NormalizedSubstance -Finding $Finding
+
+    $material = (@($repoVal, $prVal, $category, $file, $substance) -join '|')
+    return Get-Sha256Hex -Text $material
 }
 
 function Invoke-Fingerprint {
@@ -742,11 +815,12 @@ function Invoke-Fingerprint {
     $clean = [System.Collections.Generic.List[object]]::new()
     foreach ($f in $items) {
         $clean.Add([pscustomobject]@{
-                file        = [string](Get-PropertyValue -Object $f -Name 'file')
-                category    = [string](Get-PropertyValue -Object $f -Name 'category')
-                severity    = [string](Get-PropertyValue -Object $f -Name 'severity')
-                verdict     = [string](Get-PropertyValue -Object $f -Name 'verdict')
-                fingerprint = Get-FindingFingerprint -Finding $f
+                file                = [string](Get-PropertyValue -Object $f -Name 'file')
+                category            = [string](Get-PropertyValue -Object $f -Name 'category')
+                severity            = [string](Get-PropertyValue -Object $f -Name 'severity')
+                verdict             = [string](Get-PropertyValue -Object $f -Name 'verdict')
+                fingerprint         = Get-FindingFingerprint -Finding $f
+                semanticFingerprint = Get-FindingSemanticFingerprint -Finding $f
             })
     }
     Write-Output ($clean | ConvertTo-Json -Depth 10)
@@ -755,16 +829,23 @@ function Invoke-Fingerprint {
 function Get-PriorFingerprints {
     param($PriorDocument)
 
-    $set = [System.Collections.Generic.HashSet[string]]::new(
+    $exactSet = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase)
+    $semanticSet = [System.Collections.Generic.HashSet[string]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
 
-    if ($null -eq $PriorDocument) { return $set }
+    if ($null -eq $PriorDocument) { return [pscustomobject]@{ exact = $exactSet; semantic = $semanticSet } }
 
     # Accept: findings array/object, { fingerprints: [...] }, { findings: [...] },
     # or prior review state with nested findings.
     if (Test-HasProperty -Object $PriorDocument -Name 'fingerprints') {
         foreach ($fp in @((Get-PropertyValue -Object $PriorDocument -Name 'fingerprints'))) {
-            if (-not [string]::IsNullOrWhiteSpace([string]$fp)) { [void]$set.Add([string]$fp) }
+            if (-not [string]::IsNullOrWhiteSpace([string]$fp)) { [void]$exactSet.Add([string]$fp) }
+        }
+    }
+    if (Test-HasProperty -Object $PriorDocument -Name 'semanticFingerprints') {
+        foreach ($sfp in @((Get-PropertyValue -Object $PriorDocument -Name 'semanticFingerprints'))) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$sfp)) { [void]$semanticSet.Add([string]$sfp) }
         }
     }
 
@@ -772,7 +853,10 @@ function Get-PriorFingerprints {
         $items = Get-FindingsArray -Document $PriorDocument
         foreach ($f in $items) {
             $fp = Get-FindingFingerprint -Finding $f
-            if ($fp) { [void]$set.Add($fp) }
+            if ($fp) { [void]$exactSet.Add($fp) }
+
+            $sfp = Get-FindingSemanticFingerprint -Finding $f
+            if ($sfp) { [void]$semanticSet.Add($sfp) }
         }
     }
     catch {
@@ -782,11 +866,14 @@ function Get-PriorFingerprints {
     if (Test-HasProperty -Object $PriorDocument -Name 'priorFindings') {
         foreach ($f in @((Get-PropertyValue -Object $PriorDocument -Name 'priorFindings'))) {
             $fp = Get-FindingFingerprint -Finding $f
-            if ($fp) { [void]$set.Add($fp) }
+            if ($fp) { [void]$exactSet.Add($fp) }
+
+            $sfp = Get-FindingSemanticFingerprint -Finding $f
+            if ($sfp) { [void]$semanticSet.Add($sfp) }
         }
     }
 
-    return $set
+    return [pscustomobject]@{ exact = $exactSet; semantic = $semanticSet }
 }
 
 function Invoke-Dedupe {
@@ -798,22 +885,28 @@ function Invoke-Dedupe {
     $doc = Read-JsonFile -Path $FindingsPath
     $prior = Read-JsonFile -Path $PriorPath
     $items = Get-FindingsArray -Document $doc
-    $priorSet = Get-PriorFingerprints -PriorDocument $prior
+    $priorSets = Get-PriorFingerprints -PriorDocument $prior
 
     $kept = [System.Collections.Generic.List[object]]::new()
     $dropped = [System.Collections.Generic.List[object]]::new()
 
     foreach ($f in $items) {
         $fp = Get-FindingFingerprint -Finding $f
+        $sfp = Get-FindingSemanticFingerprint -Finding $f
         # Attach fingerprint onto a shallow copy dictionary for output.
         $hash = [ordered]@{}
         foreach ($p in $f.PSObject.Properties) {
             $hash[$p.Name] = $p.Value
         }
         $hash['fingerprint'] = $fp
+        $hash['semanticFingerprint'] = $sfp
 
-        if ($priorSet.Contains($fp)) {
+        if ($priorSets.exact.Contains($fp)) {
             $hash['dedupe'] = 'dropped-identical'
+            $dropped.Add([pscustomobject]$hash)
+        }
+        elseif ($priorSets.semantic.Contains($sfp)) {
+            $hash['dedupe'] = 'dropped-semantic'
             $dropped.Add([pscustomobject]$hash)
         }
         else {
@@ -836,11 +929,43 @@ function Invoke-Dedupe {
 # ---------------------------------------------------------------------------
 
 function Get-BodyText {
-    param([Parameter(Mandatory)][string]$BodyArg)
-    if (Test-Path -LiteralPath $BodyArg) {
-        return (Get-Content -LiteralPath $BodyArg -Raw -Encoding utf8)
+    <#
+      Text and file are separate inputs on purpose.
+
+      The old single -Body read its value as a file whenever that value happened
+      to name an existing one. In a workflow whose whole job is to summarize
+      untrusted PR text and then publish the result, that made any body naming a
+      local path — `~/.config/gh/hosts.yml`, an .env, a private key — silently
+      swap itself for that file's contents and post them to GitHub. Body text is
+      therefore never probed as a path, and a body file must live inside the
+      workspace root this script owns.
+    #>
+    param([string]$BodyText, [string]$BodyFile)
+
+    if ([string]::IsNullOrEmpty($BodyFile)) {
+        return $BodyText
     }
-    return $BodyArg
+
+    $full = [System.IO.Path]::GetFullPath($BodyFile)
+    $root = [System.IO.Path]::GetFullPath((Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review'))
+    $rootPrefix = $root.TrimEnd([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar) +
+        [System.IO.Path]::DirectorySeparatorChar
+    $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    if (-not $full.StartsWith($rootPrefix, $comparison)) {
+        throw "-BodyFile must live inside the review workspace root '$root'; refusing to read '$full'."
+    }
+
+    $item = Get-Item -LiteralPath $full -Force -ErrorAction Stop
+    if ($item.PSIsContainer) {
+        throw "-BodyFile is a directory, not a file: $full"
+    }
+    if ($item.Attributes.HasFlag([System.IO.FileAttributes]::ReparsePoint)) {
+        # Otherwise the containment check above is decorative: a symlink inside
+        # the workspace can point anywhere.
+        throw "-BodyFile is a symlink or reparse point; refusing to read '$full'."
+    }
+
+    return (Get-Content -LiteralPath $full -Raw -Encoding utf8)
 }
 
 function Format-InlineCommentBody {
@@ -921,7 +1046,8 @@ function Invoke-BuildPayload {
         [Parameter(Mandatory)][string]$FindingsPath,
         [Parameter(Mandatory)][string]$BaseSha,
         [Parameter(Mandatory)][string]$HeadSha,
-        [Parameter(Mandatory)][string]$BodyArg
+        [string]$BodyText,
+        [string]$BodyFile
     )
 
     $null = $BaseSha  # reserved for callers/workspace symmetry; payload uses head
@@ -939,7 +1065,9 @@ function Invoke-BuildPayload {
         exit 1
     }
 
-    $bodyText = Get-BodyText -BodyArg $BodyArg
+    # Not $bodyText: PowerShell variable names are case-insensitive, so that would
+    # assign straight back into the $BodyText parameter.
+    $summaryBody = Get-BodyText -BodyText $BodyText -BodyFile $BodyFile
     $comments = [System.Collections.Generic.List[object]]::new()
     $summaryOnly = [System.Collections.Generic.List[object]]::new()
 
@@ -955,7 +1083,7 @@ function Invoke-BuildPayload {
     # PLAUSIBLE / non-inline findings are never inline; surface them briefly if
     # the caller did not already mention them (append only when summary-only list
     # is non-empty and body lacks an explicit Questions heading).
-    if ($summaryOnly.Count -gt 0 -and $bodyText -notmatch '(?m)^##\s+Questions\b') {
+    if ($summaryOnly.Count -gt 0 -and $summaryBody -notmatch '(?m)^##\s+Questions\b') {
         $q = [System.Collections.Generic.List[string]]::new()
         $q.Add('')
         $q.Add('## Questions / non-inline findings')
@@ -967,13 +1095,13 @@ function Invoke-BuildPayload {
             $file = [string](Get-PropertyValue -Object $f -Name 'file')
             $q.Add("- [$verdict] **$sev**/$cat ``$file`` — $sum")
         }
-        $bodyText = $bodyText.TrimEnd() + "`n" + ($q -join "`n") + "`n"
+        $summaryBody = $summaryBody.TrimEnd() + "`n" + ($q -join "`n") + "`n"
     }
 
     $payload = [pscustomobject]@{
         commit_id = $HeadSha
         event     = 'COMMENT'
-        body      = $bodyText
+        body      = $summaryBody
         comments  = @($comments)
     }
 
@@ -1288,13 +1416,54 @@ query($owner:String!, $repo:String!, $number:Int!, $cursor:String) {
                 break
             }
 
+            $root = $null
+            try { $root = $raw.Text | ConvertFrom-Json -Depth 100 }
+            catch { $root = $null }
+
+            if (Test-HasProperty -Object $root -Name 'errors') {
+                $errs = Get-PropertyValue -Object $root -Name 'errors'
+                if ($null -ne $errs -and @($errs).Count -gt 0) {
+                    $complete = $false
+                    $msgs = [System.Collections.Generic.List[string]]::new()
+                    foreach ($e in @($errs)) {
+                        # Parenthesise the first operand: an unparenthesised
+                        # `cmd -a x -and ...` binds `-and` as an argument to the
+                        # command instead of composing a boolean, silently
+                        # dropping the null guard.
+                        $msg = Get-PropertyValue -Object $e -Name 'message'
+                        if (-not [string]::IsNullOrWhiteSpace([string]$msg)) {
+                            $msgs.Add([string]$msg)
+                        }
+                        else {
+                            $msgs.Add([string]$e)
+                        }
+                    }
+                    $errText = ($msgs -join '; ')
+                    if ([string]::IsNullOrEmpty($reason)) {
+                        $reason = $errText
+                    } else {
+                        $reason += "; $errText"
+                    }
+                }
+            }
+
             $rt = $null
-            try { $rt = $raw.Text | ConvertFrom-Json -Depth 100 | ForEach-Object { $_.data.repository.pullRequest.reviewThreads } }
+            try {
+                if ($null -ne $root -and (Test-HasProperty -Object $root -Name 'data')) {
+                    $rt = $root.data.repository.pullRequest.reviewThreads
+                }
+            }
             catch { $rt = $null }
+
             if ($null -eq $rt) {
                 Write-Warning 'Review threads response contained no thread data (continuing without them).'
                 $complete = $false
-                $reason = 'GraphQL response contained no reviewThreads data'
+                $noData = 'GraphQL response contained no reviewThreads data'
+                if ([string]::IsNullOrEmpty($reason)) {
+                    $reason = $noData
+                } else {
+                    $reason += "; $noData"
+                }
                 break
             }
 
@@ -1390,12 +1559,14 @@ function Invoke-Resolve {
         }
     }
 
-    $workspace = New-OrGetWorkspace -Owner $owner -Repo $repo -Pr $number -HeadSha $headSha
+    $headWorkspace = New-OrGetWorkspace -Owner $owner -Repo $repo -Pr $number -HeadSha $headSha
 
-    # Each explicit -Resolve mints a run id. The posting receipt is keyed by it,
-    # so retrying one run stays idempotent while a deliberate re-review of an
-    # unchanged head still publishes its own summary.
+    # Each explicit -Resolve mints a run id and owns a directory named by it. The
+    # receipt lives there, so retrying one run stays idempotent while a
+    # deliberate re-review of an unchanged head still publishes its own summary —
+    # and two concurrent runs over one head cannot overwrite each other's state.
     $runId = [guid]::NewGuid().ToString('n').Substring(0, 12)
+    $workspace = New-RunWorkspace -Workspace $headWorkspace -RunId $runId
 
     $pinned = [pscustomobject]@{
         owner     = $owner
@@ -1410,6 +1581,7 @@ function Invoke-Resolve {
         htmlUrl   = [string]$pr.html_url
         resolvedAt = (Get-Date).ToUniversalTime().ToString('o')
         workspace = $workspace
+        headWorkspace = $headWorkspace
     }
 
     Write-JsonFile -Value $pinned -Path (Join-Path $workspace 'pinned.json')
@@ -1419,6 +1591,15 @@ function Invoke-Resolve {
     Write-JsonFile -Value $reviews -Path (Join-Path $workspace 'reviews.json')
     Write-JsonFile -Value $threads -Path (Join-Path $workspace 'review-threads.json')
     Write-JsonFile -Value $ci -Path (Join-Path $workspace 'ci.json')
+
+    # Head-level pointer so a human reading the workspace has one obvious entry
+    # point. Runs never read it, so a concurrent run overwriting it is harmless.
+    Write-JsonFile -Value ([pscustomobject]@{
+            runId     = $runId
+            workspace = $workspace
+            headSha   = $headSha
+            resolvedAt = $pinned.resolvedAt
+        }) -Path (Join-Path $headWorkspace 'latest-run.json')
 
     Write-Output "Resolved PR $owner/$repo#$number"
     Write-Output "baseSha: $baseSha"
@@ -1437,20 +1618,146 @@ function Invoke-Resolve {
 
 function Get-PostResultPath {
     <#
-      The receipt is keyed by run id, not by head SHA. Keying it by head made a
-      deliberate re-review of an unchanged head a silent no-op even when it had
-      new findings; keying it by run keeps retries of one run idempotent while
-      letting the next explicit run publish its own summary. Workspaces resolved
-      before run ids existed fall back to the old head-keyed path.
+      The receipt lives in the run's own directory, so it is scoped by run
+      rather than by head SHA. Keying it by head made a deliberate re-review of
+      an unchanged head a silent no-op even when it had new findings; scoping it
+      by run keeps retries of one run idempotent while letting the next explicit
+      run publish its own summary. The runId recorded inside the receipt is
+      checked too, so a legacy flat workspace cannot pass one run's receipt off
+      as another's.
+    #>
+    param([Parameter(Mandatory)][string]$RunDirectory)
+    return Join-Path $RunDirectory 'post-result.json'
+}
+
+function Get-RunMarker {
+    <#
+      A deterministic, machine-findable stamp for one run, embedded in the
+      published review body. It is what makes an unreceipted retry safe: if the
+      POST reached GitHub but the response, the parse, or the process died
+      before the receipt was written, the retry finds this marker on the
+      existing review instead of publishing a duplicate.
+    #>
+    param([Parameter(Mandatory)][string]$RunId)
+    return "<!-- pr-review:run=$RunId -->"
+}
+
+function Add-RunMarker {
+    param(
+        [Parameter(Mandatory)]$Payload,
+        [Parameter(Mandatory)][string]$RunId
+    )
+
+    $marker = Get-RunMarker -RunId $RunId
+    $body = [string](Get-PropertyValue -Object $Payload -Name 'body')
+    if ($body -like "*$marker*") { return $Payload }
+
+    return [pscustomobject]@{
+        commit_id = [string](Get-PropertyValue -Object $Payload -Name 'commit_id')
+        event     = 'COMMENT'
+        body      = ($body.TrimEnd() + "`n`n" + $marker)
+        comments  = @((Get-PropertyValue -Object $Payload -Name 'comments'))
+    }
+}
+
+function Find-ReviewByRunMarker {
+    <#
+      Look for a review this run already published. Returns the review object or
+      $null. A failure to list is reported as $null by the caller's choice of
+      -AllowFailure; the caller must treat "could not check" as "do not post".
     #>
     param(
-        [Parameter(Mandatory)][string]$Workspace,
-        [string]$RunId
+        [Parameter(Mandatory)][string]$Owner,
+        [Parameter(Mandatory)][string]$Repo,
+        [Parameter(Mandatory)][int]$Number,
+        [Parameter(Mandatory)][string]$RunId
     )
-    if ([string]::IsNullOrWhiteSpace($RunId)) {
-        return Join-Path $Workspace 'post-result.json'
+
+    $marker = Get-RunMarker -RunId $RunId
+    $result = Invoke-GhPaginated -Action 'listing existing reviews to reconcile a retry' `
+        -Path "repos/$Owner/$Repo/pulls/$Number/reviews" -AllowFailure
+    if ($result.ExitCode -ne 0) {
+        return [pscustomobject]@{ Checked = $false; Review = $null }
     }
-    return Join-Path $Workspace "post-result-$RunId.json"
+
+    foreach ($review in @($result.Items)) {
+        $body = [string](Get-PropertyValue -Object $review -Name 'body')
+        if ($body -like "*$marker*") {
+            return [pscustomobject]@{ Checked = $true; Review = $review }
+        }
+    }
+    return [pscustomobject]@{ Checked = $true; Review = $null }
+}
+
+function Assert-PinnedPair {
+    <#
+      Re-read base and head and refuse to act unless both still match what the
+      review was built against.
+
+      Checking only head.sha left two holes. A push between gathering and
+      posting could validate one diff and publish against the commit it was no
+      longer describing, and a base-branch advance — which changes what the diff
+      even means — was never detected at all. Both are re-checked immediately
+      before every submission, not once at the start.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Owner,
+        [Parameter(Mandatory)][string]$Repo,
+        [Parameter(Mandatory)][int]$Number,
+        [Parameter(Mandatory)][string]$PinnedBase,
+        [Parameter(Mandatory)][string]$PinnedHead,
+        [Parameter(Mandatory)][string]$PayloadHead,
+        [Parameter(Mandatory)][string]$Stage
+    )
+
+    $raw = Invoke-Gh -Action "re-fetching pinned base/head before $Stage" -GhArgs @(
+        'api', "repos/$Owner/$Repo/pulls/$Number"
+    )
+    $live = ConvertFrom-GhJson -Text $raw.Text -Action "parsing PR #$Number for pin check"
+    $liveHead = [string]$live.head.sha
+    $liveBase = [string]$live.base.sha
+
+    $problems = [System.Collections.Generic.List[string]]::new()
+    if ($liveHead -ne $PinnedHead -or $liveHead -ne $PayloadHead) {
+        $problems.Add("head moved (pinned=$PinnedHead payload=$PayloadHead live=$liveHead)")
+    }
+    if ($liveBase -ne $PinnedBase) {
+        $problems.Add("base moved (pinned=$PinnedBase live=$liveBase)")
+    }
+    if ($problems.Count -gt 0) {
+        throw ("Refusing to $Stage — " + ($problems -join '; ') + '. Re-run -Resolve and revalidate.')
+    }
+
+    return [pscustomobject]@{ BaseSha = $liveBase; HeadSha = $liveHead }
+}
+
+function Get-PinnedCompareFiles {
+    <#
+      Build the line map from the pinned base...head pair rather than the PR's
+      mutable files view. /pulls/<n>/files always describes whatever the PR
+      points at right now, so a push mid-run silently remapped comments onto a
+      diff nobody reviewed. The compare endpoint is addressed by SHA, so it
+      returns the same diff every time or nothing at all.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Owner,
+        [Parameter(Mandatory)][string]$Repo,
+        [Parameter(Mandatory)][string]$BaseSha,
+        [Parameter(Mandatory)][string]$HeadSha
+    )
+
+    $result = Invoke-GhPaginated -Action 'fetching the pinned base...head diff' `
+        -Path "repos/$Owner/$Repo/compare/$BaseSha...$HeadSha"
+
+    # compare/ wraps its file array in an envelope, one envelope per page.
+    $files = [System.Collections.Generic.List[object]]::new()
+    foreach ($page in @($result.Pages)) {
+        if (-not (Test-HasProperty -Object $page -Name 'files')) { continue }
+        foreach ($f in @((Get-PropertyValue -Object $page -Name 'files'))) {
+            if ($null -ne $f) { $files.Add($f) }
+        }
+    }
+    return $files.ToArray()
 }
 
 function Move-UnmappableToSummary {
@@ -1505,7 +1812,10 @@ function Move-UnmappableToSummary {
 }
 
 function Invoke-Post {
-    param([Parameter(Mandatory)][string]$PayloadPath)
+    param(
+        [Parameter(Mandatory)][string]$PayloadPath,
+        [string]$ExpectedRunId
+    )
 
     Assert-GhPresent
     $payload = Read-JsonFile -Path $PayloadPath
@@ -1535,18 +1845,35 @@ function Invoke-Post {
     $repo = [string]$pinned.repo
     $number = [int]$pinned.pr
     $pinnedHead = [string]$pinned.headSha
+    $pinnedBase = ''
+    if (Test-HasProperty -Object $pinned -Name 'baseSha') {
+        $pinnedBase = [string](Get-PropertyValue -Object $pinned -Name 'baseSha')
+    }
+    if ([string]::IsNullOrWhiteSpace($pinnedBase)) {
+        throw "pinned.json has no baseSha, so publication cannot be pinned to a base/head pair. Re-run -Resolve."
+    }
 
     $runId = ''
     if (Test-HasProperty -Object $pinned -Name 'runId') {
         $runId = [string](Get-PropertyValue -Object $pinned -Name 'runId')
     }
+    if ([string]::IsNullOrWhiteSpace($runId)) {
+        throw "pinned.json has no runId. Re-run -Resolve to mint one."
+    }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedRunId) -and $ExpectedRunId -ne $runId) {
+        throw "-RunId '$ExpectedRunId' does not match the run that owns this payload ('$runId'). Post from that run's own workspace."
+    }
 
     # Idempotent retry: this run already posted. A later -Resolve mints a new run
-    # id, so re-reviewing an unchanged head still publishes a fresh summary.
-    $resultPath = Get-PostResultPath -Workspace $workspace -RunId $runId
+    # id in its own directory, so re-reviewing an unchanged head still publishes
+    # a fresh summary. The runId is re-checked here as well as being implied by
+    # the directory, so a legacy flat workspace cannot pass one run's receipt off
+    # as another's.
+    $resultPath = Get-PostResultPath -RunDirectory $workspace
     if (Test-Path -LiteralPath $resultPath) {
         $prior = Read-JsonFile -Path $resultPath
-        if ([string]$prior.headSha -eq $headSha -and $prior.reviewId) {
+        $priorRun = [string](Get-PropertyValue -Object $prior -Name 'runId')
+        if ($priorRun -eq $runId -and [string]$prior.headSha -eq $headSha -and $prior.reviewId) {
             Write-Output "Already posted for run $runId at head $headSha (idempotent no-op)"
             Write-Output "reviewId: $($prior.reviewId)"
             Write-Output ("commentIds: " + ((@($prior.commentIds) | ForEach-Object { $_ }) -join ', '))
@@ -1556,18 +1883,41 @@ function Invoke-Post {
         }
     }
 
-    # 1. Re-fetch head; refuse if moved.
-    $liveRaw = Invoke-Gh -Action 're-fetching PR head SHA' -GhArgs @(
-        'api', "repos/$owner/$repo/pulls/$number", '-q', '.head.sha'
-    )
-    $liveHead = $liveRaw.Text.Trim()
-    if ($liveHead -ne $pinnedHead -or $liveHead -ne $headSha) {
-        Write-Error "head moved, re-run resolve/revalidate (pinned=$pinnedHead payload=$headSha live=$liveHead)"
+    # 1. Re-fetch base and head; refuse if either moved.
+    [void](Assert-PinnedPair -Owner $owner -Repo $repo -Number $number `
+            -PinnedBase $pinnedBase -PinnedHead $pinnedHead -PayloadHead $headSha -Stage 'post')
+
+    # 2. No receipt, but the POST may still have reached GitHub on an earlier
+    #    attempt that died before writing one. Reconcile against the run marker
+    #    before publishing anything. "Could not check" is treated as "do not
+    #    post": a duplicate public review is worse than a failed run.
+    $existing = Find-ReviewByRunMarker -Owner $owner -Repo $repo -Number $number -RunId $runId
+    if (-not $existing.Checked) {
+        Write-Output ''
+        Write-Output 'Could not post'
+        Write-Output "Could not list existing reviews to confirm whether run $runId already published."
+        Write-Output 'Refusing to post rather than risk a duplicate review. Retry when the API is reachable.'
         exit 1
     }
+    if ($null -ne $existing.Review) {
+        $recoveredId = (Get-PropertyValue -Object $existing.Review -Name 'id')
+        $recovered = [pscustomobject]@{
+            reviewId   = $recoveredId
+            commentIds = @()
+            runId      = $runId
+            headSha    = $headSha
+            postedAt   = [string](Get-PropertyValue -Object $existing.Review -Name 'submitted_at')
+            reconciled = $true
+        }
+        Write-JsonFile -Value $recovered -Path $resultPath
+        Write-Output "Run $runId already published review $recoveredId; recovered its receipt (no duplicate posted)."
+        Write-Output "reviewId: $recoveredId"
+        exit 0
+    }
 
-    # 2. Validate comments against pinned diff (refresh files list).
-    $files = @((Invoke-GhPaginated -Action 'refreshing changed files for line map' -Path "repos/$owner/$repo/pulls/$number/files").Items)
+    # 3. Validate comments against the diff pinned to base...head, not the PR's
+    #    mutable files view.
+    $files = @(Get-PinnedCompareFiles -Owner $owner -Repo $repo -BaseSha $pinnedBase -HeadSha $pinnedHead)
     Write-JsonFile -Value $files -Path (Join-Path $workspace 'changed-files.json')
     $diffMap = Get-DiffLineMap -Files $files
 
@@ -1615,6 +1965,10 @@ function Invoke-Post {
         ) -AllowFailure
     }
 
+    # Stamp the run marker so a retry that lost its receipt can still recognise
+    # this review on GitHub.
+    $working = Add-RunMarker -Payload $working -RunId $runId
+
     # Preserve exact outgoing payload before attempt.
     Write-JsonFile -Value $working -Path (Join-Path $workspace 'review.json')
 
@@ -1623,7 +1977,14 @@ function Invoke-Post {
     # 3. If gh rejects line locations, refresh + remap exactly once.
     if ($response.ExitCode -ne 0 -and $response.Text -match '(?i)(line|position|pull_request_review_thread|Path)') {
         Write-Warning 'GitHub rejected one or more line locations; refreshing diff and retrying once.'
-        $files2 = @((Invoke-GhPaginated -Action 're-refreshing changed files' -Path "repos/$owner/$repo/pulls/$number/files").Items)
+
+        # Re-pin before the second submission too. The rejection may itself be
+        # the first sign that the PR moved under us, and this is a separate
+        # publication attempt, not a continuation of the first.
+        [void](Assert-PinnedPair -Owner $owner -Repo $repo -Number $number `
+                -PinnedBase $pinnedBase -PinnedHead $pinnedHead -PayloadHead $headSha -Stage 'retry the post')
+
+        $files2 = @(Get-PinnedCompareFiles -Owner $owner -Repo $repo -BaseSha $pinnedBase -HeadSha $pinnedHead)
         Write-JsonFile -Value $files2 -Path (Join-Path $workspace 'changed-files.json')
         $diffMap2 = Get-DiffLineMap -Files $files2
 
@@ -1657,6 +2018,7 @@ function Invoke-Post {
             $working = Move-UnmappableToSummary -Payload $working -UnmappableComments @($stillBad)
         }
 
+        $working = Add-RunMarker -Payload $working -RunId $runId
         Write-JsonFile -Value $working -Path (Join-Path $workspace 'review.json')
         $response = Submit-Review -ReviewPayload $working
     }
@@ -1678,6 +2040,19 @@ function Invoke-Post {
 
     $created = ConvertFrom-GhJson -Text $response.Text -Action 'parsing created review'
     $reviewId = $created.id
+    $postedAt = (Get-Date).ToUniversalTime().ToString('o')
+
+    # Write the receipt the moment the review id is known, before the comment-id
+    # fetch. Anything that fails after this point leaves a retry a no-op instead
+    # of a duplicate; a crash before it is caught by the run marker on retry.
+    $result = [pscustomobject]@{
+        reviewId   = $reviewId
+        commentIds = @()
+        runId      = $runId
+        headSha    = $headSha
+        postedAt   = $postedAt
+    }
+    Write-JsonFile -Value $result -Path $resultPath
 
     # Collect comment ids from the review comments endpoint (paginated: a large
     # review exceeds one page, and a short receipt makes retries look wrong).
@@ -1685,21 +2060,16 @@ function Invoke-Post {
     $cResult = Invoke-GhPaginated -Action 'listing review comments' -Path "repos/$owner/$repo/pulls/$number/reviews/$reviewId/comments" -AllowFailure
     if ($cResult.ExitCode -eq 0) {
         $commentIds = @($cResult.Items | ForEach-Object { $_.id })
+        $result = [pscustomobject]@{
+            reviewId   = $reviewId
+            commentIds = $commentIds
+            runId      = $runId
+            headSha    = $headSha
+            postedAt   = $postedAt
+        }
+        Write-JsonFile -Value $result -Path $resultPath
     }
 
-    $postedAt = (Get-Date).ToUniversalTime().ToString('o')
-    $result = [pscustomobject]@{
-        reviewId   = $reviewId
-        commentIds = $commentIds
-        runId      = $runId
-        headSha    = $headSha
-        postedAt   = $postedAt
-    }
-    Write-JsonFile -Value $result -Path $resultPath
-    if ($resultPath -ne (Get-PostResultPath -Workspace $workspace)) {
-        # Latest-run pointer, so a human reading the workspace has one obvious file.
-        Write-JsonFile -Value $result -Path (Get-PostResultPath -Workspace $workspace)
-    }
     Write-JsonFile -Value $working -Path (Join-Path $workspace 'review.json')
 
     Write-Output "Posted COMMENT review $reviewId on $owner/$repo#$number"
@@ -1777,10 +2147,19 @@ try {
 
     if ($BuildPayload) {
         if ([string]::IsNullOrWhiteSpace($Findings) -or [string]::IsNullOrWhiteSpace($BaseSha) -or
-            [string]::IsNullOrWhiteSpace($HeadSha) -or [string]::IsNullOrWhiteSpace($Body)) {
-            throw '-BuildPayload requires -Findings, -BaseSha, -HeadSha, and -Body'
+            [string]::IsNullOrWhiteSpace($HeadSha)) {
+            throw '-BuildPayload requires -Findings, -BaseSha, and -HeadSha'
         }
-        Invoke-BuildPayload -FindingsPath $Findings -BaseSha $BaseSha -HeadSha $HeadSha -BodyArg $Body
+        $hasText = $PSBoundParameters.ContainsKey('BodyText')
+        $hasFile = -not [string]::IsNullOrWhiteSpace($BodyFile)
+        if ($hasText -and $hasFile) {
+            throw '-BuildPayload takes -BodyText or -BodyFile, not both.'
+        }
+        if (-not $hasText -and -not $hasFile) {
+            throw '-BuildPayload requires -BodyText <text> or -BodyFile <path>'
+        }
+        Invoke-BuildPayload -FindingsPath $Findings -BaseSha $BaseSha -HeadSha $HeadSha `
+            -BodyText $BodyText -BodyFile $BodyFile
         exit 0
     }
 
@@ -1796,7 +2175,7 @@ try {
         if ([string]::IsNullOrWhiteSpace($Payload)) {
             throw '-Post requires -Payload <path>'
         }
-        Invoke-Post -PayloadPath $Payload
+        Invoke-Post -PayloadPath $Payload -ExpectedRunId $RunId
         exit 0
     }
 }
