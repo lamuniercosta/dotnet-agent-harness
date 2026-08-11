@@ -118,6 +118,17 @@ Assert-That "gemini-api appears on mechanical /task" ($null -ne $geminiApiEntry)
 Assert-That "gemini-api resolves as KnownHost=false" ($null -ne $geminiApiEntry -and $geminiApiEntry.KnownHost -eq $false)
 Assert-That "gemini-api mechanical rows use fast (Flash Lite)" ($null -ne $geminiApiEntry -and $geminiApiEntry.Tier -eq 'fast')
 
+$implementOpenRouterEntry = $resolvedUnpinned.Chain | Where-Object { $_.Host -eq 'openrouter' } | Select-Object -First 1
+Assert-That "OpenRouter is not in the /implement route" ($null -eq $implementOpenRouterEntry)
+
+$resolvedCodeReview = Resolve-RouteChain -Command '/code-review' -Map $map -RepoRoot $unpinnedRoot
+$codeReviewOpenRouterEntry = $resolvedCodeReview.Chain | Where-Object { $_.Host -eq 'openrouter' } | Select-Object -First 1
+Assert-That "OpenRouter is the preferred /code-review route" ($null -ne $codeReviewOpenRouterEntry -and $resolvedCodeReview.Chain[0].Host -eq 'openrouter')
+Assert-That "OpenRouter is host-level advice, not an agents.tiers config gap" ($codeReviewOpenRouterEntry.KnownHost -eq $false -and $codeReviewOpenRouterEntry.Unpinned -eq $true)
+
+$resolvedShipReview = Resolve-RouteChain -Command '/ship-review' -Map $map -RepoRoot $unpinnedRoot
+Assert-That "OpenRouter is the preferred /ship-review route" ($resolvedShipReview.Chain[0].Host -eq 'openrouter')
+
 $claudeKnown = $resolvedUnpinned.Chain | Where-Object { $_.Host -eq 'claude' } | Select-Object -First 1
 Assert-That "a host inside agents.tiers is flagged KnownHost=true" ($claudeKnown.KnownHost -eq $true)
 
