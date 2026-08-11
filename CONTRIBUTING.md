@@ -120,8 +120,9 @@ Also confirm before a release:
 
 - `dotnet build` and `dotnet test` run clean in `fixtures/BadCode` after
   `apply-fix.ps1`
-- The gate scripts run on Linux — CI is `ubuntu-latest` and the scripts are
-  authored on Windows
+- The gate scripts run on Linux and Windows — `self-tests` in
+  `lint-harness.yml` is a `ubuntu-latest` + `windows-latest` matrix, the other
+  jobs are `ubuntu-latest`, and the scripts are authored on Windows
 - `README.md`'s displayed version, `CHANGELOG.md`, and `VERSION` agree
 
 ## Style
