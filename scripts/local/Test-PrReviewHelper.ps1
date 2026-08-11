@@ -5,8 +5,9 @@
 #
 #   1. Resolution forms and repository ownership: 'resolve succeeds against the
 #      integer PR-number form', 'resolve succeeds against the current-branch
-#      form', 'resolve succeeds for a same-repository PR', and 'resolve succeeds
-#      for a fork PR'.
+#      form', 'resolve succeeds against a multi-page PR' (the URL form — that
+#      scenario's target is https://github.com/acme/widgets/pull/7), 'resolve
+#      succeeds for a same-repository PR', and 'resolve succeeds for a fork PR'.
 #   2. Pagination and the compare cap: 'both pages of check runs survive
 #      pagination', 'the exact-300 boundary case is still proven complete', and
 #      'the pinned map holds every changed file, not the first 300'.
