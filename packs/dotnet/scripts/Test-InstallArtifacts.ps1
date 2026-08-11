@@ -340,7 +340,7 @@ try {
     } else { @() }
 
     Assert-That 'the default installs every canonical skill for Codex' `
-        (($sourceSkillNames.Count -eq 25) -and
+        (($sourceSkillNames.Count -eq 26) -and
          (@($sourceSkillNames | Where-Object { $_ -notin $installedSkillNames }).Count -eq 0)) `
         'a missing .agents/skills directory silently removes part of the workflow'
     Assert-That 'the four pipeline entry skills are present for Codex' `
@@ -452,7 +452,7 @@ try {
     $legacyPath = Join-Path $repo '.claude/agents/code-reviewer.md'
     New-Item -ItemType Directory -Path (Split-Path $legacyPath -Parent) -Force | Out-Null
     $legacy = Get-Content -LiteralPath (Join-Path $harnessRoot '.claude/agents/code-reviewer.md') -Raw
-    $legacy = $legacy -replace '(?m)^tier: balanced$', 'model: inherit'
+    $legacy = $legacy -replace '(?m)^tier: balanced\r?$', 'model: inherit'
     [IO.File]::WriteAllText($legacyPath, $legacy, [Text.UTF8Encoding]::new($false))
     $output = Invoke-Install -Repo $repo -Platform 'claude'
     $adopted = Get-Content -LiteralPath $legacyPath -Raw

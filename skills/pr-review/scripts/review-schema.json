@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dotnet-agent-harness.local/pr-review/review-schema.json",
+  "title": "pr-review finding and reviewPayload schemas",
+  "description": "Deterministic shapes used by skills/pr-review/scripts/pr-review.ps1. Semantic analysis stays in the model; this schema only constrains mechanics.",
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "description": "One review finding. Only CONFIRMED findings are eligible for inline placement; PLAUSIBLE findings must stay in the summary (as questions), never as inline comments. A Low-severity finding is additionally eligible for inline placement only when it carries a non-empty 'rule' citation; otherwise it too is moved to the summary. A suggestion is rendered as a committable GitHub suggestion fence only when 'suggestion_verified' is true; otherwise it renders as a plain fenced code block. The helper enforces both gates in -BuildPayload.",
+      "required": ["severity", "category", "file", "verdict"],
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": ["Critical", "High", "Medium", "Low"]
+        },
+        "category": {
+          "type": "string",
+          "enum": ["risk", "security", "standards", "spec", "coverage", "performance"]
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "type": "string",
+          "enum": ["CONFIRMED", "PLAUSIBLE"],
+          "description": "CONFIRMED = eligible for inline; PLAUSIBLE = summary-only questions."
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "side": {
+          "type": "string",
+          "enum": ["LEFT", "RIGHT"]
+        },
+        "start_side": {
+          "type": "string",
+          "enum": ["LEFT", "RIGHT"]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "failure_scenario": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string"
+        },
+        "confidence": {
+          "type": ["string", "number"]
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "symbol": {
+          "type": "string",
+          "description": "Optional enclosing symbol (method, type, function) the finding sits in. Line-independent, so it discriminates two identically-worded findings in one file across reruns where the line alone would shift."
+        },
+        "context": {
+          "type": "string",
+          "description": "Optional line-independent location context (normalized hunk text) used in place of 'symbol' when no symbol name applies."
+        },
+        "hunk_context": {
+          "type": "string",
+          "description": "Normalized text of the enclosing hunk, used as the line-independent discriminator when neither a symbol name nor a shorter context applies."
+        },
+        "placement": {
+          "type": "string",
+          "enum": ["inline", "file", "summary"],
+          "description": "Requested placement. Inline is valid only when verdict is CONFIRMED and a diff location is present."
+        },
+        "rule": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Citation of the explicit repository rule (source path plus the rule text or section) backing this finding. Required for a Low-severity finding to be eligible for inline placement; ignored for other severities."
+        },
+        "suggestion": {
+          "type": "string",
+          "description": "Candidate replacement text. Suggestion text containing a fence marker is refused outright."
+        },
+        "suggestion_verified": {
+          "type": "boolean",
+          "description": "The suggestion block is emitted as a GitHub ```suggestion fence only when this is true, meaning the replacement was checked to be exact, local, and correct at the pinned head; otherwise the text is rendered as a plain fenced code block that cannot be committed with one click."
+        },
+        "body": {
+          "type": "string",
+          "description": "Optional pre-rendered inline comment body. When absent, -BuildPayload composes one from severity/category/summary/failure_scenario/evidence/suggestion."
+        },
+        "repo": {
+          "type": "string",
+          "description": "Optional owner/repo used when fingerprinting outside a workspace context."
+        },
+        "pr": {
+          "type": ["integer", "string"],
+          "description": "Optional PR number used when fingerprinting outside a workspace context."
+        }
+      },
+      "additionalProperties": true
+    },
+    "reviewComment": {
+      "type": "object",
+      "required": ["path", "body"],
+      "dependentRequired": {
+        "line": ["side"],
+        "start_line": ["start_side"]
+      },
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "body": {
+          "type": "string",
+          "minLength": 1
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "start_line": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "side": {
+          "type": "string",
+          "enum": ["LEFT", "RIGHT"]
+        },
+        "start_side": {
+          "type": "string",
+          "enum": ["LEFT", "RIGHT"]
+        }
+      },
+      "additionalProperties": true,
+      "description": "Requires either line (single-line) or start_line+line (multi-line). GitHub's line-comment API needs the location expressed as line+side (and start_line+start_side for multi-line ranges), so side is required whenever line is present, and start_side whenever start_line is present; side/start_side must be LEFT or RIGHT when present."
+    },
+    "reviewPayload": {
+      "type": "object",
+      "required": ["commit_id", "event", "body"],
+      "properties": {
+        "commit_id": {
+          "type": "string",
+          "minLength": 7,
+          "description": "Pinned PR head SHA."
+        },
+        "event": {
+          "type": "string",
+          "const": "COMMENT",
+          "description": "Always COMMENT. Never APPROVE or REQUEST_CHANGES."
+        },
+        "body": {
+          "type": "string",
+          "description": "Review summary markdown."
+        },
+        "comments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/reviewComment"
+          }
+        }
+      },
+      "additionalProperties": true
+    }
+  }
+}
