@@ -73,3 +73,29 @@ evidence for whether the authored judgments in `route-map.json` hold up. See
 `docs/adr/0008-route-map-records-work-demands.md` for why the map records what
 work demands rather than what models provide, and `specs/046-route-map-advisor/`
 for the reasoning behind each row. Neither script is shipped by `install.ps1`.
+
+## OpenRouter via Junie
+
+`openrouter` is the preferred route only for `/code-review` and `/ship-review`
+in this checkout. Other stages retain their existing routes and may use other
+models. The launcher uses `OPENROUTER_API_KEY` only in the environment and
+defaults to `z-ai/glm-5.2`; it does not write the key to `.junie/`, the command
+line, or a repository file:
+
+```powershell
+pwsh ./scripts/local/Invoke-OpenRouterTask.ps1 -Tier deep -Task 'Review the current diff on the Risk, Standards, and Spec axes.'
+```
+
+`fast`, `balanced`, and `deep` map to Junie's `low`, `medium`, and `high`
+effort respectively. GLM 5.2 is used for all three by default; select a
+different OpenRouter model for one task with `-Model`:
+
+```powershell
+pwsh ./scripts/local/Invoke-OpenRouterTask.ps1 -Tier balanced -Model qwen/qwen3-coder -Task 'Review this diff for regressions.'
+```
+
+Run the documented dry-run test without spending credits:
+
+```powershell
+pwsh ./scripts/local/Test-OpenRouterTask.ps1
+```
