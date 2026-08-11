@@ -1303,6 +1303,16 @@ Set-Content -LiteralPath (Join-Path $fixtures 'threads.json') -Encoding UTF8 -Va
 {"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}
 '@
 
+# Invoke-Gh merges gh's stderr into stdout, so a deprecation notice can land in
+# front of an otherwise valid GraphQL body. A raw ConvertFrom-Json chokes on the
+# prefix and drops the page as "no data"; the parse must strip the warning line
+# and still see the thread. The node is real so we can prove it survived, not
+# just that coverage defaulted to complete.
+Set-Content -LiteralPath (Join-Path $fixtures 'threads-warned.json') -Encoding UTF8 -Value @'
+Warning: gh update available; run gh upgrade to install the latest release
+{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[{"id":"THREAD_warned","isResolved":false,"comments":{"pageInfo":{"hasNextPage":false},"nodes":[{"path":"src/f.cs","body":"prior note"}]}}]}}}}}
+'@
+
 Set-Content -LiteralPath (Join-Path $fixtures 'check-runs.json') -Encoding UTF8 -Value @'
 {"total_count":1,"check_runs":[{"name":"build","conclusion":"success"}]}
 {"total_count":1,"check_runs":[{"name":"lint","conclusion":"success"}]}
@@ -1943,6 +1953,26 @@ try {
             ([string]$threadState4.incompleteReason -match 'OAuth App access restrictions')
         Assert-True 'incomplete thread coverage is reported to the caller' `
             ($resolve4.Text -match 'threadCoverage: INCOMPLETE')
+
+        # ── A warning line ahead of the JSON must not sink the whole page ────
+        # gh's stderr is merged into stdout, so a deprecation notice can precede
+        # the GraphQL body. A raw parse drops it as "no data" and falsely marks
+        # coverage incomplete; routing through ConvertFrom-GhJson strips the
+        # prefix so the thread is seen and coverage stays complete.
+        $script:testThreads = 'threads-warned.json'
+        $resolve5 = Invoke-Helper -HelperArgs @('-Resolve', $target)
+        $script:testThreads = 'threads.json'
+        Assert-Equal 'resolve survives a warning-prefixed GraphQL response' 0 $resolve5.ExitCode
+        $workspace5 = $null
+        if ($resolve5.Text -match '(?m)^workspace:\s*(.+)$') { $workspace5 = $Matches[1].Trim() }
+        $threadState5 = Get-Content -LiteralPath (Join-Path $workspace5 'review-threads.json') -Raw | ConvertFrom-Json
+        Assert-True 'a warning-prefixed response still parses as complete coverage' `
+            ([bool]$threadState5.complete)
+        Assert-Equal 'the thread behind the warning line is captured' 1 @($threadState5.threads).Count
+        # Project ids through the pipeline so an empty array (the pre-fix path)
+        # yields nothing rather than tripping StrictMode on a missing property.
+        $threadIds5 = @($threadState5.threads | ForEach-Object { [string]$_.id })
+        Assert-True 'the captured thread keeps its id' ($threadIds5 -contains 'THREAD_warned')
 
         # ── A payload outside its canonical run directory is refused ─────────
         # pinned.json was trusted purely for sitting beside the payload, so a
