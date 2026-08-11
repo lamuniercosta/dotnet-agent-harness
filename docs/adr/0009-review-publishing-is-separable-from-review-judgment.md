@@ -60,6 +60,30 @@ produce findings first. Issue #90 owns that review judgment. Watch mode,
 try-fix probes, multi-pass convergence, and deep-review policy are absent rather
 than implied.
 
+## Known gap
+
+On Windows the workspace is created and then tightened, not created tight. The
+POSIX path applies 0700 as part of the directory create — `Directory.CreateDirectory`
+with a mode — so no other user ever holds a handle to a permissive version of it.
+Windows has no mode-carrying create: `New-PrivateDirectory` calls `New-Item` and
+the owner-only DACL is applied immediately afterwards by `Set-PrivateDirectoryMode`.
+Between those two calls the new directory carries whatever ACL it inherits from its
+parent. On a host where TEMP is redirected to a shared, world-inheritable location,
+another local user could open a handle in that window and keep it across the
+tightening.
+
+The exposure is bounded. Every level of the predictable tree —
+`pr-review/<owner>-<repo>`, `<pr>-<sha>`, and the per-run directories — is created
+through the same path, so once a level has been locked down the ACL its children
+inherit is already the restricted one, and `Assert-WindowsWorkspaceOwner` refuses
+any directory this user does not own before the workspace is used. The residual
+race is the first create under a freshly redirected, shared TEMP, before the
+top-level `pr-review` directory has been tightened. Closing it needs a native
+create-with-security-descriptor call (`CreateDirectoryW` with a
+`SECURITY_ATTRIBUTES`), which is deferred rather than added here because it trades
+the salvage's PowerShell-only footprint for P/Invoke. It is recorded so that a
+future change makes that trade deliberately rather than discovering the gap again.
+
 ## Consequences
 
 Review judgment can evolve without changing publication safety, and the helper
