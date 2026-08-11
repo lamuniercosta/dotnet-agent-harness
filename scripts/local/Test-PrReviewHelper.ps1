@@ -263,6 +263,22 @@ try {
     Assert-Equal 'a plain nested path with no reparse point in any ancestor still reads fine' `
         'nested body text' ((Get-BodyText -BodyFile $realNestedFile).Trim())
 
+    # With -Out present the scope tightens from "anywhere under the workspace
+    # root" to "the payload's own directory". A body file beside the payload is
+    # read; one that merely shares the workspace root but sits in a different
+    # directory — which the containment check alone would accept — is refused.
+    $outBeside = Join-Path $bodyDir 'review.json'
+    Assert-Equal 'a body file beside -Out is read' `
+        'body from an owned file' ((Get-BodyText -BodyFile $insideFile -OutPath $outBeside).Trim())
+
+    $threwOutScope = $false
+    $leakedOutScope = $null
+    try { $leakedOutScope = Get-BodyText -BodyFile $realNestedFile -OutPath $outBeside } catch { $threwOutScope = $true }
+    Assert-True 'a body file in a different directory than -Out is refused even though it is inside the workspace' `
+        $threwOutScope
+    Assert-True 'the out-of-scope body file contents are never returned' `
+        ([string]::IsNullOrEmpty($leakedOutScope) -or $leakedOutScope -notmatch 'nested body text')
+
     if ($linkCreated) {
         $linkedSecretPath = Join-Path $linkDir 'SECRET'
         $ancestorThrew = $false

@@ -43,7 +43,8 @@ Run exactly one verb per invocation:
 
 Use `pwsh ./skills/pr-review/scripts/pr-review.ps1 -Help` for parameters and
 exit behavior. Prefer `-BodyText` for literal prose. `-BodyFile` reads only from
-inside the owned workspace.
+inside the owned workspace, and when `-Out` is given it must sit in the payload's
+own directory.
 
 ## Trust boundary
 
