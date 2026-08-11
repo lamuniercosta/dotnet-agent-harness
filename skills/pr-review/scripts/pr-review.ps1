@@ -742,30 +742,6 @@ function Read-WorkspacePinned {
     return Read-JsonFile -Path $meta
 }
 
-function Find-WorkspaceForPr {
-    <#
-      Locate an existing workspace for owner/repo/pr (any head). Prefers the
-      pinned head recorded in the newest workspace folder.
-    #>
-    param(
-        [Parameter(Mandatory)][string]$Owner,
-        [Parameter(Mandatory)][string]$Repo,
-        [Parameter(Mandatory)][int]$Pr
-    )
-
-    $safeOwner = ($Owner -replace '[^A-Za-z0-9._-]', '_')
-    $safeRepo = ($Repo -replace '[^A-Za-z0-9._-]', '_')
-    $repoDir = Join-Path (Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review') "${safeOwner}-${safeRepo}"
-    if (-not (Test-Path -LiteralPath $repoDir)) { return $null }
-
-    $prefix = "$Pr-"
-    $candidates = @(Get-ChildItem -LiteralPath $repoDir -Directory -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name.StartsWith($prefix) } |
-            Sort-Object LastWriteTime -Descending)
-    if ($candidates.Count -eq 0) { return $null }
-    return $candidates[0].FullName
-}
-
 function Get-NormalizedFullPath {
     param([Parameter(Mandatory)][string]$Path)
     $full = [System.IO.Path]::GetFullPath($Path)
@@ -1451,10 +1427,10 @@ function Invoke-Dedupe {
 }
 
 # ---------------------------------------------------------------------------
-# Completion ledger and watch decision
+# Completion ledger
 #
-# Both verbs are pure: they read one state document and print a decision. The
-# host still owns gathering the state and acting on the answer. What they take
+# The verb is pure: it reads one state document and prints a decision. The
+# host still owns gathering the state and acting on the answer. What it takes
 # away from the host is the arithmetic — the two places where SKILL.md states a
 # rule ("a missing, failed, rate-limited, or timed-out reviewer is not a clean
 # axis"; "submit at most one review per stable head") that a prose-only
