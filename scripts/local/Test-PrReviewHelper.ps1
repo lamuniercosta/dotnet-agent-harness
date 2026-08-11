@@ -1261,6 +1261,14 @@ Set-Content -LiteralPath (Join-Path $fixtures 'files-301.json') -Encoding UTF8 -
     '[' + $first300 + ']'
     '[' + $file301 + ']'
 )
+# Same 301-file list, but file 301 arrives with an empty blob sha. Its path is
+# still present in tree-301, so the only thing under test is whether a sha-less
+# non-removed entry is refused rather than waved through as proven.
+$file301NoSha = '{"filename":"src/f301.cs","status":"modified","sha":"",' + $bigPatchSuffix + '}'
+Set-Content -LiteralPath (Join-Path $fixtures 'files-301-nosha.json') -Encoding UTF8 -Value @(
+    '[' + $first300 + ']'
+    '[' + $file301NoSha + ']'
+)
 $treeEntries = (1..301 | ForEach-Object {
     '{"path":"src/f' + $_ + '.cs","mode":"100644","type":"blob","sha":"' + (Get-TestBlobSha $_) + '","size":10}'
 }) -join ','
@@ -1449,6 +1457,7 @@ if ($joined -match 'compare/') {
     Emit 'compare.json'
 }
 if ($joined -match 'pulls/7/files') {
+    if (-not [string]::IsNullOrWhiteSpace($env:PRREVIEW_TEST_FILES_FIXTURE)) { Emit $env:PRREVIEW_TEST_FILES_FIXTURE }
     if ($env:PRREVIEW_TEST_BIG -eq '1') { Emit 'files-301.json' }
     Emit 'files.json'
 }
@@ -1512,6 +1521,7 @@ $script:testPostLandsThenFails = '0'
 $script:testPostFails = '0'
 $script:testPostFailLineOnce = '0'
 $script:testCompareFixture = ''
+$script:testFilesFixture = ''
 $script:testTree = 'tree-301.json'
 $script:testTreeFail = '0'
 $script:testBaseRepo = 'acme/widgets'
@@ -1537,6 +1547,7 @@ function Use-FakeGhEnv {
     $env:PRREVIEW_TEST_POST_FAIL_LINE_ONCE = $script:testPostFailLineOnce
     $env:PRREVIEW_TEST_POST_ATTEMPTS = $postAttempts
     $env:PRREVIEW_TEST_COMPARE_FIXTURE = $script:testCompareFixture
+    $env:PRREVIEW_TEST_FILES_FIXTURE = $script:testFilesFixture
     $env:PRREVIEW_TEST_TREE = $script:testTree
     $env:PRREVIEW_TEST_TREE_FAIL = $script:testTreeFail
     $env:PRREVIEW_TEST_PR_READS = $prReads
@@ -1999,6 +2010,26 @@ try {
         Assert-True 'an unavailable head tree refuses the fallback' (-not [bool]$mapNoTree.Complete)
         Assert-True 'the unavailable-tree reason names the unproven fallback' `
             ($mapNoTree.Reason -match 'could not be proven against the pinned head tree')
+
+        # A non-removed fallback entry that arrives with no blob sha cannot be
+        # pinned to the head tree. The path still exists in tree-301, so the old
+        # `if ($entrySha -and …)` guard waved it through as proven — exactly the
+        # ABA hole the tree proof exists to close. It must abort and name the path.
+        $script:testTree = 'tree-301.json'
+        $script:testFilesFixture = 'files-301-nosha.json'
+        Use-FakeGhEnv
+        $mapNoShaThrew = $false
+        $mapNoShaError = ''
+        try {
+            [void](Get-PinnedDiffFiles -Owner 'acme' -Repo 'widgets' -Number 7 `
+                    -BaseSha $baseSha -HeadSha $headSha -ExpectedFileCount 301)
+        }
+        catch { $mapNoShaThrew = $true; $mapNoShaError = [string]$_ }
+        $script:testFilesFixture = ''
+        Use-FakeGhEnv
+        Assert-True 'a null blob sha on a non-removed entry aborts the fallback' $mapNoShaThrew
+        Assert-True 'the null-sha refusal names the unproven path' `
+            ($mapNoShaError -match 'no blob sha to prove against the pinned head tree.*src/f301\.cs')
 
         # ── The 300-file cap boundary is "-ge", not "-gt" ─────────────────────
         # compare-capped.json returns exactly 300 files. With ExpectedFileCount

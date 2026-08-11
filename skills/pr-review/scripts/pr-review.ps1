@@ -2922,7 +2922,15 @@ function Assert-FallbackFilesMatchPinnedTree {
             $problems.Add("file missing from the pinned head tree ($path)")
             continue
         }
-        if ($entrySha -and $treeMap[$path] -ne $entrySha) {
+        if (-not $entrySha) {
+            # A non-removed entry with no blob sha cannot be pinned to the head
+            # tree. Skipping the comparison here (the old `if ($entrySha -and …)`
+            # guard) let a sha-less entry pass as proven, which is exactly the
+            # ABA hole this proof exists to close. Refuse it instead.
+            $problems.Add("no blob sha to prove against the pinned head tree ($path)")
+            continue
+        }
+        if ($treeMap[$path] -ne $entrySha) {
             $problems.Add("blob sha mismatch at $path (list=$entrySha tree=$($treeMap[$path]))")
         }
     }
