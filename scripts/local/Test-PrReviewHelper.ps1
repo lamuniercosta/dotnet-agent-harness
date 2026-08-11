@@ -291,6 +291,22 @@ try {
     else {
         Write-Host '  SKIP     ancestor-reparse containment assertions (junction/symlink unavailable in this environment)' -ForegroundColor Yellow
     }
+
+    # The round-2 Critical: with -Out set, the old code dropped the
+    # workspace-root containment and checked only that -BodyFile shared a
+    # directory with -Out. Because -Out was itself never validated, a body file
+    # and an -Out *both outside the workspace* (an SSH key beside a payload in
+    # the same foreign directory) passed the same-directory check and the key
+    # was read into the published body. Containment now runs first, so the pair
+    # is refused before the same-directory constraint is consulted. $outsideFile
+    # holds 'SECRET' and sits beside $outsidePayload — both outside the root.
+    $outsidePayload = Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review-outside-payload.json'
+    $threwPair = $false
+    $leakedPair = $null
+    try { $leakedPair = Get-BodyText -BodyFile $outsideFile -OutPath $outsidePayload } catch { $threwPair = $true }
+    Assert-True 'a body file outside the workspace is refused even when -Out sits beside it' $threwPair
+    Assert-True 'the out-of-workspace secret is never returned through the -Out path' `
+        ([string]::IsNullOrEmpty($leakedPair) -or $leakedPair -notmatch 'SECRET')
 }
 finally {
     Remove-Item -LiteralPath $bodyDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -558,6 +574,68 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $fenceSandbox -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host ''
+Write-Host '-BuildPayload -Out (destination must be inside the owned workspace)'
+
+# -Out is a write primitive: a bare Set-Content plus a provenance sidecar. An
+# unvalidated -Out drops the payload anywhere on disk and — because a -BodyFile
+# beside -Out is trusted — reads any file it names into the published body.
+# -BuildPayload now proves -Out lives inside the workspace root before reading
+# or writing anything.
+$buildOutRun = Join-Path (Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review') `
+    ("buildout-selftest-{0}" -f [guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Path $buildOutRun -Force | Out-Null
+try {
+    $boFindings = Join-Path $buildOutRun 'findings.json'
+    Set-Content -LiteralPath $boFindings -Encoding UTF8 -Value (, @([pscustomobject]@{
+                severity = 'Medium'; category = 'risk'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+                placement = 'inline'; line = 5; summary = 'a fence-free finding'
+            }) | ConvertTo-Json -Depth 20)
+
+    # Happy path: -Out inside an owned run directory writes the payload and its
+    # provenance sidecar.
+    $boOut = Join-Path $buildOutRun 'review.json'
+    $boOk = Invoke-HelperOffline -HelperArgs @(
+        '-BuildPayload', '-Findings', $boFindings, '-BaseSha', ('1' * 40), '-HeadSha', ('2' * 40),
+        '-BodyText', 'Summary.', '-Out', $boOut)
+    Assert-Equal '-BuildPayload -Out inside the workspace succeeds' 0 $boOk.ExitCode
+    Assert-True '-BuildPayload -Out writes the payload file' (Test-Path -LiteralPath $boOut)
+    Assert-True '-BuildPayload -Out writes the provenance sidecar' (Test-Path -LiteralPath ($boOut + '.provenance.json'))
+
+    # -Out outside the workspace root is refused, and nothing is written.
+    $boEscape = Join-Path ([System.IO.Path]::GetTempPath()) ("pr-review-outesc-{0}.json" -f [guid]::NewGuid().ToString('n'))
+    Remove-Item -LiteralPath $boEscape -Force -ErrorAction SilentlyContinue
+    $boBad = Invoke-HelperOffline -HelperArgs @(
+        '-BuildPayload', '-Findings', $boFindings, '-BaseSha', ('1' * 40), '-HeadSha', ('2' * 40),
+        '-BodyText', 'Summary.', '-Out', $boEscape)
+    Assert-Equal '-BuildPayload refuses an -Out outside the workspace root' 1 $boBad.ExitCode
+    Assert-True 'the -Out refusal names the workspace-root requirement' `
+        ($boBad.Text -match 'must live inside the review workspace root')
+    Assert-True 'a refused -Out writes no payload file' (-not (Test-Path -LiteralPath $boEscape))
+    Assert-True 'a refused -Out writes no provenance sidecar' (-not (Test-Path -LiteralPath ($boEscape + '.provenance.json')))
+
+    # -BodyFile beside -Out, both outside the workspace: the arbitrary-file read
+    # the same-directory check alone used to allow. Refused, and the key never
+    # reaches output.
+    $boSecretDir = Join-Path ([System.IO.Path]::GetTempPath()) ("pr-review-outsecret-{0}" -f [guid]::NewGuid().ToString('n'))
+    New-Item -ItemType Directory -Path $boSecretDir -Force | Out-Null
+    try {
+        $boSecret = Join-Path $boSecretDir 'id_rsa'
+        Set-Content -LiteralPath $boSecret -Value 'PRIVATE-KEY-MATERIAL' -Encoding utf8
+        $boSecretOut = Join-Path $boSecretDir 'review.json'
+        $boLeak = Invoke-HelperOffline -HelperArgs @(
+            '-BuildPayload', '-Findings', $boFindings, '-BaseSha', ('1' * 40), '-HeadSha', ('2' * 40),
+            '-BodyFile', $boSecret, '-Out', $boSecretOut)
+        Assert-Equal '-BuildPayload refuses a -BodyFile/-Out pair outside the workspace' 1 $boLeak.ExitCode
+        Assert-True 'the refused pair never wrote the payload' (-not (Test-Path -LiteralPath $boSecretOut))
+        Assert-True 'the private key is never echoed to output' ($boLeak.Text -notmatch 'PRIVATE-KEY-MATERIAL')
+    }
+    finally { Remove-Item -LiteralPath $boSecretDir -Recurse -Force -ErrorAction SilentlyContinue }
+}
+finally {
+    Remove-Item -LiteralPath $buildOutRun -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host ''

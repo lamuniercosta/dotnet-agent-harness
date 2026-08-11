@@ -1560,6 +1560,52 @@ function Invoke-Ledger {
 # Build payload / markdown
 # ---------------------------------------------------------------------------
 
+function Assert-WorkspaceContainedPath {
+    <#
+      Prove a full path sits inside the review workspace root
+      (<temp>/pr-review) with no symlink or NTFS junction on any ancestor
+      directory. Used for both a -BodyFile that is read and an -Out that is
+      written, so a single invocation can never reach outside the tree this
+      script owns.
+
+      The prefix check is purely lexical: it only tells us the leaf's *name*
+      sits under the root, nothing about whether an ancestor got there by a
+      reparse point. A junction on any directory between the root and the leaf
+      rewrites the access to wherever it points, so `<root>/run/link/hosts.yml`
+      can resolve outside the workspace entirely while the path string still
+      starts with the root prefix. Walk every level the workspace owns,
+      outermost first, applying the same real-directory / not-a-reparse-point /
+      owned-by-current-user check Assert-CanonicalRunWorkspace applies to the
+      run tree, so a redirect anywhere in the chain is caught before the leaf is
+      trusted. The leaf itself is not required to exist — only its ancestors are
+      walked — so this validates an -Out destination before it is created.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$FullPath,
+        [Parameter(Mandatory)][string]$Description
+    )
+
+    $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
+    $root = Get-NormalizedFullPath -Path (Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review')
+    $rootPrefix = $root + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $FullPath.StartsWith($rootPrefix, $comparison)) {
+        throw "$Description must live inside the review workspace root '$root'; refusing '$FullPath'."
+    }
+
+    $parentDir = Split-Path -Parent $FullPath
+    $relative = $parentDir.Substring($root.Length).Trim([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+    $segments = @()
+    if ($relative) {
+        $segments = @($relative -split '[\\/]+' | Where-Object { $_ -ne '' })
+    }
+    $current = $root
+    Assert-SafeWorkspacePath -Path $current
+    foreach ($segment in $segments) {
+        $current = Join-Path $current $segment
+        Assert-SafeWorkspacePath -Path $current
+    }
+}
+
 function Get-BodyText {
     <#
       Text and file are separate inputs on purpose.
@@ -1572,13 +1618,16 @@ function Get-BodyText {
       therefore never probed as a path, and a body file must live inside the
       workspace root this script owns.
 
-      When -BuildPayload also writes the payload to a known -Out, the scope
-      tightens further: the body file must sit in the *same directory* as that
-      payload. -Out is always the run directory this invocation owns, so there
-      is no reason for the body to live anywhere else, and pinning the two
-      together shrinks the readable surface from all of <temp>/pr-review down to
-      one directory. Without -Out (the stdout path) there is no such anchor, so
-      it falls back to the workspace-root containment check.
+      Workspace-root containment is enforced on *every* -BodyFile read, -Out or
+      not. -Out narrows the readable surface further — the body file must then
+      sit in the payload's own directory — but it is an *additional* constraint
+      layered on top of containment, never a replacement for it: an earlier
+      version dropped the root check whenever -Out was set, and because -Out was
+      itself never validated, a caller could pass -Out and -BodyFile as a pair
+      of paths outside the workspace (a private key beside a payload written to
+      the same foreign directory) and the same-directory check would pass. The
+      root walk now runs first, so both paths are proven inside the owned tree
+      before the same-directory constraint is even consulted.
     #>
     param([string]$BodyText, [string]$BodyFile, [string]$OutPath)
 
@@ -1589,52 +1638,21 @@ function Get-BodyText {
     $full = Get-NormalizedFullPath -Path $BodyFile
     $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
 
+    # Always: the body file must live inside the workspace root, with no reparse
+    # point on any ancestor. This is the containment the trust boundary depends
+    # on; it runs regardless of -Out.
+    Assert-WorkspaceContainedPath -FullPath $full -Description '-BodyFile'
+
     if (-not [string]::IsNullOrWhiteSpace($OutPath)) {
-        <#
-          Tight path: pin the read to the payload's own directory. This is
-          strictly narrower than the workspace-root containment below, and it
-          needs no ancestor walk — a junction between the temp root and this
-          directory would redirect the payload *write* to the same place, so
-          the read can only reach files the caller already controls. A symlink
-          on the leaf itself is still caught by the reparse check below.
-        #>
+        # Additionally pin the read to the payload's own directory. -Out is
+        # always the run directory this invocation owns, so there is no reason
+        # for the body to live anywhere else, and pinning the two together
+        # shrinks the readable surface from all of <temp>/pr-review down to one
+        # directory.
         $outDir = Get-NormalizedFullPath -Path (Split-Path -Parent (Get-NormalizedFullPath -Path $OutPath))
         $bodyDir = Get-NormalizedFullPath -Path (Split-Path -Parent $full)
         if (-not [string]::Equals($bodyDir, $outDir, $comparison)) {
             throw "-BodyFile must sit in the same directory as -Out ('$outDir'); refusing to read '$full'."
-        }
-    }
-    else {
-        $root = Get-NormalizedFullPath -Path (Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review')
-        $rootPrefix = $root + [System.IO.Path]::DirectorySeparatorChar
-        if (-not $full.StartsWith($rootPrefix, $comparison)) {
-            throw "-BodyFile must live inside the review workspace root '$root'; refusing to read '$full'."
-        }
-
-        <#
-          The prefix check above is purely lexical and only tells us the leaf's
-          *name* sits under the root; it says nothing about whether an ancestor
-          directory got there by a symlink or NTFS junction. A junction on any
-          directory between the root and the file rewrites the read to wherever
-          that junction points, so `<root>/run/link/hosts.yml` can resolve
-          outside the workspace entirely while `$full` still starts with
-          `$rootPrefix`. Walk every level the workspace owns, outermost first,
-          and apply the same real-directory / not-a-reparse-point /
-          owned-by-current-user check Assert-CanonicalRunWorkspace already
-          applies to the run tree, so a redirect anywhere in the chain is caught
-          before the leaf is trusted.
-        #>
-        $parentDir = Split-Path -Parent $full
-        $relative = $parentDir.Substring($root.Length).Trim([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-        $segments = @()
-        if ($relative) {
-            $segments = @($relative -split '[\\/]+' | Where-Object { $_ -ne '' })
-        }
-        $current = $root
-        Assert-SafeWorkspacePath -Path $current
-        foreach ($segment in $segments) {
-            $current = Join-Path $current $segment
-            Assert-SafeWorkspacePath -Path $current
         }
     }
 
@@ -1852,6 +1870,17 @@ function Invoke-BuildPayload {
     )
 
     $null = $BaseSha  # reserved for callers/workspace symmetry; payload uses head
+
+    # -Out is written with a bare Set-Content (plus a provenance sidecar), so it
+    # is a write primitive: an unvalidated -Out lets a caller drop the payload
+    # anywhere on disk, and — because a -BodyFile beside -Out is trusted — read
+    # any file it names into the published body. Prove -Out lives inside the
+    # owned workspace before anything is read or written. Empty -Out is the
+    # stdout path and touches no file.
+    if (-not [string]::IsNullOrWhiteSpace($OutPath)) {
+        Assert-WorkspaceContainedPath -FullPath (Get-NormalizedFullPath -Path $OutPath) -Description '-Out'
+    }
+
     $doc = Read-JsonFile -Path $FindingsPath
     $items = Get-FindingsArray -Document $doc
     $violations = [System.Collections.Generic.List[string]]::new()
