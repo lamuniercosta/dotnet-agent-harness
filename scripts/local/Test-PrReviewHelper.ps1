@@ -397,6 +397,154 @@ finally {
 }
 
 Write-Host ''
+Write-Host 'Verbatim finding fields refuse a smuggled code fence'
+
+# summary, failure_scenario, and evidence are rendered verbatim into the comment
+# body. A Markdown code fence in any of them can close an enclosing ```suggestion
+# block early and continue with a second, unverified, one-click-committable fence
+# that no gate inspected. The finding is refused rather than stripped, at every
+# entry point: -Validate and -BuildPayload (both through the shared
+# Test-FindingObject chokepoint) and the Format-InlineCommentBody render path.
+# A smuggled fence is three backticks at the start of a line; the constant that
+# names these fields is loaded from the helper, so this list cannot drift from it.
+Assert-True 'the helper still names summary/failure_scenario/evidence as verbatim fields' `
+    (@('summary', 'failure_scenario', 'evidence' | Where-Object { $_ -in $script:VerbatimFindingFields }).Count -eq 3)
+
+$smuggledFence = @('Looks fine, but apply:', '```suggestion', 'Invoke-Malice', '```') -join "`n"
+
+# The render path throws directly, so it can be exercised in-process (unlike the
+# validate path, whose violation exits the process). Each verbatim field is
+# refused, and the message names the field so the author knows which to fix.
+foreach ($field in @('summary', 'failure_scenario', 'evidence')) {
+    $fenced = [pscustomobject]@{
+        severity = 'Medium'; category = 'risk'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+        placement = 'inline'; line = 5; summary = 'clean summary'
+    }
+    $fenced | Add-Member -NotePropertyName $field -NotePropertyValue $smuggledFence -Force
+    $threw = $false; $msg = ''
+    try { [void](Format-InlineCommentBody -Finding $fenced) } catch { $threw = $true; $msg = $_.Exception.Message }
+    Assert-True "Format-InlineCommentBody refuses a code fence in '$field'" $threw
+    Assert-True "the '$field' refusal names the field and the fence" `
+        (($msg -match [regex]::Escape($field)) -and ($msg -match 'code fence'))
+}
+
+# The two pre-existing render gates the injection review also relied on: a raw
+# pre-rendered body, and a suggestion whose own text carries a fence.
+$bodyFence = [pscustomobject]@{
+    severity = 'Medium'; category = 'risk'; file = 'src/a.cs'
+    body     = (@('Pre-rendered.', '```suggestion', 'rm -rf /', '```') -join "`n")
+}
+$threw = $false
+try { [void](Format-InlineCommentBody -Finding $bodyFence) } catch { $threw = $true }
+Assert-True 'a raw body carrying a code fence is refused' $threw
+
+$suggestionFence = [pscustomobject]@{
+    severity   = 'Medium'; category = 'risk'; file = 'src/a.cs'; summary = 'ok'
+    suggestion = (@('do this', '```', 'nested', '```') -join "`n")
+}
+$threw = $false
+try { [void](Format-InlineCommentBody -Finding $suggestionFence) } catch { $threw = $true }
+Assert-True 'a suggestion whose text carries a code fence is refused' $threw
+
+# The gate must refuse smuggling without breaking the legitimate feature: a
+# verified suggestion still renders a real, committable ```suggestion fence.
+$committable = [pscustomobject]@{
+    severity = 'Medium'; category = 'risk'; file = 'src/a.cs'; summary = 'Null deref'
+    suggestion = 'var x = 1;'; suggestion_verified = $true
+}
+$committableBody = Format-InlineCommentBody -Finding $committable
+Assert-True 'a verified suggestion still renders a committable ```suggestion fence' `
+    ($committableBody -match '(?m)^```suggestion$')
+
+# And an unverified suggestion stays an inert block a reviewer cannot one-click.
+$unverified = [pscustomobject]@{
+    severity = 'Medium'; category = 'risk'; file = 'src/a.cs'; summary = 'Null deref'
+    suggestion = 'var x = 1;'
+}
+$unverifiedBody = Format-InlineCommentBody -Finding $unverified
+Assert-True 'an unverified suggestion renders an inert block, never committable' `
+    (($unverifiedBody -notmatch '(?m)^```suggestion$') -and ($unverifiedBody -match 'not verified'))
+
+# The marker is a *closing* fence: GitHub only lets a fence indented up to three
+# spaces close a block, so a four-space-indented fence is inert content and the
+# gate must not over-refuse it.
+$deepIndent = [pscustomobject]@{
+    severity = 'Medium'; category = 'risk'; file = 'src/a.cs'
+    summary  = (@('note:', '    ```suggestion', 'x', '    ```') -join "`n")
+}
+$threw = $false
+try { [void](Format-InlineCommentBody -Finding $deepIndent) } catch { $threw = $true }
+Assert-True 'a four-space-indented fence cannot close a block and is not refused' (-not $threw)
+
+# The two CLI verbs refuse the same fence end-to-end. Their violation calls exit,
+# so they run as a subprocess (the process that would die is a throwaway child).
+$fenceSandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("pr-review-fence-{0}" -f [guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Path $fenceSandbox -Force | Out-Null
+
+function Invoke-HelperOffline {
+    # -Validate and -BuildPayload need no gh, so this stays independent of the
+    # end-to-end fake-gh harness defined later in this file.
+    param([string[]]$HelperArgs)
+    $out = & pwsh -NoProfile -File $helper @HelperArgs 2>&1 | Out-String
+    return [pscustomobject]@{ ExitCode = $LASTEXITCODE; Text = $out }
+}
+
+function New-FenceFinding {
+    param([string]$Field)
+    $obj = [ordered]@{
+        severity = 'Medium'; category = 'risk'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+        placement = 'inline'; line = 5; summary = 'clean summary'
+    }
+    $obj[$Field] = (@('see the fix:', '```suggestion', 'Invoke-Malice', '```') -join "`n")
+    return [pscustomobject]$obj
+}
+
+try {
+    foreach ($field in @('summary', 'failure_scenario', 'evidence')) {
+        $p = Join-Path $fenceSandbox "validate-$field.json"
+        Set-Content -LiteralPath $p -Encoding UTF8 -Value (, @((New-FenceFinding -Field $field)) | ConvertTo-Json -Depth 20)
+        $r = Invoke-HelperOffline -HelperArgs @('-Validate', '-Findings', $p)
+        Assert-Equal "-Validate refuses a code fence in '$field' (exit 1)" 1 $r.ExitCode
+        Assert-True "-Validate names findings[0].$field as the offender" `
+            ($r.Text -match [regex]::Escape("findings[0].$field"))
+        Assert-True "-Validate explains the '$field' refusal" ($r.Text -match 'must not contain a Markdown code fence')
+    }
+
+    $cleanValidatePath = Join-Path $fenceSandbox 'validate-clean.json'
+    Set-Content -LiteralPath $cleanValidatePath -Encoding UTF8 -Value (, @([pscustomobject]@{
+                severity = 'Medium'; category = 'risk'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+                placement = 'inline'; line = 5
+                summary = 'no fences here'; failure_scenario = 'plain text'; evidence = 'plain text'
+            }) | ConvertTo-Json -Depth 20)
+    $cleanValidate = Invoke-HelperOffline -HelperArgs @('-Validate', '-Findings', $cleanValidatePath)
+    Assert-Equal 'a fence-free finding set validates (exit 0)' 0 $cleanValidate.ExitCode
+    Assert-True 'a fence-free finding set reports VALIDATION OK' ($cleanValidate.Text -match 'VALIDATION OK')
+
+    # -BuildPayload shares Test-FindingObject, so it refuses the fence before it
+    # renders anything — the second entry point the injection review flagged.
+    $buildFencePath = Join-Path $fenceSandbox 'build-fence.json'
+    Set-Content -LiteralPath $buildFencePath -Encoding UTF8 -Value (, @((New-FenceFinding -Field 'summary')) | ConvertTo-Json -Depth 20)
+    $buildFence = Invoke-HelperOffline -HelperArgs @(
+        '-BuildPayload', '-Findings', $buildFencePath, '-BaseSha', ('1' * 40), '-HeadSha', ('2' * 40), '-BodyText', 'Summary.')
+    Assert-Equal '-BuildPayload refuses a code fence in summary (exit 1)' 1 $buildFence.ExitCode
+    Assert-True '-BuildPayload reports the findings validation failed' `
+        ($buildFence.Text -match 'VALIDATION FAILED \(findings\)')
+
+    $buildCleanPath = Join-Path $fenceSandbox 'build-clean.json'
+    Set-Content -LiteralPath $buildCleanPath -Encoding UTF8 -Value (, @([pscustomobject]@{
+                severity = 'Medium'; category = 'risk'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+                placement = 'inline'; line = 5; summary = 'a fence-free finding'
+            }) | ConvertTo-Json -Depth 20)
+    $buildClean = Invoke-HelperOffline -HelperArgs @(
+        '-BuildPayload', '-Findings', $buildCleanPath, '-BaseSha', ('1' * 40), '-HeadSha', ('2' * 40), '-BodyText', 'Summary.')
+    Assert-Equal 'a fence-free finding builds a payload (exit 0)' 0 $buildClean.ExitCode
+    Assert-True 'the built payload carries the fence-free finding' ($buildClean.Text -match 'a fence-free finding')
+}
+finally {
+    Remove-Item -LiteralPath $fenceSandbox -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host ''
 Write-Host 'Get-DiffLineMap honours the counts each hunk declares'
 
 # A patch that ends in a newline splits to a trailing '', which the context
