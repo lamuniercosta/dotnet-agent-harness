@@ -122,7 +122,7 @@ Also confirm before a release:
   `apply-fix.ps1`
 - The gate scripts run on Linux — CI is `ubuntu-latest` and the scripts are
   authored on Windows
-- `CHANGELOG.md` and `VERSION` agree
+- `README.md`'s displayed version, `CHANGELOG.md`, and `VERSION` agree
 
 ## Style
 

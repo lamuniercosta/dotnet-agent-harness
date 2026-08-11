@@ -68,6 +68,36 @@ _Avoid_: Generic subtask, delegation by default
 A cheap errand that applies one specified transformation to an explicit set of files exclusively owned by that errand until it returns.
 _Avoid_: Open-ended implementation, overlapping edit
 
+## Review publishing
+
+**Finding**:
+An already-decided review concern supplied to the publishing helper. The helper validates and locates it but never decides whether the concern is real.
+_Avoid_: Detector result, helper finding
+
+**Fingerprint**:
+A helper-derived identity for a finding. The exact form includes its diff location; the semantic form survives unrelated line movement while retaining line-independent location context.
+_Avoid_: Caller key, model-supplied fingerprint
+
+**Receipt**:
+The persisted result of a successful publication, keyed by repository, pull request, pinned head, and run id. It makes a completed post observable to a sequential retry.
+_Avoid_: Head receipt, success flag
+
+**Run marker**:
+A run identifier embedded in the published review body and used to recover a missing local receipt without posting the review twice.
+_Avoid_: Fingerprint, comment id
+
+**Pinned base/head pair**:
+The immutable pair of commit SHAs that defines the reviewed diff. Publication re-reads both immediately before posting and aborts when either moved.
+_Avoid_: Current PR state, head pin
+
+**Workspace**:
+The predictable off-repository, owner-only directory for one repository, pull request, head, and run. It holds pinned state, payloads, fallbacks, markers, and receipts.
+_Avoid_: Checkout, temporary folder
+
+**Ledger**:
+A pure summary derived from already-supplied coverage and axis state. It records whether that state is complete; it does not perform review judgment.
+_Avoid_: Review engine, convergence loop
+
 ## Model routing
 
 **Route map**:

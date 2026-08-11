@@ -138,9 +138,19 @@ jobs:
           echo "Constitution renders clean and stack-neutral."
 
   self-tests:
-    name: PowerShell self-tests
-    runs-on: ubuntu-latest
+    name: PowerShell self-tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+
+    # The helper scripts under test branch on $IsWindows for workspace-safety
+    # behaviour (POSIX 0700 hardening vs. Windows reparse-point/ownership
+    # checks in skills/pr-review/scripts/pr-review.ps1, for one). A
+    # ubuntu-only matrix would never execute the Windows half of that code,
+    # so a regression there would ship green.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
 
     steps:
       - uses: actions/checkout@v4
@@ -166,6 +176,13 @@ jobs:
       - name: Self-development skills match consumer delivery
         shell: pwsh
         run: ./scripts/local/Test-SelfSkills.ps1
+
+      # The /pr-review helper talks to gh, so its defects (multi-page fetches,
+      # rerun receipts, verb dispatch) are invisible to a distribution test.
+      # This drives the real script against a fake gh; no network, no auth.
+      - name: pr-review helper paginates and keys receipts per run
+        shell: pwsh
+        run: ./scripts/local/Test-PrReviewHelper.ps1
 
       # Repo-local route-map advisor (scripts/local/, not packaged). The map is
       # the durable artifact of #46, so its schema, coverage, and resolution

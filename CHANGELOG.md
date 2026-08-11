@@ -8,6 +8,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [semantic versioning](https://semver.org/), where a **major** bump
 means a consuming repo's gates may start failing on code that previously passed.
 
+## [0.5.0] — 2026-08-11
+
+### Added
+
+- **A deterministic, retry-safe PR review publisher.** The new `pr-review` skill
+  accepts findings that another workflow has already decided, validates and
+  deduplicates them, pins publication to one base/head pair, and submits one
+  batched GitHub `COMMENT` review. Its PowerShell helper and JSON schema contain
+  publishing mechanics only—no review methodology or convergence protocol—and
+  are exercised against a fake `gh` on both Windows and Linux.
+
 ## [0.4.1] — 2026-08-08
 
 ### Fixed
@@ -278,3 +289,5 @@ account:
 [0.2.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.2.0
 [0.3.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.3.0
 [0.4.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.4.0
+[0.4.1]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.4.1
+[0.5.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.5.0
