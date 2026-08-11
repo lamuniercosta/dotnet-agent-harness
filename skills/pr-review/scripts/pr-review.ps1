@@ -89,6 +89,13 @@ $script:VerdictEnum = @('CONFIRMED', 'PLAUSIBLE')
 $script:SideEnum = @('LEFT', 'RIGHT')
 $script:PlacementEnum = @('inline', 'file', 'summary')
 
+# Free-text finding fields that Format-InlineCommentBody renders verbatim into
+# the comment body. A Markdown code fence in any of them can close an enclosing
+# suggestion block early and continue with arbitrary Markdown — including a
+# second, unverified suggestion fence that no gate inspected — so both -Validate
+# and -BuildPayload refuse a finding that carries one.
+$script:VerbatimFindingFields = @('summary', 'failure_scenario', 'evidence')
+
 # Owner-only (0700). Held as a constant because the create and the verify have
 # to agree: New-PrivateDirectory applies it atomically on Unix and
 # Set-PrivateDirectoryMode re-applies it, so a drift between the two would
@@ -867,6 +874,14 @@ function Test-FindingObject {
         Add-Violation -List $Violations -Path "$Path.verdict" -Message "must be one of: $($script:VerdictEnum -join ', ')"
     }
 
+    foreach ($verbatim in $script:VerbatimFindingFields) {
+        if (-not (Test-HasProperty -Object $Finding -Name $verbatim)) { continue }
+        $verbatimText = [string](Get-PropertyValue -Object $Finding -Name $verbatim)
+        if (Test-CarriesFenceMarker -Text $verbatimText) {
+            Add-Violation -List $Violations -Path "$Path.$verbatim" -Message ("must not contain a Markdown code fence. " + (Get-FenceRejectionDetail))
+        }
+    }
+
     foreach ($sideProp in @('side', 'start_side')) {
         if (Test-HasProperty -Object $Finding -Name $sideProp) {
             $sideVal = [string](Get-PropertyValue -Object $Finding -Name $sideProp)
@@ -1621,6 +1636,18 @@ function Test-CarriesFenceMarker {
     return [regex]::IsMatch($Text, '(?m)^[ \t]{0,3}(`{3,}|~{3,})')
 }
 
+function Get-FenceRejectionDetail {
+    <#
+      Shared tail for the messages that refuse a Markdown code fence in a
+      verbatim-rendered finding field. Kept in one place so -Validate (which
+      reports the violation) and the render path (which throws) explain the
+      refusal identically.
+    #>
+    return ('It is rendered verbatim into the comment body, where a fence can open or close a ' +
+        'committable suggestion block that no gate inspected, so it is refused rather than stripped. ' +
+        'Remove the fence.')
+}
+
 function Format-InlineCommentBody {
     <#
       Compose (or pass through) the body GitHub will render.
@@ -1654,6 +1681,14 @@ function Format-InlineCommentBody {
     $failure = [string](Get-PropertyValue -Object $Finding -Name 'failure_scenario')
     $evidence = [string](Get-PropertyValue -Object $Finding -Name 'evidence')
     $suggestion = [string](Get-PropertyValue -Object $Finding -Name 'suggestion')
+
+    foreach ($verbatim in $script:VerbatimFindingFields) {
+        $verbatimText = [string](Get-PropertyValue -Object $Finding -Name $verbatim)
+        if (Test-CarriesFenceMarker -Text $verbatimText) {
+            throw ("Finding for '$([string](Get-PropertyValue -Object $Finding -Name 'file'))' has a " +
+                "'$verbatim' containing a Markdown code fence. " + (Get-FenceRejectionDetail))
+        }
+    }
 
     $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add("**${severity}** · ${category}")
@@ -1830,6 +1865,10 @@ function Invoke-BuildPayload {
             $sev = [string](Get-PropertyValue -Object $f -Name 'severity')
             $cat = [string](Get-PropertyValue -Object $f -Name 'category')
             $sum = [string](Get-PropertyValue -Object $f -Name 'summary')
+            if (Test-CarriesFenceMarker -Text $sum) {
+                throw ("Summary-only finding for '$([string](Get-PropertyValue -Object $f -Name 'file'))' has a " +
+                    "'summary' containing a Markdown code fence. " + (Get-FenceRejectionDetail))
+            }
             $file = [string](Get-PropertyValue -Object $f -Name 'file')
             $q.Add("- [$verdict] **$sev**/$cat ``$file`` — $sum")
         }
