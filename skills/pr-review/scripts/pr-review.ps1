@@ -151,7 +151,8 @@ NOTES
     Pinned state, the outgoing payload, and the receipt live there, so
     concurrent runs over one head cannot overwrite each other.
   - -BodyText is used verbatim and is never probed as a path. -BodyFile is read
-    only from inside the workspace root this script owns.
+    only from inside the workspace root this script owns; with -Out it must sit
+    in the payload's own directory.
   - Exit 0 on success; non-zero on failure. Offline verbs do no network I/O.
 '@ | Write-Output
 }
@@ -1570,44 +1571,71 @@ function Get-BodyText {
       swap itself for that file's contents and post them to GitHub. Body text is
       therefore never probed as a path, and a body file must live inside the
       workspace root this script owns.
+
+      When -BuildPayload also writes the payload to a known -Out, the scope
+      tightens further: the body file must sit in the *same directory* as that
+      payload. -Out is always the run directory this invocation owns, so there
+      is no reason for the body to live anywhere else, and pinning the two
+      together shrinks the readable surface from all of <temp>/pr-review down to
+      one directory. Without -Out (the stdout path) there is no such anchor, so
+      it falls back to the workspace-root containment check.
     #>
-    param([string]$BodyText, [string]$BodyFile)
+    param([string]$BodyText, [string]$BodyFile, [string]$OutPath)
 
     if ([string]::IsNullOrEmpty($BodyFile)) {
         return $BodyText
     }
 
     $full = Get-NormalizedFullPath -Path $BodyFile
-    $root = Get-NormalizedFullPath -Path (Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review')
-    $rootPrefix = $root + [System.IO.Path]::DirectorySeparatorChar
     $comparison = if ($IsWindows) { [System.StringComparison]::OrdinalIgnoreCase } else { [System.StringComparison]::Ordinal }
-    if (-not $full.StartsWith($rootPrefix, $comparison)) {
-        throw "-BodyFile must live inside the review workspace root '$root'; refusing to read '$full'."
-    }
 
-    <#
-      The prefix check above is purely lexical and only tells us the leaf's
-      *name* sits under the root; it says nothing about whether an ancestor
-      directory got there by a symlink or NTFS junction. A junction on any
-      directory between the root and the file rewrites the read to wherever
-      that junction points, so `<root>/run/link/hosts.yml` can resolve outside
-      the workspace entirely while `$full` still starts with `$rootPrefix`.
-      Walk every level the workspace owns, outermost first, and apply the same
-      real-directory / not-a-reparse-point / owned-by-current-user check
-      Assert-CanonicalRunWorkspace already applies to the run tree, so a
-      redirect anywhere in the chain is caught before the leaf is trusted.
-    #>
-    $parentDir = Split-Path -Parent $full
-    $relative = $parentDir.Substring($root.Length).Trim([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
-    $segments = @()
-    if ($relative) {
-        $segments = @($relative -split '[\\/]+' | Where-Object { $_ -ne '' })
+    if (-not [string]::IsNullOrWhiteSpace($OutPath)) {
+        <#
+          Tight path: pin the read to the payload's own directory. This is
+          strictly narrower than the workspace-root containment below, and it
+          needs no ancestor walk — a junction between the temp root and this
+          directory would redirect the payload *write* to the same place, so
+          the read can only reach files the caller already controls. A symlink
+          on the leaf itself is still caught by the reparse check below.
+        #>
+        $outDir = Get-NormalizedFullPath -Path (Split-Path -Parent (Get-NormalizedFullPath -Path $OutPath))
+        $bodyDir = Get-NormalizedFullPath -Path (Split-Path -Parent $full)
+        if (-not [string]::Equals($bodyDir, $outDir, $comparison)) {
+            throw "-BodyFile must sit in the same directory as -Out ('$outDir'); refusing to read '$full'."
+        }
     }
-    $current = $root
-    Assert-SafeWorkspacePath -Path $current
-    foreach ($segment in $segments) {
-        $current = Join-Path $current $segment
+    else {
+        $root = Get-NormalizedFullPath -Path (Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review')
+        $rootPrefix = $root + [System.IO.Path]::DirectorySeparatorChar
+        if (-not $full.StartsWith($rootPrefix, $comparison)) {
+            throw "-BodyFile must live inside the review workspace root '$root'; refusing to read '$full'."
+        }
+
+        <#
+          The prefix check above is purely lexical and only tells us the leaf's
+          *name* sits under the root; it says nothing about whether an ancestor
+          directory got there by a symlink or NTFS junction. A junction on any
+          directory between the root and the file rewrites the read to wherever
+          that junction points, so `<root>/run/link/hosts.yml` can resolve
+          outside the workspace entirely while `$full` still starts with
+          `$rootPrefix`. Walk every level the workspace owns, outermost first,
+          and apply the same real-directory / not-a-reparse-point /
+          owned-by-current-user check Assert-CanonicalRunWorkspace already
+          applies to the run tree, so a redirect anywhere in the chain is caught
+          before the leaf is trusted.
+        #>
+        $parentDir = Split-Path -Parent $full
+        $relative = $parentDir.Substring($root.Length).Trim([System.IO.Path]::DirectorySeparatorChar, [System.IO.Path]::AltDirectorySeparatorChar)
+        $segments = @()
+        if ($relative) {
+            $segments = @($relative -split '[\\/]+' | Where-Object { $_ -ne '' })
+        }
+        $current = $root
         Assert-SafeWorkspacePath -Path $current
+        foreach ($segment in $segments) {
+            $current = Join-Path $current $segment
+            Assert-SafeWorkspacePath -Path $current
+        }
     }
 
     $item = Get-Item -LiteralPath $full -Force -ErrorAction Stop
@@ -1839,8 +1867,10 @@ function Invoke-BuildPayload {
     }
 
     # Not $bodyText: PowerShell variable names are case-insensitive, so that would
-    # assign straight back into the $BodyText parameter.
-    $summaryBody = Get-BodyText -BodyText $BodyText -BodyFile $BodyFile
+    # assign straight back into the $BodyText parameter. -OutPath is passed so a
+    # body file is pinned to the payload's own directory when the payload is
+    # written to a known -Out.
+    $summaryBody = Get-BodyText -BodyText $BodyText -BodyFile $BodyFile -OutPath $OutPath
     $comments = [System.Collections.Generic.List[object]]::new()
     $summaryOnly = [System.Collections.Generic.List[object]]::new()
 
