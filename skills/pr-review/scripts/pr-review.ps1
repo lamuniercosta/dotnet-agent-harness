@@ -1348,16 +1348,23 @@ function Get-PriorCoverageGap {
       Return the reason the prior review state is known to be partial, or $null
       when it is either complete or silent about its own completeness.
 
-      -Resolve already knows when it failed to enumerate every review thread —
-      it prints 'threadCoverage: INCOMPLETE' and records the same fact in
-      review-threads.json. Feeding that file to -Dedupe as the prior is the
-      normal workflow, and nothing downstream looked at the flag: a truncated
-      thread list simply produced a smaller fingerprint set, and every finding
-      the missing threads would have matched came back as new. That is the safe
-      direction of the two, but the reverse also happens — a caller pointing at
-      partial state and reading a 'dropped-semantic' verdict is being told a
-      prior review raised this, when what actually happened is that the prior
-      review is only half known.
+      A prior document that records its own coverage carries a 'complete' flag
+      and an 'incompleteReason'; this guard reads them so -Dedupe can refuse to
+      suppress against state it knows is only half enumerated. The unsafe
+      direction is not a smaller prior set — that just lets a finding come back
+      as new — but the reverse: a caller pointing at partial state and reading a
+      'dropped-semantic' verdict is told a prior review raised this, when the
+      prior review is only half known.
+
+      NOTE: -Resolve records this flag in review-threads.json when it fails to
+      enumerate every review thread, but that file holds raw GraphQL thread
+      nodes, not findings or fingerprints, so it is NOT itself a usable -Dedupe
+      prior — Get-PriorFingerprints extracts nothing from it and every current
+      finding comes back as new. The prior must be a findings/fingerprints file
+      (e.g. -Fingerprint output). Reconstructing a prior set from the PR's
+      threads — the only state that survives a head change — would need each
+      posted inline comment to carry a fingerprint marker, which it does not
+      yet; that robustness work is tracked in #97, not wired here.
 
       Silence is treated as complete on purpose. Hand-written prior files and
       plain findings arrays carry no completeness flag, and demanding one would
