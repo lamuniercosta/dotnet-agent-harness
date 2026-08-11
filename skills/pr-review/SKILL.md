@@ -34,7 +34,8 @@ Run exactly one verb per invocation:
 - `-NewWorkspace` creates an owner-only workspace for explicit identity fields.
 - `-Validate` checks findings or a review payload against the schema.
 - `-Fingerprint` derives exact and location-independent identities.
-- `-Dedupe` compares current findings with prior review state.
+- `-Dedupe` compares current findings with a prior findings/fingerprints file
+  (e.g. `-Fingerprint` output); `review-threads.json` is not a usable prior.
 - `-BuildPayload` creates the single batched `COMMENT` payload.
 - `-Preflight` performs every read-only pre-publication check.
 - `-Post` reconciles, locks, re-reads the pinned pair, and submits once.
