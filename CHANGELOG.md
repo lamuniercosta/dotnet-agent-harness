@@ -33,7 +33,9 @@ means a consuming repo's gates may start failing on code that previously passed.
   interactive auth prompt reaches the Markdown fallback instead of parking the
   run, and the run directory carries an exclusive `post.lock` held across
   reconciliation, submission, and the receipt — concurrent `-Post` invocations
-  for one run can no longer both publish. Two pure verbs, `-Ledger` and
+  for one run can no longer both publish. A blocked `-Post` waits up to
+  `PRREVIEW_POST_LOCK_TIMEOUT_SECONDS` (default 60) for the lock before it gives
+  up. Two pure verbs, `-Ledger` and
   `-WatchDecide`, compute the completion verdict and the watch decision so
   neither is left to prose. Distinct from `/code-review` (local diff engine)
   and `/ship-review` (pre-PR local gate).

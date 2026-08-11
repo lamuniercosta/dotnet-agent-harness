@@ -1531,6 +1531,94 @@ try {
         Assert-Equal 'posting with a foreign run id fails' 1 $wrongRun.ExitCode
         Assert-True 'the foreign run id is named in the error' ($wrongRun.Text -match 'not-this-run')
 
+        # ── Two concurrent -Posts for one run: an OS lock, not a hope ────────
+        # Receipt reconciliation makes a *retry* safe, which is a different
+        # problem from concurrency: two -Post processes for one run can both read
+        # "unpublished", both pass the run-marker check, and both publish, leaving
+        # two public reviews on the PR that no later run can retract. Run-directory
+        # isolation cannot help — same run, same directory, by construction.
+        # Runs A and B are resolved fresh: every run above already carries a
+        # receipt, and blocking a receipted run would only prove the idempotent
+        # no-op path. The timeout is cut to 2s so the blocked calls below cost
+        # seconds instead of the 60s default.
+        $env:PRREVIEW_POST_LOCK_TIMEOUT_SECONDS = '2'
+        try {
+            $resolveLockA = Invoke-Helper -HelperArgs @('-Resolve', $target)
+            Assert-Equal 'a resolve before the post-lock test succeeds' 0 $resolveLockA.ExitCode
+            $workspaceLockA = $null
+            if ($resolveLockA.Text -match '(?m)^workspace:\s*(.+)$') { $workspaceLockA = $Matches[1].Trim() }
+            $resolveLockB = Invoke-Helper -HelperArgs @('-Resolve', $target)
+            Assert-Equal 'a second resolve for the cross-run lock test succeeds' 0 $resolveLockB.ExitCode
+            $workspaceLockB = $null
+            if ($resolveLockB.Text -match '(?m)^workspace:\s*(.+)$') { $workspaceLockB = $Matches[1].Trim() }
+            Assert-True 'the two lock-test runs own different directories' ($workspaceLockA -ne $workspaceLockB)
+
+            $payloadLockA = Join-Path $workspaceLockA 'review.input.json'
+            Set-Content -LiteralPath $payloadLockA -Encoding UTF8 -Value @"
+{"commit_id":"$headSha","event":"COMMENT","body":"Summary for the locked run A.","comments":[]}
+"@
+            $payloadLockB = Join-Path $workspaceLockB 'review.input.json'
+            Set-Content -LiteralPath $payloadLockB -Encoding UTF8 -Value @"
+{"commit_id":"$headSha","event":"COMMENT","body":"Summary for run B, posted while run A is locked.","comments":[]}
+"@
+
+            # Standing in for the other -Post process: the same exclusive handle
+            # Open-PostLock takes, held from this process for the duration.
+            $lockPathA = Join-Path $workspaceLockA 'post.lock'
+            $heldLock = [System.IO.File]::Open($lockPathA, [System.IO.FileMode]::OpenOrCreate,
+                [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+            try {
+                $postsBefore = Get-PostCount
+                $postLocked = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadLockA)
+                Assert-Equal 'a -Post held out by the run lock fails' 1 $postLocked.ExitCode
+                Assert-True 'the blocked post names the concurrent post' `
+                    ($postLocked.Text -match 'already in progress')
+                Assert-Equal 'a -Post that never took the lock publishes nothing' $postsBefore (Get-PostCount)
+                Assert-True 'a -Post held out by the run lock writes no receipt' `
+                    (-not (Test-Path -LiteralPath (Join-Path $workspaceLockA 'post-result.json')))
+
+                # -Preflight takes the same lock in the same place: its report is
+                # a snapshot of state the in-flight post is already changing.
+                $preLocked = Invoke-Helper -HelperArgs @('-Preflight', '-Payload', $payloadLockA)
+                Assert-Equal 'a -Preflight held out by the run lock fails' 1 $preLocked.ExitCode
+                Assert-True 'the blocked preflight names the concurrent post' `
+                    ($preLocked.Text -match 'already in progress')
+
+                # The lock is per run directory, not global. An abandoned run A
+                # must not wedge every later review of the same PR.
+                $postsBefore = Get-PostCount
+                $postLockB = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadLockB)
+                Assert-Equal 'a post for a different run of the same PR is unaffected' 0 $postLockB.ExitCode
+                Assert-Equal 'the unrelated run publishes exactly once' ($postsBefore + 1) (Get-PostCount)
+            }
+            finally { $heldLock.Dispose() }
+
+            # The lock delays a post; it must not poison the run.
+            $postsBefore = Get-PostCount
+            $postReleased = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadLockA)
+            Assert-Equal 'the same post succeeds once the lock is released' 0 $postReleased.ExitCode
+            Assert-Equal 'the delayed run publishes exactly once' ($postsBefore + 1) (Get-PostCount)
+            # Deleting the file on release would open a window where a waiter
+            # holds the old path open and a third process creates it fresh, so
+            # release drops the handle and leaves the file.
+            Assert-True 'the lock file survives its release' (Test-Path -LiteralPath $lockPathA)
+
+            # The wait is configurable, and a value that is not a positive whole
+            # number of seconds must be refused rather than read as 0 — which
+            # would turn the wait into no wait at all.
+            $env:PRREVIEW_POST_LOCK_TIMEOUT_SECONDS = 'soon'
+            $lockTimeoutThrew = $false
+            $lockTimeoutMessage = ''
+            try { [void](Get-PostLockTimeoutSeconds) }
+            catch { $lockTimeoutThrew = $true; $lockTimeoutMessage = $_.Exception.Message }
+            Assert-True 'a non-numeric post-lock timeout is refused' $lockTimeoutThrew
+            Assert-True 'the refusal names the environment variable' `
+                ($lockTimeoutMessage -match 'PRREVIEW_POST_LOCK_TIMEOUT_SECONDS')
+        }
+        finally {
+            Remove-Item -LiteralPath 'Env:\PRREVIEW_POST_LOCK_TIMEOUT_SECONDS' -ErrorAction SilentlyContinue
+        }
+
         # ── Re-review the same head: a new run must publish ──────────────────
         $resolve2 = Invoke-Helper -HelperArgs @('-Resolve', $target)
         Assert-Equal 'a second resolve on the same head succeeds' 0 $resolve2.ExitCode

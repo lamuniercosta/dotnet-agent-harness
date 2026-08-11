@@ -106,6 +106,12 @@ $script:PrivateDirectoryMode = [System.IO.UnixFileMode]::UserRead -bor
 # with PRREVIEW_GH_TIMEOUT_SECONDS.
 $script:GhTimeoutSeconds = 120
 
+# How long a -Post waits for another -Post on the same run to release the lock
+# before giving up. Long enough to outlast a normal publish, short enough that a
+# genuinely abandoned lock does not hang a session. Override with
+# PRREVIEW_POST_LOCK_TIMEOUT_SECONDS.
+$script:PostLockTimeoutSeconds = 60
+
 # ---------------------------------------------------------------------------
 # Usage / dispatch helpers
 # ---------------------------------------------------------------------------
@@ -187,6 +193,16 @@ function Get-GhTimeoutSeconds {
     $parsed = 0
     if (-not [int]::TryParse($configured.Trim(), [ref]$parsed) -or $parsed -le 0) {
         throw "PRREVIEW_GH_TIMEOUT_SECONDS must be a positive whole number of seconds; got '$configured'."
+    }
+    return $parsed
+}
+
+function Get-PostLockTimeoutSeconds {
+    $configured = [System.Environment]::GetEnvironmentVariable('PRREVIEW_POST_LOCK_TIMEOUT_SECONDS')
+    if ([string]::IsNullOrWhiteSpace($configured)) { return $script:PostLockTimeoutSeconds }
+    $parsed = 0
+    if (-not [int]::TryParse($configured.Trim(), [ref]$parsed) -or $parsed -le 0) {
+        throw "PRREVIEW_POST_LOCK_TIMEOUT_SECONDS must be a positive whole number of seconds; got '$configured'."
     }
     return $parsed
 }
@@ -2590,9 +2606,10 @@ function Open-PostLock {
     #>
     param(
         [Parameter(Mandatory)][string]$RunDirectory,
-        [int]$TimeoutSeconds = 60
+        [int]$TimeoutSeconds = 0
     )
 
+    if ($TimeoutSeconds -le 0) { $TimeoutSeconds = Get-PostLockTimeoutSeconds }
     $lockPath = Join-Path $RunDirectory 'post.lock'
     $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     while ($true) {
