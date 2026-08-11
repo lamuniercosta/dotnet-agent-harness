@@ -2369,7 +2369,13 @@ query($owner:String!, $repo:String!, $number:Int!, $cursor:String) {
             }
 
             $root = $null
-            try { $root = $raw.Text | ConvertFrom-Json -Depth 100 }
+            # Invoke-Gh merges gh's stderr into stdout (:292), so a deprecation
+            # or auth warning line can sit in front of the JSON body. A raw
+            # ConvertFrom-Json chokes on that prefix and drops the whole thread
+            # page as "no data"; route through ConvertFrom-GhJson, which strips a
+            # leading warning line before parsing. A genuinely malformed body
+            # still throws here and degrades gracefully via the null branch below.
+            try { $root = ConvertFrom-GhJson -Text $raw.Text -Action 'parsing review threads' }
             catch { $root = $null }
 
             if (Test-HasProperty -Object $root -Name 'errors') {
