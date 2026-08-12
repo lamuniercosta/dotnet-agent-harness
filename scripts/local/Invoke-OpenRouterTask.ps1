@@ -3,17 +3,30 @@
 <#
 .SYNOPSIS
   Runs a coding task through Junie using the OpenRouter API key in the environment.
-  The task text is passed to Junie on the command line; do not include secrets in -Task.
+  The task text is piped to Junie as JSON on stdin, so it never appears on the
+  command line; still, do not include secrets in -Task.
 
 .DESCRIPTION
-  Uses OPENROUTER_API_KEY as the source credential and passes it to Junie only
-  through JUNIE_OPENROUTER_API_KEY for the child process. The key is never
-  written to configuration, emitted to the terminal, or placed in the command
-  line. GLM 5.2 is the default for every tier; pass -Model to try another
-  OpenRouter model without changing the route map.
+  Junie's --model flag accepts only built-in aliases or custom:<profile-id>; raw
+  OpenRouter ids such as z-ai/glm-5.2 are rejected client-side. This launcher
+  therefore maintains a custom model profile per OpenRouter id under
+  ~/.junie/models/ (override with -ModelDir) and invokes Junie with
+  --model custom:<derived-name>. The profile holds an environment reference
+  ("${OPENROUTER_API_KEY}"), never the key itself.
+
+  The task is sent as JSON on stdin (--input-format=json) because Junie's
+  readPipedInput path crashes with ERROR_INVALID_FUNCTION ("Função incorreta")
+  when stdin is redirected without piped input on Windows. Piping the payload is
+  the verified workaround and also keeps the task text off the command line.
+
+  Uses OPENROUTER_API_KEY as the source credential; Junie resolves the
+  profile's environment reference from its inherited environment. The key is
+  never written to configuration, emitted to the terminal, or placed in the
+  command line. GLM 5.2 is the default for every tier; pass -Model to try
+  another OpenRouter model without changing the route map.
 
 .PARAMETER Task
-  The coding task to give Junie.
+  The coding task to give Junie. Piped as JSON on stdin.
 
 .PARAMETER Tier
   The route-map tier. It determines Junie's reasoning effort.
@@ -23,6 +36,9 @@
 
 .PARAMETER RepoRoot
   Project directory supplied to Junie. Defaults to the current directory.
+
+.PARAMETER ModelDir
+  Directory holding Junie custom model profiles. Defaults to ~/.junie/models.
 
 .EXAMPLE
   ./scripts/local/Invoke-OpenRouterTask.ps1 -Tier deep -Task 'Implement the approved tasks.md plan.'
@@ -40,7 +56,9 @@ param(
 
     [string]$Model = 'z-ai/glm-5.2',
 
-    [string]$RepoRoot = (Get-Location).Path
+    [string]$RepoRoot = (Get-Location).Path,
+
+    [string]$ModelDir = (Join-Path $env:USERPROFILE '.junie\models')
 )
 
 Set-StrictMode -Version Latest
@@ -58,16 +76,29 @@ $effort = switch ($Tier) {
     'deep' { 'high' }
 }
 
+$profileName = 'openrouter-' + ($Model -replace '[^A-Za-z0-9._-]', '-')
+$profilePath = Join-Path $ModelDir ($profileName + '.json')
+$profileJson = @"
+{
+  "baseUrl": "https://openrouter.ai/api/v1/chat/completions",
+  "id": "$Model",
+  "apiType": "OpenAICompletion",
+  "apiKey": "`${OPENROUTER_API_KEY}",
+  "temperature": 0.7
+}
+"@
+
 $junieArguments = @(
-    '--provider', 'openrouter',
-    '--model', $Model,
+    '--skip-update-check',
+    '--input-format=json',
+    '--model', "custom:$profileName",
     '--effort', $effort,
-    '--project', $repoPath,
-    '--task', $Task
+    '--project', $repoPath
 )
 
 Write-Host "Provider: OpenRouter (via Junie)"
 Write-Host "Model:    $Model"
+Write-Host "Profile:  custom:$profileName ($profilePath)"
 Write-Host "Tier:     $Tier (effort=$effort)"
 Write-Host "Project:  $repoPath"
 if ($WhatIfPreference) {
@@ -79,22 +110,17 @@ if ($PSCmdlet.ShouldProcess("Junie with OpenRouter model '$Model'", 'Run coding 
         throw 'Junie CLI is required. Install it from https://junie.jetbrains.com/cli, then try again.'
     }
 
-    # Avoid --openrouter-api-key: command-line arguments can be inspected by
-    # other local processes. Junie reads this variable directly.
-    $previousKey = $env:JUNIE_OPENROUTER_API_KEY
-    try {
-        $env:JUNIE_OPENROUTER_API_KEY = $env:OPENROUTER_API_KEY
-        & junie @junieArguments
-        $exitCode = $LASTEXITCODE
-    }
-    finally {
-        if ($null -eq $previousKey) {
-            Remove-Item Env:JUNIE_OPENROUTER_API_KEY -ErrorAction SilentlyContinue
-        }
-        else {
-            $env:JUNIE_OPENROUTER_API_KEY = $previousKey
-        }
+    if (-not (Test-Path -LiteralPath $profilePath)) {
+        New-Item -ItemType Directory -Path $ModelDir -Force | Out-Null
+        [System.IO.File]::WriteAllText($profilePath, $profileJson, [System.Text.UTF8Encoding]::new($false))
+        Write-Host "Created Junie custom model profile: $profilePath"
     }
 
-    exit $exitCode
+    # Avoid --openrouter-api-key: command-line arguments can be inspected by
+    # other local processes. Junie resolves the profile's ${OPENROUTER_API_KEY}
+    # reference from its inherited environment.
+    $taskPayload = @{ task = $Task } | ConvertTo-Json -Compress
+    $taskPayload | & junie @junieArguments
+
+    exit $LASTEXITCODE
 }
