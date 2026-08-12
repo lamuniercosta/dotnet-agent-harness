@@ -86,6 +86,17 @@ line, or a repository file:
 pwsh ./scripts/local/Invoke-OpenRouterTask.ps1 -Tier deep -Task 'Review the current diff on the Risk, Standards, and Spec axes.'
 ```
 
+That example uses `-Tier deep`, matching `route-map.json`'s `/code-review`
+entry. `/ship-review` routes to `-Tier balanced` instead:
+
+```powershell
+pwsh ./scripts/local/Invoke-OpenRouterTask.ps1 -Tier balanced -Task 'Ship-review the current diff.'
+```
+
+`-Task` text is passed as a literal command-line argument and is visible to
+other local processes; only `OPENROUTER_API_KEY` is kept out of the command
+line, so do not put secrets in `-Task`.
+
 `fast`, `balanced`, and `deep` map to Junie's `low`, `medium`, and `high`
 effort respectively. GLM 5.2 is used for all three by default; select a
 different OpenRouter model for one task with `-Model`:
