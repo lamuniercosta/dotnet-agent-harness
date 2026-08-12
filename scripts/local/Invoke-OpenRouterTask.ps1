@@ -48,10 +48,6 @@ if ([string]::IsNullOrWhiteSpace($env:OPENROUTER_API_KEY)) {
     throw 'OPENROUTER_API_KEY is not set in this process. Set it in your user environment, then open a new terminal.'
 }
 
-if (-not (Get-Command junie -ErrorAction SilentlyContinue)) {
-    throw 'Junie CLI is required. Install it from https://junie.jetbrains.com/cli, then try again.'
-}
-
 $repoPath = (Resolve-Path -LiteralPath $RepoRoot).Path
 $effort = switch ($Tier) {
     'fast' { 'low' }
@@ -76,6 +72,10 @@ if ($WhatIfPreference) {
 }
 
 if ($PSCmdlet.ShouldProcess("Junie with OpenRouter model '$Model'", 'Run coding task')) {
+    if (-not (Get-Command junie -ErrorAction SilentlyContinue)) {
+        throw 'Junie CLI is required. Install it from https://junie.jetbrains.com/cli, then try again.'
+    }
+
     # Avoid --openrouter-api-key: command-line arguments can be inspected by
     # other local processes. Junie reads this variable directly.
     $previousKey = $env:JUNIE_OPENROUTER_API_KEY
