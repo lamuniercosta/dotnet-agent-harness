@@ -1,7 +1,9 @@
 #!/usr/bin/env pwsh
+
 <#
 .SYNOPSIS
   Runs a coding task through Junie using the OpenRouter API key in the environment.
+  The task text is passed to Junie on the command line; do not include secrets in -Task.
 
 .DESCRIPTION
   Uses OPENROUTER_API_KEY as the source credential and passes it to Junie only
@@ -43,6 +45,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$PSNativeCommandUseErrorActionPreference = $false
 
 if ([string]::IsNullOrWhiteSpace($env:OPENROUTER_API_KEY)) {
     throw 'OPENROUTER_API_KEY is not set in this process. Set it in your user environment, then open a new terminal.'
