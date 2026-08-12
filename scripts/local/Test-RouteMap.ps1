@@ -118,8 +118,11 @@ Assert-That "gemini-api appears on mechanical /task" ($null -ne $geminiApiEntry)
 Assert-That "gemini-api resolves as KnownHost=false" ($null -ne $geminiApiEntry -and $geminiApiEntry.KnownHost -eq $false)
 Assert-That "gemini-api mechanical rows use fast (Flash Lite)" ($null -ne $geminiApiEntry -and $geminiApiEntry.Tier -eq 'fast')
 
-$implementOpenRouterEntry = $resolvedUnpinned.Chain | Where-Object { $_.Host -eq 'openrouter' } | Select-Object -First 1
-Assert-That "OpenRouter is not in the /implement route" ($null -eq $implementOpenRouterEntry)
+foreach ($routeName in @('/architect', '/grill-with-docs', '/implement', '/refactor', '/speckit-analyze', '/speckit-plan')) {
+    $resolvedRoute = Resolve-RouteChain -Command $routeName -Map $map -RepoRoot $unpinnedRoot
+    $openRouterEntry = $resolvedRoute.Chain | Where-Object { $_.Host -eq 'openrouter' } | Select-Object -First 1
+    Assert-That "OpenRouter is not in the $routeName route" ($null -eq $openRouterEntry)
+}
 
 $resolvedCodeReview = Resolve-RouteChain -Command '/code-review' -Map $map -RepoRoot $unpinnedRoot
 $codeReviewOpenRouterEntry = $resolvedCodeReview.Chain | Where-Object { $_.Host -eq 'openrouter' } | Select-Object -First 1
