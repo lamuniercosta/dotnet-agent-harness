@@ -93,9 +93,16 @@ entry. `/ship-review` routes to `-Tier balanced` instead:
 pwsh ./scripts/local/Invoke-OpenRouterTask.ps1 -Tier balanced -Task 'Ship-review the current diff.'
 ```
 
-`-Task` text is passed as a literal command-line argument and is visible to
-other local processes; only `OPENROUTER_API_KEY` is kept out of the command
-line, so do not put secrets in `-Task`.
+Junie's `--model` accepts only built-in aliases or `custom:<profile-id>`; raw
+OpenRouter ids are rejected client-side. The launcher therefore maintains a
+custom profile per model under `~/.junie/models/openrouter-<model>.json` and
+invokes Junie with `--model custom:<derived-name>`. The profile holds an
+environment reference (`${OPENROUTER_API_KEY}`), never the key itself.
+The task text is piped to Junie as JSON on stdin (`--input-format=json`) —
+both to keep it off the command line and because Junie's `readPipedInput`
+path crashes with `ERROR_INVALID_FUNCTION` ("Função incorreta") on Windows
+when stdin is redirected without piped input. Still, do not put secrets in
+`-Task`.
 
 `fast`, `balanced`, and `deep` map to Junie's `low`, `medium`, and `high`
 effort respectively. GLM 5.2 is used for all three by default; select a
