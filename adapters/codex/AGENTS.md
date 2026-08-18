@@ -44,8 +44,14 @@ substantial context, trusting the result requires re-reading the source, or one
 tool call answers the question. The governing asymmetry is: **delegate
 conclusions; keep required content inline.** There is no numeric threshold.
 
-A cheap errand may gather evidence but may not make semantic verdicts, feed a
-human gate or `$grill-with-docs`, or perform unspecified writes. `gate-runner`
+A cheap errand may gather evidence for a verdict you will make, but may not make
+semantic verdicts, feed a human gate, or perform unspecified writes. It also may
+not feed a grilling session in progress — that follows from the four conditions,
+not from an exception to them: a fact put to a live interrogation is material you
+reason over to form the next question (1), and its brief cannot be complete
+without replaying the conversation so far (3). One carve-out: a single
+reconnaissance pass before the first question, where no conversation exists yet
+to replay. A mid-grill lull is not a new pre-grill pass. `gate-runner`
 has one mechanical exception: it may translate a reported command and exit code
 into `Pass`, `Failure`, `Skipped`, or `Could not run`; it may not dismiss
 findings, judge equivalent mutants, or overrule tool evidence.
