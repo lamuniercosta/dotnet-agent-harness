@@ -205,6 +205,8 @@ the phase directly — see [Limitations](#limitations-under-codex).
 
 Never skip the grill, and never route a failing gate to lowering its threshold.
 
+`/code-review` and `/ship-review` have no numeric gate, unlike Implement/Refactor/Architect above — they must be given a stop condition explicitly, in `brief.md`, before Stage 4 (Implement): a closing bar (which severities block), a frozen scope ("anything else is a follow-up issue"), and a round cap of two rounds (initial pass + one fix-and-re-run). Past the cap, unresolved findings become follow-up issues instead of more fix commits.
+
 ## GitHub workflow
 
 - Read issues through `gh` only: `gh issue view 142 --json number,title,body,labels`

@@ -42,7 +42,7 @@ Dispatch all three in a **single message** so they run concurrently — they are
 Each brief gets: the diff command, the commit list, and the `/verify` results table.
 
 ### 3. Consolidate
-Merge into one report, de-duplicating where two reviewers found the same thing (keep the more specific statement, note both sources):
+Merge into one report, de-duplicating where two reviewers found the same thing (keep the more specific statement, note both sources). Sort each finding against `brief.md`'s closing bar and frozen scope before bucketing it: a finding that doesn't meet the closing bar, or falls outside the frozen scope, is `Non-blocking` regardless of the reviewer's own severity label — the bar and scope come from `brief.md`, not the sub-agent's judgment.
 
 ```markdown
 ## Ship Review — <branch>
@@ -53,12 +53,15 @@ Verify: READY / NEEDS FIXES
 - [source] finding + file:line
 ### Coverage
 - Gaps / mutation survivors → add tests
+### Follow-ups
+- Deferred past the round cap: [source] finding + file:line + severity
 ```
 
 ### 4. Route
-- Blocking findings → fix, re-run from step 1. Cap at **two** re-runs (the `agent-pipeline` rule's Loop Discipline default) unless `brief.md` states a different bar for this loop — a blocking finding still open on the third pass becomes a follow-up issue, not another fix commit.
+This loop follows the Loop Discipline round cap of two (the `agent-pipeline` rule's default) unless `brief.md` states a different cap for this loop: the initial fan-out is round one, one fix-and-re-run is round two.
+- Blocking findings → fix, re-run from step 1. A Blocking finding still open after round two moves to `Follow-ups`, not another fix commit.
 - Coverage gaps and surviving mutants → add tests, re-run mutation. A survivor means the test is inadequate — fix the test, not the threshold.
-- All clear → summarise for human gate 3, then suggest opening the PR.
+- All clear → summarise for human gate 3, then suggest opening the PR. Only when `Follow-ups` carries no Critical/High item — a deferred Critical or High keeps the verdict `NEEDS FIXES` even past the round cap; human gate 3 sees the follow-up list before any PR is suggested.
 
 ## Rules
 - Do not open or push a PR automatically.
