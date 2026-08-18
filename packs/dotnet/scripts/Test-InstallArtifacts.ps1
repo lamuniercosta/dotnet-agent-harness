@@ -313,6 +313,11 @@ try {
             'Codex cannot import delegation.mdc, so a pointer would silently omit the rule'
         Assert-That 'AGENTS.md documents generated Codex named agents' `
             (($agents -match '\.codex/agents/') -and ($agents -match 'seven named profiles'))
+        Assert-That 'AGENTS.md freezes loop terms after start and keeps deferred Critical/High as NEEDS FIXES' `
+            (($agents -match '(?is)amendment.+?(closing bar|scope).+?new issue') -and
+             ($agents -match '(?is)(Critical|High).+?NEEDS FIXES') -and
+             ($agents -match '(?is)(READY|PR suggestion)')) `
+            'Codex cannot import agent-pipeline.mdc; deferred Critical/High must still block READY'
     }
 
     Assert-That '.codex/config.toml registers both documentation servers' `
@@ -368,6 +373,42 @@ try {
         ($hostControlPlaneRefs.Count -eq 0) `
         (($hostControlPlaneRefs | ForEach-Object { "$($_.Path):$($_.LineNumber)" }) -join ', ')
     $codexCodeReview = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'code-review/SKILL.md') -Raw
+    $codexShipReview = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'ship-review/SKILL.md') -Raw
+    Assert-That 'Codex ship-review fails closed when loop terms are missing' `
+        (($codexShipReview -match '(?is)FEATURE_DIR') -and
+         ($codexShipReview -match '(?is)check-prerequisites\.ps1') -and
+         ($codexShipReview -match '(?is)<FEATURE_DIR>/brief\.md') -and
+         ($codexShipReview -match '(?is)closing bar') -and
+         ($codexShipReview -match '(?is)frozen scope') -and
+         ($codexShipReview -match '(?is)round cap') -and
+         ($codexShipReview -match '(?is)Could not run') -and
+         ($codexShipReview -match 'NEEDS FIXES') -and
+         ($codexShipReview -match '(?is)before Step 1')) `
+        'missing closing bar, frozen scope, or round cap must stop before fan-out'
+    Assert-That 'Codex ship-review routes below-bar and out-of-scope items to Follow-ups' `
+        (($codexShipReview -match '(?is)(does not meet the closing bar|below the bar)') -and
+         ($codexShipReview -match '(?is)(outside the frozen scope|outside scope)') -and
+         ($codexShipReview -match '(?is)Follow-ups') -and
+         ($codexShipReview -match '(?is)never silently relabelled `?Non-blocking') -and
+         ($codexShipReview -match '(?is)original source and severity')) `
+        'below-bar items must keep source and severity, not become Non-blocking'
+    Assert-That 'Codex ship-review uses one round counter and stops fix commits past the cap' `
+        (($codexShipReview -match '(?is)one round counter') -and
+         ($codexShipReview -match '(?is)Blocking') -and
+         ($codexShipReview -match '(?is)coverage gaps') -and
+         ($codexShipReview -match '(?is)mutation survivors') -and
+         ($codexShipReview -match '(?is)no further fix commits')) `
+        'Blocking and coverage/mutation routes share the cap; past it, no more fix commits'
+    Assert-That 'Codex ship-review READY requires verify, three reviewers, empty Blocking, and no unresolved Critical/High' `
+        (($codexShipReview -match '(?is)READY requires') -and
+         ($codexShipReview -match '(?is)verify') -and
+         ($codexShipReview -match '(?is)all three reviewers') -and
+         ($codexShipReview -match '(?is)`?Blocking`? empty') -and
+         ($codexShipReview -match '(?is)no unresolved confirmed Critical/?High') -and
+         ($codexShipReview -match '(?is)regardless of bucket') -and
+         ($codexShipReview -match '(?is)missing reviewer') -and
+         ($codexShipReview -match 'NEEDS FIXES')) `
+        'a missing reviewer or deferred Critical/High must keep NEEDS FIXES'
     Assert-That 'Codex code review documents a Markdown findings fallback' `
         (($codexCodeReview -match 'native structured-review or inline-comment mechanism') -and
          ($codexCodeReview -match '## Findings') -and

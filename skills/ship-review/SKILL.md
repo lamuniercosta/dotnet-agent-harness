@@ -24,11 +24,21 @@ disclose that fallback. This gate depends on no external review service.
 
 ## Steps
 
+Resolve the active `FEATURE_DIR` the same way as `/pipeline`: use the value
+already established for the task, or run
+`.specify/scripts/powershell/check-prerequisites.ps1 -Json` when possible. Read
+`<FEATURE_DIR>/brief.md` for the three loop terms — **closing bar**, **frozen
+scope**, and **round cap** — before `/verify` or fan-out. If the active feature or
+any term cannot be resolved unambiguously, fail closed: stop before Step 1,
+report **Could not run** with the missing context and verdict **NEEDS FIXES**.
+Do not infer defaults, choose among multiple briefs, or suggest a PR.
+
 ### 1. Verify first (blocking)
 Run `/verify` (full pipeline). Use the named **`gate-runner`** profile when the
 host loads it; otherwise give the same bounded gate-running brief to a general
-subagent or run it inline. If any critical phase FAILs, stop and fix — do not
-review broken code.
+subagent or run it inline. If any critical phase FAILs, stop and fix on the same
+shared round counter defined in Step 4 — do not fan out. Past the cap, make no
+further fix commits; keep the verdict **NEEDS FIXES** and stop without fan-out.
 
 ### 2. Parallel fan-out
 Dispatch all three in a **single message** so they run concurrently — they are independent, and running them in sequence wastes the main context on intermediate output.
@@ -42,32 +52,38 @@ Dispatch all three in a **single message** so they run concurrently — they are
 Each brief gets: the diff command, the commit list, and the `/verify` results table.
 
 ### 3. Consolidate
-Merge into one report, de-duplicating where two reviewers found the same thing (keep the more specific statement, note both sources). Sort each finding against `brief.md`'s closing bar and frozen scope before bucketing it: a finding that doesn't meet the closing bar, or falls outside the frozen scope, is `Non-blocking` regardless of the reviewer's own severity label — the bar and scope come from `brief.md`, not the sub-agent's judgment.
+Merge into one report, de-duplicating where two reviewers found the same thing (keep the more specific statement, note both sources).
+
+Fix-commit routing is not readiness. Sort each finding against `brief.md`'s closing bar and frozen scope to decide whether it gets a fix commit in the current loop — the bar and scope come from `brief.md`, not the sub-agent's judgment. A finding that does not meet the closing bar, or falls outside the frozen scope, goes to `Follow-ups`; it is never silently relabelled `Non-blocking`. Keep the original source and severity.
 
 ```markdown
 ## Ship Review — <branch>
 Verify: READY / NEEDS FIXES
 ### Blocking
-- [source] finding + file:line + fix
-### Non-blocking
-- [source] finding + file:line
+- [source] finding + file:line + severity + fix
 ### Coverage
 - Gaps / mutation survivors → add tests
 ### Follow-ups
-- Deferred past the round cap: [source] finding + file:line + severity
+- Below the bar, outside scope, or past the round cap: [source] finding + file:line + severity
 ```
 
 ### 4. Route
-This loop follows the Loop Discipline round cap of two (the `agent-pipeline` rule's default) unless `brief.md` states a different cap for this loop: the initial fan-out is round one, one fix-and-re-run is round two.
-- Blocking findings → fix, re-run from step 1. A Blocking finding still open after round two moves to `Follow-ups`, not another fix commit.
-- Coverage gaps and surviving mutants → add tests, re-run mutation. A survivor means the test is inadequate — fix the test, not the threshold.
-- All clear → summarise for human gate 3, then suggest opening the PR. Only when `Follow-ups` carries no Critical/High item — a deferred Critical or High keeps the verdict `NEEDS FIXES` even past the round cap; human gate 3 sees the follow-up list before any PR is suggested.
+One round counter covers every fix-and-re-run route in this skill, including a
+failed `/verify`, Blocking findings that re-run from step 1, and coverage gaps or
+mutation survivors. Use the round cap recorded in `brief.md`; the
+`agent-pipeline` rule's default is two, so the initial pass is round one and one
+fix-and-re-run is round two. After the cap, unresolved review items move to
+`Follow-ups` with source and severity retained; make no further fix commits.
+- Blocking findings → fix, re-run from step 1, on that counter. After the cap they move to `Follow-ups`, not another fix commit.
+- Coverage gaps and surviving mutants → add tests, re-run mutation, on that counter. After the cap they move to `Follow-ups` with source and severity retained. A survivor means the test is inadequate — fix the test, not the threshold.
+- READY requires `/verify` passed, all three reviewers ran, `Blocking` empty, and no unresolved confirmed Critical/High finding anywhere in the consolidated report, regardless of bucket. Missing loop terms or a missing reviewer remain **NEEDS FIXES**. A confirmed Critical or High finding deferred to `Follow-ups` does not cause another post-cap fix commit, but it still prevents READY and any PR suggestion.
+- All clear (that readiness floor met) → summarise for human gate 3, then suggest opening the PR.
 
 ## Rules
 - Do not open or push a PR automatically.
 - Do not skip `/verify`.
-- Keep findings actionable: source, `file:line`, concrete fix.
-- If a reviewer could not run, report **Could not run** with the reason — never fold a missing axis into a clean verdict.
+- Keep findings actionable: source, `file:line`, severity, concrete fix.
+- If a reviewer could not run, report **Could not run** with the reason — never fold a missing axis into a clean verdict. Missing axes keep the verdict **NEEDS FIXES**.
 
 ## Related
 - `/verify` — the blocking gate this runs first
