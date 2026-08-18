@@ -56,7 +56,7 @@ Verify: READY / NEEDS FIXES
 ```
 
 ### 4. Route
-- Blocking findings → fix, re-run from step 1.
+- Blocking findings → fix, re-run from step 1. Cap at **two** re-runs (the `agent-pipeline` rule's Loop Discipline default) unless `brief.md` states a different bar for this loop — a blocking finding still open on the third pass becomes a follow-up issue, not another fix commit.
 - Coverage gaps and surviving mutants → add tests, re-run mutation. A survivor means the test is inadequate — fix the test, not the threshold.
 - All clear → summarise for human gate 3, then suggest opening the PR.
 
