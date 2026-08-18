@@ -76,7 +76,7 @@ fix-and-re-run is round two. After the cap, unresolved review items move to
 `Follow-ups` with source and severity retained; make no further fix commits.
 - Blocking findings → fix, re-run from step 1, on that counter. After the cap they move to `Follow-ups`, not another fix commit.
 - Coverage gaps and surviving mutants → add tests, re-run mutation, on that counter. After the cap they move to `Follow-ups` with source and severity retained. A survivor means the test is inadequate — fix the test, not the threshold.
-- READY requires `/verify` passed, all three reviewers ran, `Blocking` empty, and no unresolved confirmed Critical/High finding anywhere in the consolidated report, regardless of bucket. Missing loop terms or a missing reviewer remain **NEEDS FIXES**. A confirmed Critical or High finding deferred to `Follow-ups` does not cause another post-cap fix commit, but it still prevents READY and any PR suggestion.
+- READY requires `/verify` passed, all three reviewers ran, `Blocking` empty, and no unresolved Critical/High finding anywhere in the consolidated report, regardless of bucket. Missing loop terms or a missing reviewer remain **NEEDS FIXES**. A Critical or High finding deferred to `Follow-ups` does not cause another post-cap fix commit, but it still prevents READY and any PR suggestion.
 - All clear (that readiness floor met) → summarise for human gate 3, then suggest opening the PR.
 
 ## Rules

@@ -318,6 +318,11 @@ try {
              ($agents -match '(?is)(Critical|High).+?NEEDS FIXES') -and
              ($agents -match '(?is)(READY|PR suggestion)')) `
             'Codex cannot import agent-pipeline.mdc; deferred Critical/High must still block READY'
+        Assert-That 'AGENTS.md routes non-bar items to follow-up issues' `
+            ($agents -match '(?is)anything else is a follow-up issue, not a finding in this round\.')
+        Assert-That 'AGENTS.md uses unqualified Critical/High readiness wording' `
+            (($agents -match '(?is)A Critical or High finding') -and
+             ($agents -notmatch '(?is)A confirmed Critical or High finding'))
     }
 
     Assert-That '.codex/config.toml registers both documentation servers' `
@@ -373,7 +378,10 @@ try {
         ($hostControlPlaneRefs.Count -eq 0) `
         (($hostControlPlaneRefs | ForEach-Object { "$($_.Path):$($_.LineNumber)" }) -join ', ')
     $codexCodeReview = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'code-review/SKILL.md') -Raw
+    $codexGrill = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'grill-with-docs/SKILL.md') -Raw
     $codexShipReview = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'ship-review/SKILL.md') -Raw
+    Assert-That 'Codex grill-with-docs routes non-bar items to follow-up issues' `
+        ($codexGrill -match '(?is)anything else is a follow-up issue, not a finding in this round\.')
     Assert-That 'Codex ship-review fails closed when loop terms are missing' `
         (($codexShipReview -match '(?is)FEATURE_DIR') -and
          ($codexShipReview -match '(?is)check-prerequisites\.ps1') -and
@@ -404,7 +412,8 @@ try {
          ($codexShipReview -match '(?is)verify') -and
          ($codexShipReview -match '(?is)all three reviewers') -and
          ($codexShipReview -match '(?is)`?Blocking`? empty') -and
-         ($codexShipReview -match '(?is)no unresolved confirmed Critical/?High') -and
+         ($codexShipReview -match '(?is)no unresolved Critical/?High') -and
+         ($codexShipReview -notmatch '(?is)no unresolved confirmed Critical/?High') -and
          ($codexShipReview -match '(?is)regardless of bucket') -and
          ($codexShipReview -match '(?is)missing reviewer') -and
          ($codexShipReview -match 'NEEDS FIXES')) `

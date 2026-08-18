@@ -80,7 +80,7 @@ such stage the task will pass through:
 3. **A round cap** (two, by default). Past the cap, unresolved findings become
    follow-up issues and the stage exits — it does not iterate toward zero findings.
 
-A confirmed Critical or High finding deferred to a follow-up still keeps the
+A Critical or High finding deferred to a follow-up still keeps the
 stage at **NEEDS FIXES**; deferral stops further fix commits, it does not make
 the diff READY.
 
