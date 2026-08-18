@@ -58,6 +58,36 @@ leaves the cause in place; the table says where to go back to.
 Never route a failure to the threshold. Lowering `gates.*` to clear a gate converts a
 finding into a silence, and the next run reports green having verified less.
 
+## Loop Discipline
+
+Stages 7 and 8 (`/refactor`, `/architect`) already have a stop condition: a numeric
+threshold in `harness.yml`. Below the threshold, keep going; at or above it, stop —
+the number decides, not a judgement call. Stages judged by agent or human readback
+instead of a number — chiefly `/code-review` and `/ship-review`, and any ad hoc
+`/loop` run — have no such gate by default, so they must be given one explicitly
+before the loop starts, or they do not converge.
+
+State three things in `brief.md`, before Stage 6 (`/implement`) begins, for every
+such stage the task will pass through:
+
+1. **A closing bar.** Which severities block — e.g. Critical/High *with a concrete
+   failure scenario*. Everything else becomes a follow-up issue, never a fix commit
+   on the open loop.
+2. **A frozen, countable scope**, ending with "anything else is a follow-up issue,
+   not a finding in this round." A binding checklist without this line is a finding
+   generator — each fix response invites a stricter pass at the same list.
+3. **A round cap** (two, by default). Past the cap, unresolved findings become
+   follow-up issues and the stage exits — it does not iterate toward zero findings.
+
+Amendments to the closing bar or scope after a loop starts are a new issue, not a
+widening of the current one — the loop closes against what it opened with.
+
+**Why:** an ungated review loop ran nine rounds and grew the diff from 1,974 to
+6,556 added lines without converging, because "findings exist" is a verdict on
+review coverage, not on merge readiness — nothing in the loop said stop. Gated
+stages don't have this failure mode; the gap is specifically stages with no
+numeric threshold.
+
 ## Orchestration
 
 Use `/pipeline` to determine the current stage. Extension hooks in `.specify/extensions.yml` chain analyze → refactor → architect.
