@@ -87,7 +87,11 @@ param(
 
     [string]$RepoRoot = (Get-Location).Path,
 
-    [string]$ModelDir = (Join-Path $env:USERPROFILE '.junie\models'),
+    # $HOME, not $env:USERPROFILE: the latter is null off Windows, and the
+    # separator has to be joined rather than written, or '.junie\models'
+    # becomes one literal filename on Linux. Junie itself is Windows-first
+    # here, but the self-test runs on both CI legs.
+    [string]$ModelDir = (Join-Path (Join-Path $HOME '.junie') 'models'),
 
     [switch]$ProfileOnly
 )
