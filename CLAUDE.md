@@ -71,16 +71,22 @@ pwsh ./scripts/local/Add-RouteDeviation.ps1 -Command /implement -Ran junie:deep 
 Those deviations are the point, not an admission of failure — they are the
 evidence for whether the authored judgments in `route-map.json` hold up. See
 `docs/adr/0008-route-map-records-work-demands.md` for why the map records what
-work demands rather than what models provide, and `specs/046-route-map-advisor/`
-for the reasoning behind each row. Neither script is shipped by `install.ps1`.
+work demands rather than what models provide,
+`docs/adr/0010-cheap-metered-lane-precedes-the-flat-rate-floor.md` for the one
+row that spends metered capacity ahead of flat-rate, and
+`specs/046-route-map-advisor/` for the reasoning behind each row. Neither script
+is shipped by `install.ps1`.
 
 ## OpenRouter via Junie
 
-`openrouter` is the preferred route only for `/code-review` and `/ship-review`
-in this checkout. Other stages retain their existing routes and may use other
-models. The launcher uses `OPENROUTER_API_KEY` only in the environment and
-defaults to `z-ai/glm-5.2`; it does not write the key to `.junie/`, the command
-line, or a repository file:
+`openrouter` is the first route for `/code-review` and `/ship-review` in this
+checkout, and sits mid-chain as a cheap `fast` lane on the four mechanical
+commands (`/task`, `/speckit-specify`, `/speckit-tasks`, `/gherkin`) — above the
+flat-rate floor, for the reason argued in
+`docs/adr/0010-cheap-metered-lane-precedes-the-flat-rate-floor.md`. Every other
+stage keeps its existing route. The launcher uses `OPENROUTER_API_KEY` only in
+the environment and resolves its model from the tier (table below); it does not
+write the key to `.junie/`, the command line, or a repository file:
 
 ```powershell
 pwsh ./scripts/local/Invoke-OpenRouterTask.ps1 -Tier deep -Task 'Review the current diff on the Risk, Standards, and Spec axes.'
@@ -105,12 +111,30 @@ when stdin is redirected without piped input. Still, do not put secrets in
 `-Task`.
 
 `fast`, `balanced`, and `deep` map to Junie's `low`, `medium`, and `high`
-effort respectively. GLM 5.2 is used for all three by default; select a
-different OpenRouter model for one task with `-Model`:
+effort respectively, and each tier now resolves to its own default model
+rather than all three sharing GLM 5.2. Prices below were verified live
+against OpenRouter on 2026-08-25:
+
+| Tier | Junie effort | Default model | Price per 1M in/out |
+| --- | --- | --- | --- |
+| fast | low | `deepseek/deepseek-v4-flash` | $0.077 / $0.154 |
+| balanced | medium | `deepseek/deepseek-v4-pro` | $0.556 / $1.112 |
+| deep | high | `z-ai/glm-5.2` | $1.190 / $3.740 |
+
+`-Model` still overrides the tier default for a single run:
 
 ```powershell
 pwsh ./scripts/local/Invoke-OpenRouterTask.ps1 -Tier balanced -Model qwen/qwen3-coder -Task 'Review this diff for regressions.'
 ```
+
+`deep` stays on GLM 5.2, so the existing `/code-review` route is unchanged.
+Escalate from the cheap `fast` lane to `deep`, or off OpenRouter entirely to a
+flat-rate host, when the work needs judgment rather than mechanical edits.
+
+The generated profile now carries `extraBody.provider.sort = "price"` so
+OpenRouter picks the cheapest endpoint for the slug. `provider.max_price` is
+not set as a default: it fails closed with an HTTP 404 when the cap is below
+every endpoint's price.
 
 Run the documented dry-run test without spending credits:
 

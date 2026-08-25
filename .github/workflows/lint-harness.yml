@@ -191,6 +191,14 @@ jobs:
         shell: pwsh
         run: ./scripts/local/Test-RouteMap.ps1
 
+      # The launcher renders a Junie profile holding a credential reference and
+      # decides which profiles it may overwrite, so both need guarding after
+      # merge. The suite is a dry run by construction: -WhatIf and -ProfileOnly
+      # keep it off Junie and off the network, and it needs no OPENROUTER_API_KEY.
+      - name: OpenRouter launcher keeps the key out and hand-tuned profiles intact
+        shell: pwsh
+        run: ./scripts/local/Test-OpenRouterTask.ps1
+
       # Both directions. A scanner that matches nothing looks exactly like a
       # clean codebase, and one that matches everything gets switched off.
       - name: Secret scanner fires, and stays quiet on look-alikes

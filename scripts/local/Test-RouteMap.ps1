@@ -132,6 +132,23 @@ Assert-That "OpenRouter is host-level advice, not an agents.tiers config gap" ($
 $resolvedShipReview = Resolve-RouteChain -Command '/ship-review' -Map $map -RepoRoot $unpinnedRoot
 Assert-That "OpenRouter is the preferred /ship-review route" ($resolvedShipReview.Chain[0].Host -eq 'openrouter')
 
+# The cheap OpenRouter lane: `fast` on the four mechanical commands, seated
+# below the free gemini-api lane and above the flat-rate floor.
+foreach ($mechanicalRoute in @('/task', '/speckit-specify', '/speckit-tasks', '/gherkin')) {
+    $resolvedMechanical = Resolve-RouteChain -Command $mechanicalRoute -Map $map -RepoRoot $unpinnedRoot
+    $mechanicalChain = @($resolvedMechanical.Chain)
+    $mechanicalOpenRouterEntry = $mechanicalChain | Where-Object { $_.Host -eq 'openrouter' } | Select-Object -First 1
+    Assert-That "OpenRouter is in the $mechanicalRoute route" ($null -ne $mechanicalOpenRouterEntry)
+    Assert-That "OpenRouter is 'fast' on $mechanicalRoute" ($null -ne $mechanicalOpenRouterEntry -and $mechanicalOpenRouterEntry.Tier -eq 'fast')
+    Assert-That "OpenRouter is host-level advice on $mechanicalRoute, not an agents.tiers config gap" ($null -ne $mechanicalOpenRouterEntry -and $mechanicalOpenRouterEntry.KnownHost -eq $false -and $mechanicalOpenRouterEntry.Unpinned -eq $true)
+
+    $openRouterIndex = [array]::IndexOf($mechanicalChain, $mechanicalOpenRouterEntry)
+    $geminiApiIndex = [array]::IndexOf($mechanicalChain, ($mechanicalChain | Where-Object { $_.Host -eq 'gemini-api' } | Select-Object -First 1))
+    $floorIndex = [array]::IndexOf($mechanicalChain, ($mechanicalChain | Where-Object { $_.IsFloor -eq $true } | Select-Object -First 1))
+    Assert-That "OpenRouter sits after gemini-api on $mechanicalRoute" ($geminiApiIndex -ge 0 -and $openRouterIndex -gt $geminiApiIndex) "gemini-api@$geminiApiIndex openrouter@$openRouterIndex"
+    Assert-That "OpenRouter sits before the floor on $mechanicalRoute" ($floorIndex -ge 0 -and $openRouterIndex -lt $floorIndex) "openrouter@$openRouterIndex floor@$floorIndex"
+}
+
 $claudeKnown = $resolvedUnpinned.Chain | Where-Object { $_.Host -eq 'claude' } | Select-Object -First 1
 Assert-That "a host inside agents.tiers is flagged KnownHost=true" ($claudeKnown.KnownHost -eq $true)
 
