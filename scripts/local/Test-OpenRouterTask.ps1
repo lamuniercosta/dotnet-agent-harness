@@ -50,6 +50,15 @@ try {
     Assert-That 'the default profile is the derived custom id' ($default -match 'Profile:\s+custom:openrouter-z-ai-glm-5\.2') $default
     Assert-That 'a dry run does not launch Junie' ($default -match 'Dry run: Junie will not be launched\.') $default
 
+    # This run passes no -ModelDir, so it exercises the parameter default.
+    # That default is bound before any statement executes: a Windows-only
+    # expression there takes the whole script down off Windows, which is a
+    # CI leg. Asserting the platform-joined separator also catches
+    # '.junie\models' collapsing into one literal filename on Linux.
+    $defaultModelPath = Join-Path (Join-Path $HOME '.junie') 'models'
+    Assert-That 'the default model directory resolves under the home directory' `
+        ($default -match [regex]::Escape($defaultModelPath)) $default
+
     $fastDefault = & $runner -Task 'No-op test task' -Tier fast -WhatIf 6>&1 | Out-String
     Assert-That 'the fast tier resolves to its documented default model' ($fastDefault -match 'Model:\s+deepseek/deepseek-v4-flash') $fastDefault
     Assert-That 'the fast tier maps to low effort' ($fastDefault -match 'Tier:\s+fast \(effort=low\)') $fastDefault
@@ -155,13 +164,22 @@ try {
     Assert-That 'a hand-tuned profile is never reported as updated' ($tunedOutput -notmatch 'Updated Junie custom model profile:') $tunedOutput
     Assert-That 'a hand-tuned profile is never reported as created' ($tunedOutput -notmatch 'Created Junie custom model profile:') $tunedOutput
 
-    # Now exercise the real launch path against a fake junie.cmd, which must
-    # only be reachable once -ProfileOnly is out of the picture.
-    $fakeJunie = Join-Path $temporaryDir.FullName 'junie.cmd'
-    [System.IO.File]::WriteAllText($fakeJunie, "@echo off`r`nexit /b 23`r`n", [System.Text.UTF8Encoding]::new($false))
+    # Now exercise the real launch path against a fake junie, which must only
+    # be reachable once -ProfileOnly is out of the picture. The stub has to
+    # match the platform: PATHEXT is Windows-only, so a .cmd is simply not
+    # discoverable by Get-Command on the Linux CI leg.
     $modelDir = Join-Path $temporaryDir.FullName 'models'
+    if ($IsWindows) {
+        $fakeJunie = Join-Path $temporaryDir.FullName 'junie.cmd'
+        [System.IO.File]::WriteAllText($fakeJunie, "@echo off`r`nexit /b 23`r`n", [System.Text.UTF8Encoding]::new($false))
+    }
+    else {
+        $fakeJunie = Join-Path $temporaryDir.FullName 'junie'
+        [System.IO.File]::WriteAllText($fakeJunie, "#!/bin/sh`nexit 23`n", [System.Text.UTF8Encoding]::new($false))
+        chmod +x $fakeJunie
+    }
 
-    $env:PATH = $temporaryDir.FullName + ';' + $previousPath
+    $env:PATH = $temporaryDir.FullName + [System.IO.Path]::PathSeparator + $previousPath
     $env:OPENROUTER_API_KEY = 'test-key-not-used'
     $PSNativeCommandUseErrorActionPreference = $true
 
