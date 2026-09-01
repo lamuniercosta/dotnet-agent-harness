@@ -41,4 +41,4 @@ Ensure tools are restored: `dotnet tool restore`
 
 ## Do not
 
-Mark feature complete or suggest opening a PR until architect gates pass. Human gate 3 is merge at stage 12, after `/ship-review` and the PR.
+Mark feature complete or suggest opening a PR until architect gates, `/code-review` (stage 9), and `/ship-review` (stage 10) have all completed. Human gate 3 is merge at stage 12, after the PR.
