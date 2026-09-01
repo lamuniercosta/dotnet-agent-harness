@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Architect Gate
 
-Runs during `/architect` after refactor. Final automated hardening before human gate 3.
+Runs during `/architect` after refactor. Final automated hardening before gated `/code-review` (stage 9). Human gate 3 is merge at stage 12, not this step.
 
 ## When to run
 
@@ -41,4 +41,4 @@ Ensure tools are restored: `dotnet tool restore`
 
 ## Do not
 
-Mark feature complete or suggest PR until architect gates pass and human gate 3 is noted.
+Mark feature complete or suggest opening a PR until architect gates pass. Human gate 3 is merge at stage 12, after `/ship-review` and the PR.

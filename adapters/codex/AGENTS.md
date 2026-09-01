@@ -206,12 +206,15 @@ the phase directly — see [Limitations](#limitations-under-codex).
 3. **Spec → plan → tasks** — *human gate 1*
 4. **Implement** — TDD; tests must pass
 5. **Refactor** — the refactor gate above
-6. **Architect** — the architect gate above — *human gate 3*
-7. **Ship review** → rebase → PR
+6. **Architect** — the architect gate above
+7. **Code review** *(gated, stage 9)* — `/code-review`; above-bar findings → `/remediate` → re-review
+8. **Ship** — rebase → `/ship-review` → open the PR
+9. **Address PR review** *(conditional)* — `/address-pr-review` when external feedback arrives
+10. **Merge** — *human gate 3*
 
 Never skip the grill, and never route a failing gate to lowering its threshold.
 
-`/code-review` and `/ship-review` have no numeric gate, unlike Implement/Refactor/Architect above — they must be given a stop condition explicitly, in `brief.md`, before Stage 4 (Implement): a closing bar (which severities block), a frozen scope ("anything else is a follow-up issue, not a finding in this round."), and a round cap of two rounds (initial pass + one fix-and-re-run). The closing bar and frozen scope decide which findings get a fix commit on the open loop; below-bar or out-of-scope items become follow-up issues, never a fix commit on this loop. Past the cap, unresolved findings become follow-up issues instead of more fix commits. A Critical or High finding deferred to a follow-up still keeps the stage at **NEEDS FIXES** and prevents READY or a PR suggestion — deferral stops further fix commits, it does not make the diff READY. Amendments to the closing bar or scope after a loop starts are a new issue, not a widening of the current one.
+`/code-review` and `/ship-review` have no numeric gate, unlike Implement/Refactor/Architect above — they must be given a stop condition explicitly, in `brief.md`, before Stage 6 (Implement): a closing bar (which severities block), a frozen scope ("anything else is a follow-up issue, not a finding in this round."), and a round cap of two rounds (initial pass + one fix-and-re-run). The closing bar and frozen scope decide which findings get a fix commit on the open loop; below-bar or out-of-scope items become follow-up issues, never a fix commit on this loop. Past the cap, unresolved findings become follow-up issues instead of more fix commits. A Critical or High finding deferred to a follow-up still keeps the stage at **NEEDS FIXES** and prevents READY or a PR suggestion — deferral stops further fix commits, it does not make the diff READY. Amendments to the closing bar or scope after a loop starts are a new issue, not a widening of the current one.
 
 ## GitHub workflow
 

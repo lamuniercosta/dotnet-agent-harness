@@ -70,13 +70,8 @@ EXECUTE_COMMAND: architect
 
 Or tell user to run `/architect` if hook executor is unavailable.
 
-The code is structurally settled at this point, which makes it the cheapest moment for
-a three-axis review — before mutation, the most expensive stage, is spent on it. Say so:
-
-> Consider `/code-review` before `/architect`. Non-gated, so it is your call.
-
-Mention it, do not execute it. It reports findings rather than passing or failing, so
-chaining it would insert a step that cannot be satisfied.
+Next is `/architect` (stage 8). `/code-review` is gated stage 9, *after* `/architect` —
+do not run it here, and do not frame it as a non-gated optional pass.
 
 ## Do Not
 

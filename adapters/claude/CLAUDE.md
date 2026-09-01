@@ -117,8 +117,11 @@ configured model and effort. Only `fast` is pinned to a cheaper model by default
 3. `/speckit-specify` → `/speckit-plan` → `/speckit-tasks` — **human gate 1**
 4. `/implement` — TDD, tests must pass
 5. `/refactor` — complexity ≤ 6, property tests
-6. `/architect` — mutation ≥ threshold — **human gate 3**
-7. `/ship-review` → rebase → PR
+6. `/architect` — mutation ≥ threshold
+7. `/code-review` *(gated, stage 9)* — above-bar findings → `/remediate` → re-review
+8. rebase → `/ship-review` → open the PR
+9. `/address-pr-review` when external feedback arrives
+10. merge — **human gate 3**
 
 Consult `/using-agent-skills` at the start of any non-trivial task; it routes to
 the right stage and supporting skills.
