@@ -9,7 +9,7 @@ Adapted from [addyosmani/agent-skills](https://github.com/addyosmani/agent-skill
 
 ## Two families of skills
 
-1. **The gated pipeline** (feature delivery) — Spec Kit stages plus this harness's stages, with human gates. Use `/pipeline` to find the current stage. Order: `/task <issue>` (intake + branch) → `/grill-with-docs` (**mandatory** alignment) → `/speckit-specify` → `/speckit-clarify` → `/speckit-checklist` → `/speckit-plan` → `/speckit-tasks` → `/speckit-analyze` → **gate 1** → *(optional: `/gherkin` → gate 2)* → `/implement` → `/refactor` → `/architect` → **gate 3** → `/ship-review` → rebase → PR. Acceptance tests (Gherkin/Reqnroll) are **opt-in** — skip the Gherkin stage and gate 2 unless requested.
+1. **The gated pipeline** (feature delivery) — Spec Kit stages plus this harness's stages, with human gates. Use `/pipeline` to find the current stage. Order: `/task <issue>` (intake + branch) → `/grill-with-docs` (**mandatory** alignment) → `/speckit-specify` → `/speckit-clarify` → `/speckit-checklist` → `/speckit-plan` → `/speckit-tasks` → `/speckit-analyze` → **gate 1** → *(optional: `/gherkin` → gate 2)* → `/implement` → `/refactor` → `/architect` → `/code-review` (gated, stage 9) → rebase → `/ship-review` → open the PR → `/address-pr-review` → merge. Acceptance tests (Gherkin/Reqnroll) are **opt-in** — skip the Gherkin stage and gate 2 unless requested.
 2. **Supporting skills** (non-gated) — pulled in as needed during the pipeline. This router maps tasks to them.
 
 ## Discovery decision tree
@@ -35,8 +35,8 @@ Task arrives
  ├─ Refactor gate (CC, property tests) ─────→ /refactor
  ├─ Mutation / architect gate ───────────────→ /architect
  ├─ Something broke ─────────────────────────→ /diagnosing-bugs
- ├─ Reviewing code ──────────────────────────→ /code-review
- │   └─ Pre-PR consolidated review (gate 3) ─→ /ship-review
+ ├─ Reviewing code (gated, stage 9) ─────────→ /code-review
+ ├─ After rebase, before opening the PR ─────→ /ship-review
  ├─ Designing architecture / domain ─────────→ /codebase-design · /domain-modeling
  ├─ Broad architecture assessment ───────────→ /improve-codebase-architecture
  ├─ Performance / load / SLA ────────────────→ /k6-load-testing

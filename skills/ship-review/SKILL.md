@@ -12,14 +12,14 @@ disable-model-invocation: true
 
 Inspired by the [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills) `/ship` fan-out (MIT), re-mapped to this harness's pipeline and its own agents.
 
-A consolidated readiness review to run **before opening a PR**. It feeds human gate 3; it does not replace it.
+A consolidated readiness review to run **before opening a PR** (stage 10, after rebase). Human gate 3 is merge at stage 12; this stage does not replace it.
 
 Claude Code, Cursor, and Codex can route the roles below to their generated named
 profiles. If the host exposes no subagent mechanism, run the briefs inline and
 disclose that fallback. This gate depends on no external review service.
 
 ## When
-- After implementation + refactor are complete, before creating the PR
+- After `/code-review` is clean and the branch has been rebased, before creating the PR
 - When the user says "ship", "ready to PR", "final review"
 
 ## Steps
@@ -77,7 +77,7 @@ fix-and-re-run is round two. After the cap, unresolved review items move to
 - Blocking findings → fix, re-run from step 1, on that counter. After the cap they move to `Follow-ups`, not another fix commit.
 - Coverage gaps and surviving mutants → add tests, re-run mutation, on that counter. After the cap they move to `Follow-ups` with source and severity retained. A survivor means the test is inadequate — fix the test, not the threshold.
 - READY requires `/verify` passed, all three reviewers ran, `Blocking` empty, and no unresolved Critical/High finding anywhere in the consolidated report, regardless of bucket. Missing loop terms or a missing reviewer remain **NEEDS FIXES**. A Critical or High finding deferred to `Follow-ups` does not cause another post-cap fix commit, but it still prevents READY and any PR suggestion.
-- All clear (that readiness floor met) → summarise for human gate 3, then suggest opening the PR.
+- All clear (that readiness floor met) → summarise readiness and suggest opening the PR. Human gate 3 is merge at stage 12, after the PR exists.
 
 ## Rules
 - Do not open or push a PR automatically.
@@ -88,4 +88,4 @@ fix-and-re-run is round two. After the cap, unresolved review items move to
 ## Related
 - `/verify` — the blocking gate this runs first
 - `/code-review` — the same three-axis review, standalone
-- `/pipeline` — where this sits in the stage order (gate 3)
+- `/pipeline` — where this sits in the stage order (stage 10, after rebase and before the PR)

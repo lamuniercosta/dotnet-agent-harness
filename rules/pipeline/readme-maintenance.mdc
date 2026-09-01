@@ -5,7 +5,7 @@ alwaysApply: true
 
 # README Maintenance
 
-`README.md` documents the **product**: what the service exposes, how it behaves, and how to configure and run it. Review it whenever feature or bug work changes something a consumer of this service would need to know, and update it before ship-review / human gate 3.
+`README.md` documents the **product**: what the service exposes, how it behaves, and how to configure and run it. Review it whenever feature or bug work changes something a consumer of this service would need to know, and update it before `/ship-review` (stage 10). Human gate 3 is merge at stage 12.
 
 ## Out of scope
 
