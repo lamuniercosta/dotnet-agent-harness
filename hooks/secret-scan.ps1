@@ -17,23 +17,31 @@
   guard.ps1 blocks, and only on things that are hard to undo.
 
   The default exit-2 contract surfaces the warning to legacy hosts. The explicit
-  Codex contract emits warning JSON and exits 0 so UserPromptSubmit stays
+  Codex and Cursor contracts emit warning JSON and exit 0 so advisory hooks stay
   warn-only.
 #>
 
 param(
-    [ValidateSet('Legacy', 'Codex')]
+    [ValidateSet('Legacy', 'Codex', 'CursorPrompt', 'CursorReadFile')]
     [string]$OutputContract = 'Legacy'
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'SilentlyContinue'
 
-$raw = [Console]::In.ReadToEnd()
-if ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }
+function Allow {
+    switch ($OutputContract) {
+        'CursorPrompt'   { [Console]::Out.WriteLine('{"continue":true}') }
+        'CursorReadFile' { [Console]::Out.WriteLine('{"permission":"allow"}') }
+    }
+    exit 0
+}
 
-try { $payload = ConvertFrom-Json -InputObject $raw } catch { exit 0 }
-if (-not $payload) { exit 0 }
+$raw = [Console]::In.ReadToEnd()
+if ([string]::IsNullOrWhiteSpace($raw)) { Allow }
+
+try { $payload = ConvertFrom-Json -InputObject $raw } catch { Allow }
+if (-not $payload) { Allow }
 
 function Get-Prop {
     param($Object, [string[]]$Names)
@@ -56,18 +64,18 @@ $file = Get-Prop $toolInput @('file_path', 'filePath', 'path', 'target_file')
 if (-not $file) { $file = Get-Prop $payload @('file_path', 'filePath', 'path') }
 
 if (-not $content -and $file) {
-    if (-not (Test-Path -LiteralPath $file)) { exit 0 }
+    if (-not (Test-Path -LiteralPath $file)) { Allow }
 
     # Skip binaries and anything large enough that scanning is not worth the
     # latency on every read.
     $info = Get-Item -LiteralPath $file
-    if ($info.Length -gt 512KB) { exit 0 }
-    if ($info.Extension -match '^\.(png|jpg|jpeg|gif|ico|pdf|zip|dll|exe|so|dylib|nupkg)$') { exit 0 }
+    if ($info.Length -gt 512KB) { Allow }
+    if ($info.Extension -match '^\.(png|jpg|jpeg|gif|ico|pdf|zip|dll|exe|so|dylib|nupkg)$') { Allow }
 
     $content = Get-Content -LiteralPath $file -Raw
 }
 
-if ([string]::IsNullOrWhiteSpace($content)) { exit 0 }
+if ([string]::IsNullOrWhiteSpace($content)) { Allow }
 
 # Shapes that are credentials by construction, not by naming convention.
 # Ordered most-specific first so the reported reason is the useful one.
@@ -98,7 +106,7 @@ foreach ($name in $patterns.Keys) {
     [void]$hits.Add("  - $name (line ~$line, $($m.Length) chars)")
 }
 
-if ($hits.Count -eq 0) { exit 0 }
+if ($hits.Count -eq 0) { Allow }
 
 $where = if ($file) { $file } else { 'the submitted prompt' }
 
@@ -117,6 +125,23 @@ If a fixture or false positive: continue. This hook warns and never blocks,
 because a scanner that halts work on a guess gets disabled, and a disabled
 scanner protects nothing.
 "@
+
+# Warn-only under Cursor. Exiting 2 here is what blocked the Send button:
+# Cursor reads exit 2 on beforeSubmitPrompt as "reject the prompt", which is
+# exactly the blocking behaviour this scanner's docstring rules out.
+if ($OutputContract -eq 'CursorPrompt') {
+    [Console]::Error.WriteLine($warning)
+    $message = $warning | ConvertTo-Json -Compress
+    [Console]::Out.WriteLine("{`"continue`":true,`"user_message`":$message}")
+    exit 0
+}
+
+if ($OutputContract -eq 'CursorReadFile') {
+    [Console]::Error.WriteLine($warning)
+    $message = $warning | ConvertTo-Json -Compress
+    [Console]::Out.WriteLine("{`"permission`":`"allow`",`"user_message`":$message}")
+    exit 0
+}
 
 if ($OutputContract -eq 'Codex') {
     @{

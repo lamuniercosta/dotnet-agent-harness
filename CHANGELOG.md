@@ -18,6 +18,11 @@ means a consuming repo's gates may start failing on code that previously passed.
   batched GitHub `COMMENT` review. Its PowerShell helper and JSON schema contain
   publishing mechanics only—no review methodology or convergence protocol—and
   are exercised against a fake `gh` on both Windows and Linux.
+- **Cursor hooks now emit explicit JSON decisions.** The shared hook scripts gain
+  Cursor output contracts so `preToolUse`, `beforeSubmitPrompt`,
+  `beforeReadFile`, and `postToolUse` return the event-specific JSON Cursor
+  expects. The credential scanner and gate nudge stay advisory on Cursor instead
+  of blocking prompt submission or completed edits.
 
 ## [0.4.1] — 2026-08-08
 
