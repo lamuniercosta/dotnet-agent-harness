@@ -21,6 +21,9 @@ Stage numbers match the `agent-pipeline` rule. Keep them in step with it — a t
 that renumbers itself is how a stage reference becomes unreadable and gets deleted
 rather than corrected.
 
+Past stage 10 the artifacts live on GitHub, not the filesystem. Detect 11 and 12
+with `gh pr view` on the current branch.
+
 | Condition | Stage | Next command |
 |---|---|---|
 | No branch / no `brief.md` | 0 → 1 | `/task <id> [type]` → `/grill-with-docs` (mandatory) |
@@ -30,8 +33,11 @@ rather than corrected.
 | `tasks.md` exists | 2 → 3 | `/speckit-analyze` → human gate 1 → `/implement` *(or opt-in `/gherkin` first)* |
 | Acceptance `.feature` exist, no bindings | 4 → 5 | *(only if opted in)* Human gate 2 → `/implement` |
 | Code exists, CA1502 above `gates.complexity.refactor` on changed files | 7 | `/refactor` |
-| Refactor done, mutation not run | 7 → 8 | `/code-review` *(non-gated, recommended)* → `/architect` |
-| All gates pass | 9 → 10 | Human gate 3 → `/ship-review` → rebase → PR |
+| Refactor done, mutation not run | 8 | `/architect` |
+| Architect done, review not clean | 9 | `/code-review` → `/remediate` until clean (later rounds: fix-diff only) |
+| Review clean | 10 | rebase → `/ship-review` → open the PR (`/architect` once on loop close first, if remediations accumulated) |
+| `gh pr view`: open PR with unaddressed external feedback | 11 | `/address-pr-review` |
+| `gh pr view`: open PR with no blocking external feedback | 12 | human gate 3 — merge |
 
 Use `$ARGUMENTS` to force a stage check on a specific feature path.
 

@@ -127,17 +127,19 @@ is generated from `globs:`, because the two have different semantics (`*.cs` mea
 ## The pipeline
 
 ```
-0  task             read the issue, branch off the default branch in a worktree
-1  grill-with-docs  MANDATORY alignment — settle vocabulary before any spec
-2  spec             specify → clarify → checklist → plan → tasks → analyze
+0  task              read the issue, branch off the default branch in a worktree
+1  grill-with-docs   MANDATORY alignment — settle vocabulary before any spec
+2  spec              specify → clarify → checklist → plan → tasks → analyze
 3  ── human gate 1 ──
-4  gherkin          optional, opt-in
+4  gherkin           optional, opt-in
 5  ── human gate 2 ── (only if stage 4 ran)
-6  implement        unit + integration tests must pass
-7  refactor         complexity down to the refactor threshold, property tests
-8  architect        mutation above threshold, full suite
-9  ── human gate 3 ──
-10 ship             review fan-out, rebase, PR
+6  implement         unit + integration tests must pass
+7  refactor          complexity down to the refactor threshold, property tests
+8  architect         mutation above threshold, full suite
+9  code-review       gated; findings → /remediate → re-review until clean
+10 ship              rebase → /ship-review → open the PR
+11 address-pr-review conditional on external feedback arriving
+12 merge             ── human gate 3 ──
 ```
 
 Stage 1 is never skipped. An assumption backed by a documentation URL is settled; one
@@ -317,8 +319,10 @@ See [`fixtures/BadCode/README.md`](fixtures/BadCode/README.md).
   submitted prompt reaches the model; hosts with a file-read event scan that path too.
   Codex exposes no file-read event, a gap its installed `AGENTS.md` calls out. Gitleaks
   catches anything that reaches history. This replaces the hooks lost with SonarQube.
-- **No hosted code-review service.** No Bugbot, no PR bot. The pre-PR review is
-  `/ship-review`, running this harness's own agents locally.
+- **No hosted code-review service.** No Bugbot, no PR bot, and none is required.
+  The pre-PR review is `/ship-review`, running this harness's own agents
+  locally; `/address-pr-review` consumes an external review at stage 11 if one
+  arrives.
 - **No issue-tracker integration** beyond the `gh` CLI.
 - **No MCP server of its own.** The two configured (`microsoft-learn`, `context7`) are
   documentation lookups; both work without a paid key.
