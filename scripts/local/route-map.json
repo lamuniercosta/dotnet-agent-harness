@@ -102,6 +102,16 @@
         { "host": "cursor", "tier": "balanced", "floor": true }
       ]
     },
+    "/remediate": {
+      "why": "Applies a frozen set of above-bar review findings; the what is already decided, but the fix is still production code whose silent miss reopens the review loop.",
+      "route": [
+        { "host": "claude", "tier": "deep" },
+        { "host": "cursor", "tier": "deep" },
+        { "host": "antigravity", "tier": "deep" },
+        { "host": "junie", "tier": "deep" },
+        { "host": "claude", "tier": "balanced", "floor": true }
+      ]
+    },
     "/architect": {
       "why": "Interprets Stryker survivors and decides whether the invariant or the test is wrong; a mistaken call here either hides a real gap or adds a test that proves nothing.",
       "route": [
@@ -117,6 +127,16 @@
         { "host": "openrouter", "tier": "balanced" },
         { "host": "claude", "tier": "balanced" },
         { "host": "cursor", "tier": "balanced", "floor": true }
+      ]
+    },
+    "/address-pr-review": {
+      "why": "Adjudicating external review comments and applying only justified fixes is the same silent-miss risk as /code-review, plus a bounded production-code change; balanced is the floor because the comment set already names the work.",
+      "route": [
+        { "host": "claude", "tier": "deep" },
+        { "host": "cursor", "tier": "deep" },
+        { "host": "antigravity", "tier": "deep" },
+        { "host": "junie", "tier": "deep" },
+        { "host": "claude", "tier": "balanced", "floor": true }
       ]
     }
   }
