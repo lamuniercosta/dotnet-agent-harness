@@ -10,14 +10,24 @@
   formatter that gets disabled.
 #>
 
+param(
+    [ValidateSet('Legacy', 'Cursor')]
+    [string]$OutputContract = 'Legacy'
+)
+
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'SilentlyContinue'
 
-$raw = [Console]::In.ReadToEnd()
-if ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }
+function Allow {
+    if ($OutputContract -eq 'Cursor') { [Console]::Out.WriteLine('{}') }
+    exit 0
+}
 
-try { $payload = ConvertFrom-Json -InputObject $raw } catch { exit 0 }
-if (-not $payload) { exit 0 }
+$raw = [Console]::In.ReadToEnd()
+if ([string]::IsNullOrWhiteSpace($raw)) { Allow }
+
+try { $payload = ConvertFrom-Json -InputObject $raw } catch { Allow }
+if (-not $payload) { Allow }
 
 function Get-Prop {
     param($Object, [string[]]$Names)
@@ -83,4 +93,4 @@ foreach ($candidate in (Get-EditedFiles $payload $toolInput)) {
     & dotnet format $project --include $file --verbosity quiet 2>&1 | Out-Null
 }
 
-exit 0
+Allow

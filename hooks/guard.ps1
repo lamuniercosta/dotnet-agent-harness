@@ -28,10 +28,26 @@
 
   Exit 2 blocks the action and returns the reason to the agent. Exit 0 allows.
   Anything unparseable exits 0: this hook must never wedge the session.
+
+  Under -OutputContract Cursor the same decisions are also written to stdout as
+  Cursor's preToolUse JSON, because Cursor treats empty stdout as invalid JSON.
+  Every other host reads the exit code alone.
 #>
+
+param(
+    [ValidateSet('Legacy', 'Cursor')]
+    [string]$OutputContract = 'Legacy'
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+
+function Allow {
+    # Cursor requires a JSON decision on stdout; empty stdout counts as invalid
+    # JSON. Every other host reads the exit code alone, so stay silent there.
+    if ($OutputContract -eq 'Cursor') { [Console]::Out.WriteLine('{"permission":"allow"}') }
+    exit 0
+}
 
 function Deny {
     param([string]$Reason)
@@ -39,16 +55,20 @@ function Deny {
     # Write-Error throws, unwinding before `exit 2` and returning 1 instead -
     # which most hosts read as "hook crashed", not "action blocked".
     [Console]::Error.WriteLine("guard: BLOCKED - $Reason")
+    if ($OutputContract -eq 'Cursor') {
+        $message = "guard: BLOCKED - $Reason" | ConvertTo-Json -Compress
+        [Console]::Out.WriteLine("{`"permission`":`"deny`",`"agent_message`":$message,`"user_message`":$message}")
+    }
     exit 2
 }
 
 $raw = [Console]::In.ReadToEnd()
-if ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }
+if ([string]::IsNullOrWhiteSpace($raw)) { Allow }
 
 # -InputObject, not a pipeline: under Set-StrictMode the piped form binds the
 # automatic $input enumerator and property access on the result then throws.
-try { $payload = ConvertFrom-Json -InputObject $raw } catch { exit 0 }
-if (-not $payload) { exit 0 }
+try { $payload = ConvertFrom-Json -InputObject $raw } catch { Allow }
+if (-not $payload) { Allow }
 
 function Get-Prop {
     <# Property access that yields $null instead of throwing under StrictMode. #>
@@ -325,7 +345,7 @@ function Get-UnsafePushReason {
 
 # Host schemas differ slightly between Cursor and Claude Code; accept either.
 $tool = Get-Prop $payload @('tool_name', 'toolName', 'name')
-if (-not $tool) { exit 0 }
+if (-not $tool) { Allow }
 
 # NB: not $input - that is a reserved automatic variable, and assigning to it
 # silently yields the pipeline enumerator rather than the value assigned.
@@ -335,7 +355,7 @@ switch -Regex ($tool) {
 
     '^Bash$|^Shell$|^run_terminal_cmd$' {
         $cmd = Get-Prop $toolInput @('command', 'cmd')
-        if ([string]::IsNullOrWhiteSpace($cmd)) { exit 0 }
+        if ([string]::IsNullOrWhiteSpace($cmd)) { Allow }
 
         # rm -rf aimed at filesystem root, home, or a bare glob.
         if ($cmd -match 'rm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)+(-[a-zA-Z]+\s+)*(/\s*$|/\*|~|\$HOME|\*\s*$)') {
@@ -367,14 +387,14 @@ switch -Regex ($tool) {
             Deny 'discarding all working-tree changes. Restore specific paths instead.'
         }
 
-        exit 0
+        Allow
     }
 
     '^(Edit|Write|MultiEdit|create_file|edit_file|search_replace)$' {
         $file = Get-Prop $toolInput @('file_path', 'filePath', 'path', 'target_file')
-        if ([string]::IsNullOrWhiteSpace($file)) { exit 0 }
+        if ([string]::IsNullOrWhiteSpace($file)) { Allow }
         Deny-ProtectedPath $file
-        exit 0
+        Allow
     }
 
     '^apply_patch$' {
@@ -382,8 +402,8 @@ switch -Regex ($tool) {
         foreach ($file in (Get-ApplyPatchPaths $cmd)) {
             Deny-ProtectedPath $file
         }
-        exit 0
+        Allow
     }
 
-    default { exit 0 }
+    default { Allow }
 }

@@ -9,15 +9,15 @@
   Deliberately quiet:
     - fires only on .cs writes outside bin/obj
     - at most once every 10 minutes per repo, tracked in a temp stamp file
-    - exits 2 so the message reaches the agent, but the edit is already applied
-      (PostToolUse), so this is a nudge, not a block
+    - uses the host's explicit output contract so the message reaches the agent
+      after the edit is already applied (PostToolUse), as a nudge, not a block
 
   It does NOT run the gates. Running a build on every keystroke would be slower
   than the work itself; the agent decides when to spend that time.
 #>
 
 param(
-    [ValidateSet('Legacy', 'Codex')]
+    [ValidateSet('Legacy', 'Codex', 'Cursor')]
     [string]$OutputContract = 'Legacy'
 )
 
@@ -26,11 +26,16 @@ $ErrorActionPreference = 'SilentlyContinue'
 
 $IntervalMinutes = 10
 
-$raw = [Console]::In.ReadToEnd()
-if ([string]::IsNullOrWhiteSpace($raw)) { exit 0 }
+function Allow {
+    if ($OutputContract -eq 'Cursor') { [Console]::Out.WriteLine('{}') }
+    exit 0
+}
 
-try { $payload = ConvertFrom-Json -InputObject $raw } catch { exit 0 }
-if (-not $payload) { exit 0 }
+$raw = [Console]::In.ReadToEnd()
+if ([string]::IsNullOrWhiteSpace($raw)) { Allow }
+
+try { $payload = ConvertFrom-Json -InputObject $raw } catch { Allow }
+if (-not $payload) { Allow }
 
 function Get-Prop {
     param($Object, [string[]]$Names)
@@ -81,7 +86,7 @@ foreach ($candidate in (Get-EditedFiles $payload $toolInput)) {
     $file = $resolved
     break
 }
-if (-not $file) { exit 0 }
+if (-not $file) { Allow }
 
 # Throttle per repository so a multi-file edit produces one nudge, not twenty.
 $repo = (git -C (Split-Path -LiteralPath $file -Parent) rev-parse --show-toplevel 2>$null)
@@ -93,7 +98,7 @@ $key = [System.BitConverter]::ToString(
 $stamp = Join-Path ([System.IO.Path]::GetTempPath()) "harness-gate-nudge-$key"
 if (Test-Path -LiteralPath $stamp) {
     $age = (Get-Date) - (Get-Item -LiteralPath $stamp).LastWriteTime
-    if ($age.TotalMinutes -lt $IntervalMinutes) { exit 0 }
+    if ($age.TotalMinutes -lt $IntervalMinutes) { Allow }
 }
 Set-Content -LiteralPath $stamp -Value (Get-Date -Format 'o')
 
@@ -106,6 +111,13 @@ gate-nudge: C# changed - the static-analysis gates have not run for this change.
 Run them before reporting the change complete. `dotnet build` alone surfaces none
 of what they catch.
 '@
+
+if ($OutputContract -eq 'Cursor') {
+    [Console]::Error.WriteLine($nudge)
+    $message = $nudge | ConvertTo-Json -Compress
+    [Console]::Out.WriteLine("{`"additional_context`":$message}")
+    exit 0
+}
 
 if ($OutputContract -eq 'Codex') {
     @{
