@@ -9,7 +9,7 @@ Adapted from [addyosmani/agent-skills](https://github.com/addyosmani/agent-skill
 
 ## Two families of skills
 
-1. **The gated pipeline** (feature delivery) — Spec Kit stages plus this harness's stages, with human gates. Use `/pipeline` to find the current stage. Order: `/task <issue>` (intake + branch) → `/grill-with-docs` (**mandatory** alignment) → `/speckit-specify` → `/speckit-clarify` → `/speckit-checklist` → `/speckit-plan` → `/speckit-tasks` → `/speckit-analyze` → **gate 1** → *(optional: `/gherkin` → gate 2)* → `/implement` → `/refactor` → `/architect` → `/code-review` (gated, stage 9) → rebase → `/ship-review` → open the PR → `/address-pr-review` → merge. Acceptance tests (Gherkin/Reqnroll) are **opt-in** — skip the Gherkin stage and gate 2 unless requested.
+1. **The gated pipeline** (feature delivery) — Spec Kit stages plus this harness's stages, with human gates. Use `/pipeline` to find the current stage. Order: `/task <issue>` (intake + branch) → `/grill-with-docs` (**mandatory** alignment) → `/speckit-specify` → `/speckit-clarify` → `/speckit-checklist` → `/speckit-plan` → `/speckit-tasks` → `/speckit-analyze` → **gate 1** → *(optional: `/gherkin` → gate 2)* → `/implement` → `/refactor` → `/architect` → `/code-review` (gated, stage 9) → rebase → `/ship-review` → open the PR → *(conditional: `/address-pr-review` when external feedback arrives)* → merge. Acceptance tests (Gherkin/Reqnroll) are **opt-in** — skip the Gherkin stage and gate 2 unless requested.
 2. **Supporting skills** (non-gated) — pulled in as needed during the pipeline. This router maps tasks to them.
 
 ## Discovery decision tree
