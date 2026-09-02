@@ -147,7 +147,7 @@ Tooling: dotnet build / format — pass | fail
 
 Report the worst issue **within each axis**. Don't declare a single cross-axis winner.
 
-Sort verified findings against `brief.md`'s closing bar and frozen scope. Above the bar go to `/remediate`. Below the bar or outside the frozen scope go to Follow-ups; never silently relabelled `Non-blocking`. Keep the original source and severity. The stage clears only when no finding above the closing bar remains.
+Sort verified findings against `brief.md`'s closing bar and frozen scope. Above the bar go to `/remediate`. Below the bar or outside the frozen scope go to Follow-ups; never silently relabelled `Non-blocking`. Keep the original source and severity. The stage clears only when no finding above the closing bar remains. A Critical or High finding deferred to Follow-ups does not cause another post-cap fix commit, but it still prevents the review stage from clearing.
 
 ## Severity
 
