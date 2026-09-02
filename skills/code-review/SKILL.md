@@ -15,7 +15,7 @@ Each axis runs in an isolated sub-agent when the host supports delegation, with 
 
 ### 0. Resolve loop terms
 
-Resolve `FEATURE_DIR` as `/pipeline`: task value, or `.specify/scripts/powershell/check-prerequisites.ps1 -Json`. Read `<FEATURE_DIR>/brief.md` for **closing bar**, **frozen scope**, and **round cap** before Step 1. If the feature or any term is unresolvable, fail closed: stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**. Do not infer defaults.
+Resolve `FEATURE_DIR` as `/pipeline`: task value, or `.specify/scripts/powershell/check-prerequisites.ps1 -Json`. Read `<FEATURE_DIR>/brief.md` for **closing bar**, **frozen scope**, and **round cap** before Step 1. If the feature or any term cannot be resolved unambiguously, fail closed: stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**. Do not infer defaults or choose among multiple briefs.
 
 ### 1. Pin the fixed point
 
