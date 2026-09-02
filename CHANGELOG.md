@@ -8,6 +8,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this
 project uses [semantic versioning](https://semver.org/), where a **major** bump
 means a consuming repo's gates may start failing on code that previously passed.
 
+## [Unreleased]
+
+### Added
+
+- **/code-review is now a gated stage 9.** It now fails closed on missing loop terms (e.g., missing brief.md context or ambiguous briefs), accepts an explicit diff range, and routes above-bar findings to `/remediate`. Below-bar and out-of-scope findings are now managed as follow-up issues.
+
 ## [0.5.0] — 2026-08-11
 
 ### Added
