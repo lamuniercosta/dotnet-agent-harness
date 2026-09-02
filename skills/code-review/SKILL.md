@@ -13,6 +13,10 @@ Each axis runs in an isolated sub-agent when the host supports delegation, with 
 
 ## Process
 
+### 0. Resolve loop terms
+
+Resolve `FEATURE_DIR` as `/pipeline`: task value, or `.specify/scripts/powershell/check-prerequisites.ps1 -Json`. Read `<FEATURE_DIR>/brief.md` for **closing bar**, **frozen scope**, and **round cap** before Step 1. If the feature or any term is unresolvable, fail closed: stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**. Do not infer defaults.
+
 ### 1. Pin the fixed point
 
 Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it.
@@ -20,6 +24,8 @@ Whatever the user said is the fixed point — a commit SHA, branch name, tag, `m
 Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
 
 Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here — not inside three parallel sub-agents.
+
+If the caller supplies an explicit diff range, review only that range.
 
 ### 2. Score blast radius
 
@@ -140,6 +146,8 @@ Tooling: dotnet build / format — pass | fail
 ```
 
 Report the worst issue **within each axis**. Don't declare a single cross-axis winner.
+
+Sort verified findings against `brief.md`'s closing bar and frozen scope. Above the bar go to `/remediate`. Below the bar or outside the frozen scope go to Follow-ups; never silently relabelled `Non-blocking`. Keep the original source and severity. The stage clears only when no finding above the closing bar remains.
 
 ## Severity
 
