@@ -20,52 +20,46 @@ lookups.
 
 ## Task intake in this repo
 
-When starting work from a GitHub issue **in this repository**, use
-**`$start-issue <n> [type]`** instead of `$task`.
+Work on this repository is driven by a Maestri team, not by the harness's own
+pipeline. **Do not invoke the harness's analysis and pipeline skills on this
+repository**: `grill-with-docs`, `implement`, `code-review`, `refactor`,
+`verify`, `architect`, `ship-review`, and the speckit commands. They are built
+for C#, and this repository contains none outside `fixtures/BadCode/`, which is
+deliberately broken and must never be edited. Running them here costs tokens and
+returns nothing. Do the work directly.
 
-`$start-issue` is a repo-local skill. Codex discovers it under
-`.agents/skills/start-issue/`, which delegates to the authored procedure in
-`.claude/skills/start-issue/SKILL.md`. It:
+There is no `dotnet-tools.json` and no solution to restore or build. The gates
+that matter are the PowerShell tests under `scripts/local/` and the grep gates
+in `.github/workflows/lint-harness.yml`.
 
-1. Runs the same intake/branch flow as harness `task`
-2. Moves Portfolio (and any other board the issue is on) Status → In Progress
-   when the current status is empty, Todo, or Backlog
-3. Hands off to mandatory `grill-with-docs`
-
-It is **not** shipped by `install.ps1`. Consumers keep using `$task`.
-
-Requires `gh` with the project scope: `gh auth refresh -s project`.
-
-## Bootstrap canonical skills for self-development
-
-The repository tracks only the canonical `skills/` sources and the repo-local
-`start-issue` authored overrides. Generate the ignored host discovery copies
-when you need to invoke the rest of the harness surface while developing it:
+Issue intake here is manual — two commands, no skill:
 
 ```powershell
-pwsh ./scripts/local/Sync-SelfSkills.ps1
+./packs/dotnet/scripts/new-task-branch.ps1 -Issue <n> [-Type feature|bug|hotfix]
+pwsh ./scripts/local/Set-IssueInProgress.ps1 -Issue <n>
 ```
 
-The command projects the Claude form into `.claude/skills/` and the Codex form
-into `.agents/skills/` using the same renderer as consumer installation. It
-refreshes and removes only names recorded in its ignored ownership manifest;
-`start-issue` and foreign skills are never owned. An unowned same-name collision
-fails before mutation instead of silently replacing a local skill.
+The first creates the branch and its worktree under
+`../dotnet-agent-harness.worktrees/`. The second sets the board Status to
+In Progress only when it is currently empty, `Todo`, or `Backlog`, and warns and
+exits 0 when the issue is on no board. Requires `gh` with the project scope:
+`gh auth refresh -s project`.
 
-Codex does not reload project skills during a running session. Restart or reload
-Codex after sync before expecting `$verify`, `$implement`, or another newly
-generated command to resolve. Use this repository's `$start-issue`, not `$task`,
-for GitHub issue intake so project status handling remains active.
+Intake stops there. There is no grill step.
 
-To remove the generated discovery copies without touching authored or foreign
-skills:
+## This repository has no skill discovery trees
 
-```powershell
-pwsh ./scripts/local/Sync-SelfSkills.ps1 -Clean
-```
+`skills/` and `.claude/agents/` are authored sources that ship to consumers, not
+commands. The harness no longer projects them into `.agents/skills/`, so
+`$implement`, `$code-review` and the rest do not resolve here. That is
+deliberate — see
+[ADR 0012](docs/adr/0012-the-harness-does-not-project-its-own-skills.md), which
+supersedes [ADR 0003](docs/adr/0003-codex-skills-use-a-generated-agents-copy.md)
+for this repository only. ADR 0003 still governs what `install.ps1` generates in
+a consumer repo.
 
-This bootstrap does not relax `install.ps1`'s full self-install refusal and does
-not install gates, hooks, templates, or consumer configuration into this repo.
+Read the canonical files under `skills/` directly and edit them in place. To see
+how one renders for Codex, run `install.ps1` against a scratch repository.
 
 ## Always-on rules are not auto-loaded here either
 

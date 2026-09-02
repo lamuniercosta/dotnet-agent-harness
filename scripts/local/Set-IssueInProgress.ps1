@@ -4,12 +4,13 @@
   Sets GitHub Project Status to "In Progress" for an issue's project items.
 
 .DESCRIPTION
-  Repo-local helper used by /.claude/skills/start-issue (not shipped by install.ps1).
+  Repo-local board helper for issue intake in this repository. Not shipped by
+  install.ps1; consumers get board handling through the packaged /task skill.
 
   Discovers project memberships on the issue at runtime. For every project item
   whose Status is empty, Todo, or Backlog, sets Status to In Progress. Leaves
   Done, In Progress, and any other mid-flight statuses alone. If the issue is
-  on no projects, warns and exits 0 so /task is not blocked.
+  on no projects, warns and exits 0 so intake is not blocked.
 
 .PARAMETER Issue
   GitHub issue number.

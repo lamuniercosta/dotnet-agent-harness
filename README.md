@@ -292,7 +292,6 @@ pwsh ./hooks/Test-Guard.ps1                            # the guard hook
 pwsh ./hooks/Test-SecretScan.ps1                       # secret scanning, both directions
 pwsh ./hooks/Test-GateNudge.ps1                        # Codex advisory output contract
 pwsh ./scripts/local/Test-JsonProperty.ps1             # repo-local issue helper JSON
-pwsh ./scripts/local/Test-SelfSkills.ps1               # self-development skill delivery
 pwsh ./packs/dotnet/scripts/Test-HarnessConfig.ps1     # harness.yml parsing
 pwsh ./packs/dotnet/scripts/Test-ThresholdDocs.ps1     # docs vs harness.yml
 pwsh ./packs/dotnet/scripts/Test-SpecKitExtension.ps1  # the Spec Kit coupling
