@@ -350,7 +350,7 @@ try {
     } else { @() }
 
     Assert-That 'the default installs every canonical skill for Codex' `
-        (($sourceSkillNames.Count -eq 26) -and
+        (($sourceSkillNames.Count -eq 27) -and
          (@($sourceSkillNames | Where-Object { $_ -notin $installedSkillNames }).Count -eq 0)) `
         'a missing .agents/skills directory silently removes part of the workflow'
     Assert-That 'the four pipeline entry skills are present for Codex' `
