@@ -18,7 +18,7 @@ Append a remediation phase to `<FEATURE_DIR>/tasks.md` with frozen, countable `-
 ## 2. Each round
 
 1. Pin an explicit pre-round baseline: `ROUND_BASE=$(git rev-parse HEAD)`. Later `/code-review` **must** get this fixed point / range.
-2. Run `/implement` on this round's remediation rows. `after_implement` fires `/refactor`; **never call `/refactor` from this skill**.
+2. Run `/implement` on this round's remediation rows with `REMEDIATION_ROUND=true` so `after_implement`'s `/refactor` receives it; **never call `/refactor` from this skill**.
 3. Ignore `/refactor`'s `/architect` handoff. **Do not run `/architect` inside a round.**
 4. The round fix diff is `git diff ROUND_BASE...HEAD` — every change since the pinned baseline, **including hooked `/refactor` output**. Do not review implement-only output.
 5. Empty, unresolved, or unreviewable diff → fail closed. Never treat empty as clean. Stop; **NEEDS FIXES**.
