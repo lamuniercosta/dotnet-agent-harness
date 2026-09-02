@@ -35,16 +35,8 @@ A repository-specific skill maintained by hand because its behavior intentionall
 _Avoid_: Generated exception
 
 **Foreign skill**:
-A host discovery entry authored outside the harness bootstrap and therefore ineligible for harness refresh or cleanup.
+A host discovery entry authored outside the harness installation and therefore ineligible for harness refresh or cleanup.
 _Avoid_: Unowned generated skill
-
-**Self-development bootstrap**:
-The repo-local operation that creates discovery copies for working on the harness without installing the harness into itself.
-_Avoid_: Self-install
-
-**Ownership manifest**:
-The local record of discovery copies created by the self-development bootstrap. Only recorded entries are eligible for refresh or cleanup.
-_Avoid_: Directory ownership
 
 ## Agent delegation
 

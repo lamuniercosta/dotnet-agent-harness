@@ -1,6 +1,5 @@
 # Shared host rendering for canonical harness skills.
-# Dot-sourced by install.ps1 and the repo-local self-development bootstrap so
-# Codex adaptation has one implementation.
+# Dot-sourced by install.ps1 so Codex adaptation has one implementation.
 
 function ConvertTo-CodexSkillReferences {
     param(

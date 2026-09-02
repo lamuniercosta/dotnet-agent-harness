@@ -167,15 +167,12 @@ jobs:
         shell: pwsh
         run: ./hooks/Test-Guard.ps1
 
-      # Repo-local /start-issue helpers. Not under packaged skills/, but the
-      # StrictMode crashes they exist to prevent are cheap to regression-test.
+      # Guards Get-JsonPath, which Set-IssueInProgress.ps1 walks GraphQL
+      # responses with. The StrictMode crashes it prevents are cheap to
+      # regression-test and invisible to a distribution test.
       - name: JSON property helpers tolerate absent note properties
         shell: pwsh
         run: ./scripts/local/Test-JsonProperty.ps1
-
-      - name: Self-development skills match consumer delivery
-        shell: pwsh
-        run: ./scripts/local/Test-SelfSkills.ps1
 
       # The /pr-review helper talks to gh, so its defects (multi-page fetches,
       # rerun receipts, verb dispatch) are invisible to a distribution test.

@@ -27,15 +27,11 @@ inspectcode-report.xml
 .DS_Store
 Thumbs.db
 
-# Repo-local self-development skill projections. The tracked start-issue
-# directories are authored overrides; every other entry is generated.
-/.claude/skills/*
-!/.claude/skills/start-issue/
-!/.claude/skills/start-issue/**
-/.agents/skills/*
-!/.agents/skills/start-issue/
-!/.agents/skills/start-issue/**
-/scripts/local/.self-skills-manifest.json
+# This repository does not project its skills into host discovery trees
+# (ADR 0012). Ignore them so a stray sync or an installed plugin cannot add
+# invocable copies of the canonical skills back to the checkout.
+/.claude/skills/
+/.agents/
 
 # Route-map advisor log: personal usage evidence, not the authored artifact.
 # route-map.json itself IS tracked (it's the durable output of #46).

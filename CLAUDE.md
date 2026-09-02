@@ -6,42 +6,59 @@ under `adapters/claude/CLAUDE.md`).
 
 ## Task intake in this repo
 
-When starting work from a GitHub issue **in this repository**, use
-**`/start-issue <n> [type]`** instead of `/task`.
+Work on this repository is driven by a Maestri team, not by the harness's own
+pipeline. **Do not invoke the harness's analysis and pipeline skills on this
+repository**: `/grill-with-docs`, `/implement`, `/code-review`, `/refactor`,
+`/verify`, `/architect`, `/ship-review`, and the speckit commands. They are
+built for C#, and this repository contains none outside `fixtures/BadCode/`,
+which is deliberately broken and must never be edited. Running them here costs
+tokens and returns nothing. Do the work directly.
 
-`/start-issue` is a repo-local skill (`.claude/skills/start-issue/`) that:
+There is no `dotnet-tools.json` and no solution to restore or build. The gates
+that matter are the PowerShell tests under `scripts/local/` and the grep gates
+in `.github/workflows/lint-harness.yml`.
 
-1. Runs the same intake/branch flow as harness `/task`
-2. Moves Portfolio (and any other board the issue is on) Status → In Progress
-   when the current status is empty, Todo, or Backlog
-3. Hands off to mandatory `/grill-with-docs`
-
-It is **not** shipped by `install.ps1`. Consumers keep using `/task`.
-
-Requires `gh` with the project scope: `gh auth refresh -s project`.
-
-## Bootstrap canonical skills for self-development
-
-The tracked discovery trees contain only the repo-local `start-issue` authored
-overrides. Generate ignored discovery copies for every canonical harness skill:
+Issue intake here is manual — two commands, no skill:
 
 ```powershell
-pwsh ./scripts/local/Sync-SelfSkills.ps1
+./packs/dotnet/scripts/new-task-branch.ps1 -Issue <n> [-Type feature|bug|hotfix]
+pwsh ./scripts/local/Set-IssueInProgress.ps1 -Issue <n>
 ```
 
-The command uses the same Claude and Codex rendering paths as consumer
-installation. It refreshes only manifest-owned copies, preserves `start-issue`
-and foreign skills, and fails before mutation on an unowned same-name collision.
-Reload Claude Code after syncing before expecting new `/name` commands to
-resolve. Continue to prefer `/start-issue` over `/task` for issue intake here.
+The first creates the branch and its worktree under
+`../dotnet-agent-harness.worktrees/`; a dirty main checkout does not block it,
+which is what lets several agents work this repo at once. If the branch already
+exists, stop and report — do not force.
 
-Remove only generated self-development copies with:
+The second discovers the issue's project items at runtime and sets Status to
+In Progress only when it is currently empty, `Todo`, or `Backlog`. It leaves
+`Done` and mid-flight statuses alone, and warns and exits 0 when the issue is on
+no board. Requires `gh` with the project scope: `gh auth refresh -s project`.
 
-```powershell
-pwsh ./scripts/local/Sync-SelfSkills.ps1 -Clean
-```
+Intake stops there. There is no grill step and nothing to `dotnet tool restore`.
 
-This is not a full self-install; `install.ps1` still refuses the harness root.
+## This repository has no skill discovery trees
+
+`skills/` and `.claude/agents/` are **authored sources that ship to consumers**.
+They are not commands you can invoke here. The harness no longer projects them
+into `.claude/skills/` or `.agents/skills/`, so `/implement`, `/code-review`,
+`/verify` and the rest do not resolve in this checkout. That is deliberate — see
+[ADR 0012](docs/adr/0012-the-harness-does-not-project-its-own-skills.md).
+
+Edit the canonical files under `skills/` directly. To see how one renders for a
+consumer, run `install.ps1` against a scratch repository.
+
+If a harness command still resolves here, it is coming from an installed plugin
+rather than from this repository. The rule above still applies: do not run it on
+this repo.
+
+## If you are the Conductor of a Maestri team
+
+You coordinate; you do not implement. Task intake, branch creation, worktrees
+and commits belong to the **Operator** seat. Plan approval and acceptance
+belong to the **Thinker** seat. Before doing repository work yourself, run
+`maestri list` and delegate it. Doing a seat's work yourself is the failure
+mode the team exists to prevent.
 
 ## Which host and model to run a command on
 
