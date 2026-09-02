@@ -66,5 +66,5 @@ Where acceptance tests exist, Gherkin mutation must also produce zero survivors.
 ## Composition
 
 - **Invoke directly** for test design, coverage analysis, or a Prove-It test.
-- **Invoked by** `/ship-review` (parallel fan-out alongside `code-reviewer` and `security-reviewer`) and during `/implement` and `/architect`.
+- **Invoked by** `/ship-review` (parallel fan-out alongside `/code-review` and `security-reviewer`) and during `/implement` and `/architect`.
 - **Do not invoke from another persona.** Recommendations to add tests belong in your report; the user or a pipeline stage decides when to act. Coverage gaps and mutation survivors route back to `/implement`.

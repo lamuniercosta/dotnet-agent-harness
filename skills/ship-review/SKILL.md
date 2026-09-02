@@ -41,15 +41,28 @@ shared round counter defined in Step 4 — do not fan out. Past the cap, make no
 further fix commits; keep the verdict **NEEDS FIXES** and stop without fan-out.
 
 ### 2. Parallel fan-out
-Dispatch all three in a **single message** so they run concurrently — they are independent, and running them in sequence wastes the main context on intermediate output.
+Identify the **stage-9-cleared commit** from the current review session — the
+commit stage 9 `/code-review` cleared before the rebase. That fixed point is
+in-session only: do not write a receipt or other state outside the working tree
+to recover it. If the commit is missing or ambiguous, fail closed before
+fan-out: report **Could not run** with the reason and verdict **NEEDS FIXES**.
+
+First determine whether the rebase delta is empty — the diff from that
+stage-9-cleared commit to the rebased head. If empty, record a named
+correctness **confirmation** in the consolidated report and **do not invoke**
+`/code-review`. That confirmation still counts as the lane having run: do not
+skip the lane and do not treat emptiness as a missing reviewer. If non-empty,
+invoke `/code-review` with that **explicit diff range**.
+
+Dispatch security, coverage, and (when the rebase delta is non-empty) `/code-review` in a **single message** so they run concurrently — they are independent, and running them in sequence wastes the main context on intermediate output. On an empty rebase delta, record the correctness confirmation in that same turn rather than invoking `/code-review` or omitting the lane.
 
 | Reviewer | Agent | Brief |
 |---|---|---|
-| Correctness & design | `code-reviewer` | Three-axis review of the diff — Risk, Standards, Spec |
+| Correctness & design | `/code-review` | First determine whether the rebase delta is empty. If empty: named confirmation, do not invoke `/code-review`, not a skipped lane. If non-empty: explicit diff range from stage-9-cleared commit to rebased head. |
 | Security | `security-reviewer` | `run-vulnerable-packages.ps1`, plus review for secrets/connection strings, injection, missing authorization, permissive CORS, PII in logs or telemetry attributes |
 | Coverage | `mutation-analyst` | Coverage gaps and Stryker survivors against the change set |
 
-Each brief gets: the diff command, the commit list, and the `/verify` results table.
+Security and coverage each get: the diff command, the commit list, and the `/verify` results table. Correctness gets the named confirmation when the rebase delta is empty, or the explicit range when it is non-empty.
 
 ### 3. Consolidate
 Merge into one report, de-duplicating where two reviewers found the same thing (keep the more specific statement, note both sources).
@@ -87,5 +100,5 @@ fix-and-re-run is round two. After the cap, unresolved review items move to
 
 ## Related
 - `/verify` — the blocking gate this runs first
-- `/code-review` — the same three-axis review, standalone
+- `/code-review` — the correctness lane over the rebase delta; also standalone at stage 9
 - `/pipeline` — where this sits in the stage order (stage 10, after rebase and before the PR)

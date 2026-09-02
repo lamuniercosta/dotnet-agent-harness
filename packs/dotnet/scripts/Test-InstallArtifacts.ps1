@@ -381,6 +381,7 @@ try {
     $claudeCodeReview = Get-Content -LiteralPath (Join-Path $repo '.claude/skills/code-review/SKILL.md') -Raw
     $codexGrill = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'grill-with-docs/SKILL.md') -Raw
     $codexShipReview = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'ship-review/SKILL.md') -Raw
+    $claudeShipReview = Get-Content -LiteralPath (Join-Path $repo '.claude/skills/ship-review/SKILL.md') -Raw
     Assert-That 'Codex grill-with-docs routes non-bar items to follow-up issues' `
         ($codexGrill -match '(?is)anything else is a follow-up issue, not a finding in this round\.')
     Assert-That 'Codex ship-review fails closed when loop terms are missing' `
@@ -419,6 +420,80 @@ try {
          ($codexShipReview -match '(?is)missing reviewer') -and
          ($codexShipReview -match 'NEEDS FIXES')) `
         'a missing reviewer or deferred Critical/High must keep NEEDS FIXES'
+    Assert-That 'Codex ship-review correctness lane invokes $code-review over the rebase delta' `
+        (($codexShipReview -match '(?is)Correctness & design') -and
+         ($codexShipReview -match '(?is)\$code-review') -and
+         ($codexShipReview -match '(?is)explicit diff range') -and
+         ($codexShipReview -match '(?is)stage-9-cleared commit') -and
+         ($codexShipReview -match '(?is)rebased head') -and
+         ($codexShipReview -notmatch '(?is)Correctness & design \| `code-reviewer`')) `
+        'the Codex copy must call $code-review, not a bare code-reviewer correctness row'
+    Assert-That 'Claude ship-review correctness lane invokes /code-review over the rebase delta' `
+        (($claudeShipReview -match '(?is)Correctness & design') -and
+         ($claudeShipReview -match '(?is)/code-review') -and
+         ($claudeShipReview -match '(?is)explicit diff range') -and
+         ($claudeShipReview -match '(?is)stage-9-cleared commit') -and
+         ($claudeShipReview -match '(?is)rebased head') -and
+         ($claudeShipReview -notmatch '(?is)Correctness & design \| `code-reviewer`')) `
+        'the Claude copy must call /code-review, not a bare code-reviewer correctness row'
+    Assert-That 'ship-review records an empty rebase delta as a named confirmation' `
+        (($codexShipReview -match '(?is)empty rebase delta') -and
+         ($codexShipReview -match '(?is)confirmation') -and
+         ($codexShipReview -match '(?is)not a skipped lane') -and
+         ($claudeShipReview -match '(?is)empty rebase delta') -and
+         ($claudeShipReview -match '(?is)confirmation') -and
+         ($claudeShipReview -match '(?is)not a skipped lane')) `
+        'an empty delta must still appear as a correctness confirmation, not a missing lane'
+    Assert-That 'Codex ship-review does not invoke $code-review on an empty rebase delta' `
+        (($codexShipReview -match '(?is)Determine whether the rebase delta') -and
+         ($codexShipReview -match '(?is)do not invoke `?\$code-review') -and
+         ($codexShipReview -match '(?is)non-empty') -and
+         ($codexShipReview -match '(?is)explicit diff range')) `
+        'an empty delta must short-circuit before $code-review, whose empty diff fails closed'
+    Assert-That 'Claude ship-review does not invoke /code-review on an empty rebase delta' `
+        (($claudeShipReview -match '(?is)Determine whether the rebase delta') -and
+         ($claudeShipReview -match '(?is)do not invoke `?/code-review') -and
+         ($claudeShipReview -match '(?is)non-empty') -and
+         ($claudeShipReview -match '(?is)explicit diff range')) `
+        'an empty delta must short-circuit before /code-review, whose empty diff fails closed'
+    Assert-That 'ship-review short-circuits an empty rebase delta without invoking code-review' `
+        (($codexShipReview -match '(?is)First determine whether the rebase delta is empty') -and
+         ($codexShipReview -match '(?is)do not invoke `\$code-review`') -and
+         ($codexShipReview -match '(?is)If non-empty') -and
+         ($claudeShipReview -match '(?is)First determine whether the rebase delta is empty') -and
+         ($claudeShipReview -match '(?is)do not invoke `/code-review`') -and
+         ($claudeShipReview -match '(?is)If non-empty')) `
+        'an empty delta must not be handed to /code-review, whose empty-diff pin fails'
+    Assert-That 'ship-review keeps the stage-9-cleared commit in-session' `
+        (($codexShipReview -match '(?is)in-session') -and
+         ($codexShipReview -match '(?is)working tree') -and
+         ($codexShipReview -match '(?is)receipt') -and
+         ($claudeShipReview -match '(?is)in-session') -and
+         ($claudeShipReview -match '(?is)working tree') -and
+         ($claudeShipReview -match '(?is)receipt')) `
+        'the fixed point must not be recovered from state written outside the working tree'
+    Assert-That 'ship-review fails closed when the stage-9-cleared commit is missing or ambiguous' `
+        (($codexShipReview -match '(?is)missing or ambiguous') -and
+         ($codexShipReview -match '(?is)Could not run') -and
+         ($codexShipReview -match 'NEEDS FIXES') -and
+         ($claudeShipReview -match '(?is)missing or ambiguous') -and
+         ($claudeShipReview -match '(?is)Could not run') -and
+         ($claudeShipReview -match 'NEEDS FIXES')) `
+        'a missing rebase-delta fixed point must be Could not run, not an unscoped review'
+    $codexTestEngineer = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'test-engineer/SKILL.md') -Raw
+    $claudeTestEngineer = Get-Content -LiteralPath (Join-Path $repo '.claude/skills/test-engineer/SKILL.md') -Raw
+    Assert-That 'Codex test-engineer names ship-review fan-out alongside $code-review' `
+        (($codexTestEngineer -match '(?is)Invoked by') -and
+         ($codexTestEngineer -match '(?is)\$ship-review') -and
+         ($codexTestEngineer -match '(?is)alongside `\$code-review`') -and
+         ($codexTestEngineer -notmatch '(?is)alongside `code-reviewer`')) `
+        'the Codex copy must not keep a bare code-reviewer as a ship-review fan-out peer'
+    Assert-That 'Claude test-engineer names ship-review fan-out alongside /code-review' `
+        (($claudeTestEngineer -match '(?is)Invoked by') -and
+         ($claudeTestEngineer -match '(?is)/ship-review') -and
+         ($claudeTestEngineer -match '(?is)alongside `/code-review`') -and
+         ($claudeTestEngineer -notmatch '(?is)alongside `code-reviewer`')) `
+        'the Claude copy must not keep a bare code-reviewer as a ship-review fan-out peer'
     Assert-That 'Codex code-review fails closed when loop terms are missing' `
         (($codexCodeReview -match '(?is)FEATURE_DIR') -and
          ($codexCodeReview -match '(?is)check-prerequisites\.ps1') -and
