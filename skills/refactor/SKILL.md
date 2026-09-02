@@ -58,7 +58,9 @@ Fix every failure before proceeding. Re-run gates until all pass.
 
 ## Handoff
 
-On success, output:
+If `$ARGUMENTS` contains `REMEDIATION_ROUND=true`, skip the architect handoff and say: `/remediate` runs `/architect` once after loop closure.
+
+Otherwise, on success, output:
 
 ```
 ## Extension Hooks
@@ -69,9 +71,6 @@ EXECUTE_COMMAND: architect
 ```
 
 Or tell user to run `/architect` if hook executor is unavailable.
-
-Next is `/architect` (stage 8). `/code-review` is gated stage 9, *after* `/architect` —
-do not run it here, and do not frame it as a non-gated optional pass.
 
 ## Do Not
 
