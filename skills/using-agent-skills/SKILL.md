@@ -38,6 +38,7 @@ Task arrives
  ├─ Reviewing code (gated, stage 9) ─────────→ /code-review
  │   └─ Accepted findings to close ──────────→ /remediate
  ├─ After rebase, before opening the PR ─────→ /ship-review
+ ├─ Open PR with external review feedback ───→ /address-pr-review
  ├─ Designing architecture / domain ─────────→ /codebase-design · /domain-modeling
  ├─ Broad architecture assessment ───────────→ /improve-codebase-architecture
  ├─ Performance / load / SLA ────────────────→ /k6-load-testing
