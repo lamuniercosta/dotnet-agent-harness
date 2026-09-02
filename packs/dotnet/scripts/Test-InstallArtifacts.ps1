@@ -378,6 +378,7 @@ try {
         ($hostControlPlaneRefs.Count -eq 0) `
         (($hostControlPlaneRefs | ForEach-Object { "$($_.Path):$($_.LineNumber)" }) -join ', ')
     $codexCodeReview = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'code-review/SKILL.md') -Raw
+    $claudeCodeReview = Get-Content -LiteralPath (Join-Path $repo '.claude/skills/code-review/SKILL.md') -Raw
     $codexGrill = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'grill-with-docs/SKILL.md') -Raw
     $codexShipReview = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'ship-review/SKILL.md') -Raw
     Assert-That 'Codex grill-with-docs routes non-bar items to follow-up issues' `
@@ -448,6 +449,22 @@ try {
          ($codexCodeReview -match '## Findings') -and
          ($codexCodeReview -match 'Never suppress the findings')) `
         'a review must still return its findings when the host exposes no structured review tool'
+    Assert-That 'Claude code-review fails closed when loop terms are missing' `
+        (($claudeCodeReview -match '(?is)FEATURE_DIR') -and
+         ($claudeCodeReview -match '(?is)Could not run') -and
+         ($claudeCodeReview -match 'NEEDS FIXES') -and
+         ($claudeCodeReview -match '(?is)fail closed')) `
+        'a Claude/Cursor skills-path copy must keep the fail-closed loop terms'
+    Assert-That 'Claude code-review accepts an explicit diff range' `
+        (($claudeCodeReview -match '(?is)explicit diff range') -and
+         ($claudeCodeReview -match '(?is)review only that range')) `
+        'an installer regression on .claude/skills must not drop the explicit-range rule'
+    Assert-That 'Claude code-review routes above-bar findings to /remediate and below-bar to Follow-ups' `
+        (($claudeCodeReview -match '(?is)Above the bar go to `?/remediate') -and
+         ($claudeCodeReview -match '(?is)Below the bar') -and
+         ($claudeCodeReview -match '(?is)Follow-ups') -and
+         ($claudeCodeReview -match '(?is)never silently relabelled `?Non-blocking')) `
+        'above-bar findings must go to /remediate on the Claude/Cursor skills path'
     Assert-That 'the canonical Claude/Cursor skill copy keeps slash syntax' `
         (($claudeTask -match '/grill-with-docs') -and ($claudeTask -notmatch '\$grill-with-docs')) `
         'Codex adaptation must never rewrite the shared Claude/Cursor delivery'
