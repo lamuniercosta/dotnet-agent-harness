@@ -418,6 +418,31 @@ try {
          ($codexShipReview -match '(?is)missing reviewer') -and
          ($codexShipReview -match 'NEEDS FIXES')) `
         'a missing reviewer or deferred Critical/High must keep NEEDS FIXES'
+    Assert-That 'Codex code-review fails closed when loop terms are missing' `
+        (($codexCodeReview -match '(?is)FEATURE_DIR') -and
+         ($codexCodeReview -match '(?is)check-prerequisites\.ps1') -and
+         ($codexCodeReview -match '(?is)<FEATURE_DIR>/brief\.md') -and
+         ($codexCodeReview -match '(?is)closing bar') -and
+         ($codexCodeReview -match '(?is)frozen scope') -and
+         ($codexCodeReview -match '(?is)round cap') -and
+         ($codexCodeReview -match '(?is)Could not run') -and
+         ($codexCodeReview -match 'NEEDS FIXES') -and
+         ($codexCodeReview -match '(?is)before Step 1') -and
+         ($codexCodeReview -match '(?is)fail closed') -and
+         ($codexCodeReview -match '(?is)Do not infer defaults')) `
+        'missing closing bar, frozen scope, or round cap must stop before fan-out'
+    Assert-That 'Codex code-review accepts an explicit diff range' `
+        (($codexCodeReview -match '(?is)explicit diff range') -and
+         ($codexCodeReview -match '(?is)review only that range')) `
+        'an explicit caller-supplied range must override the default fixed-point diff'
+    Assert-That 'Codex code-review routes above-bar findings to $remediate and below-bar to Follow-ups' `
+        (($codexCodeReview -match '(?is)Above the bar go to `?\$remediate') -and
+         ($codexCodeReview -match '(?is)Below the bar') -and
+         ($codexCodeReview -match '(?is)outside the frozen scope') -and
+         ($codexCodeReview -match '(?is)Follow-ups') -and
+         ($codexCodeReview -match '(?is)never silently relabelled `?Non-blocking') -and
+         ($codexCodeReview -match '(?is)original source and severity')) `
+        'above-bar findings must go to $remediate; below-bar items must keep source and severity, not become Non-blocking'
     Assert-That 'Codex code review documents a Markdown findings fallback' `
         (($codexCodeReview -match 'native structured-review or inline-comment mechanism') -and
          ($codexCodeReview -match '## Findings') -and
