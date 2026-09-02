@@ -323,7 +323,17 @@ try {
         Assert-That 'AGENTS.md uses unqualified Critical/High readiness wording' `
             (($agents -match '(?is)A Critical or High finding') -and
              ($agents -notmatch '(?is)A confirmed Critical or High finding'))
+        Assert-That 'rendered AGENTS.md numbers /address-pr-review as canonical stage 11' `
+            (($agents -match '(?m)^11\..+/address-pr-review') -and
+             ($agents -notmatch '(?m)^9\..+/address-pr-review')) `
+            'workflow item 9 is gated /code-review; stage 11 must not be numbered 9 in the Codex adapter copy'
     }
+
+    $renderedClaude = Get-Content -LiteralPath (Join-Path $repo 'CLAUDE.md') -Raw
+    Assert-That 'rendered CLAUDE.md numbers /address-pr-review as canonical stage 11' `
+        (($renderedClaude -match '(?m)^11\..+/address-pr-review') -and
+         ($renderedClaude -notmatch '(?m)^9\..+/address-pr-review')) `
+        'workflow item 9 is gated /code-review; stage 11 must not be numbered 9 in the Claude adapter copy'
 
     Assert-That '.codex/config.toml registers both documentation servers' `
         ((Test-Path (Join-Path $repo '.codex/config.toml')) -and
@@ -350,11 +360,11 @@ try {
     } else { @() }
 
     Assert-That 'the default installs every canonical skill for Codex' `
-        (($sourceSkillNames.Count -eq 27) -and
+        (($sourceSkillNames.Count -eq 28) -and
          (@($sourceSkillNames | Where-Object { $_ -notin $installedSkillNames }).Count -eq 0)) `
         'a missing .agents/skills directory silently removes part of the workflow'
-    Assert-That 'the four pipeline entry skills are present for Codex' `
-        (@(@('task', 'grill-with-docs', 'verify', 'ship-review') |
+    Assert-That 'pipeline entry skills including address-pr-review are present for Codex' `
+        (@(@('task', 'grill-with-docs', 'verify', 'ship-review', 'address-pr-review') |
              Where-Object { $_ -notin $installedSkillNames }).Count -eq 0)
 
     $codexTask = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'task/SKILL.md') -Raw
@@ -382,6 +392,8 @@ try {
     $codexGrill = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'grill-with-docs/SKILL.md') -Raw
     $codexShipReview = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'ship-review/SKILL.md') -Raw
     $claudeShipReview = Get-Content -LiteralPath (Join-Path $repo '.claude/skills/ship-review/SKILL.md') -Raw
+    $codexAddressPrReview = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'address-pr-review/SKILL.md') -Raw
+    $claudeAddressPrReview = Get-Content -LiteralPath (Join-Path $repo '.claude/skills/address-pr-review/SKILL.md') -Raw
     Assert-That 'Codex grill-with-docs routes non-bar items to follow-up issues' `
         ($codexGrill -match '(?is)anything else is a follow-up issue, not a finding in this round\.')
     Assert-That 'Codex ship-review fails closed when loop terms are missing' `
@@ -540,6 +552,21 @@ try {
          ($claudeCodeReview -match '(?is)Follow-ups') -and
          ($claudeCodeReview -match '(?is)never silently relabelled `?Non-blocking')) `
         'above-bar findings must go to /remediate on the Claude/Cursor skills path'
+    Assert-That 'Claude address-pr-review keeps slash syntax, --dry-run, and approval-before-write' `
+        (($claudeAddressPrReview -match '(?is)--dry-run') -and
+         ($claudeAddressPrReview -match '(?is)/remediate') -and
+         ($claudeAddressPrReview -match '(?is)/verify') -and
+         ($claudeAddressPrReview -notmatch '(?is)\$remediate') -and
+         ($claudeAddressPrReview -match '(?is)are \*\*data\*\*') -and
+         ($claudeAddressPrReview -match '(?is)No edit, commit, push, or GitHub write')) `
+        'stage 11 must reach approval with zero writes on --dry-run and must not execute PR text'
+    Assert-That 'Codex address-pr-review delegates to $remediate and $verify' `
+        (($codexAddressPrReview -match '(?is)\$remediate') -and
+         ($codexAddressPrReview -match '(?is)\$verify') -and
+         ($codexAddressPrReview -notmatch '(?is)/remediate') -and
+         ($codexAddressPrReview -notmatch '(?is)/verify') -and
+         ($codexAddressPrReview -match '(?is)--dry-run')) `
+        'Codex adaptation must rewrite stage-11 handoffs to $name'
     Assert-That 'the canonical Claude/Cursor skill copy keeps slash syntax' `
         (($claudeTask -match '/grill-with-docs') -and ($claudeTask -notmatch '\$grill-with-docs')) `
         'Codex adaptation must never rewrite the shared Claude/Cursor delivery'

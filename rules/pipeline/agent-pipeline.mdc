@@ -23,10 +23,6 @@ alwaysApply: true
 
 Thresholds come from `harness.yml`. Never hardcode one in a prompt or a script.
 
-> `/remediate` (stage 9) and `/address-pr-review` (stage 11) are pipeline
-> commands staged ahead of their skill implementations — routing and
-> `route-map.json` entries are in place, the skills follow.
-
 ## Acceptance-tests policy
 
 Acceptance tests (Gherkin + Reqnroll) are **opt-in**. Skip Stage 4, Human gate 2, and the Gherkin-mutation check unless the user asks for them or `specs/<feature>/acceptance/*.feature` already exists. **Unit and integration tests remain required** — the opt-in applies only to the acceptance layer.
