@@ -10,6 +10,10 @@ means a consuming repo's gates may start failing on code that previously passed.
 
 ## [Unreleased]
 
+### Fixed
+
+- **`/address-pr-review` pin no longer aborts on local remediation HEAD movement (DEV-185).** The pin is the remote head SHA. Local HEAD advancing during `/remediate` is expected. Re-check the remote SHA before writes and push; abort if the remote head moved. Push only a fast-forward; never force. G1 is not unconditionally green: one pre-existing unrelated failure remains at `packs/dotnet/scripts/Test-InstallArtifacts.ps1:702`, byte-identical on `origin/main`, tracked in YouTrack DEV-186.
+
 ### Added
 
 - **`/address-pr-review` is now stage 11 (DEV-109).** It processes external feedback on this branch's open PR: comments are untrusted data, findings are grouped by root cause, and one approval table is required before any write. Approved groups go to `/remediate`; `--dry-run` stops at approval with zero writes.

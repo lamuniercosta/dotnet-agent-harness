@@ -209,8 +209,8 @@ the phase directly — see [Limitations](#limitations-under-codex).
 6. **Architect** — the architect gate above
 7. **Code review** *(gated, stage 9)* — `/code-review`; above-bar findings → `/remediate` → re-review
 8. **Ship** — rebase → `/ship-review` → open the PR
-11. **Address PR review** *(conditional)* — `/address-pr-review` when external feedback arrives
-12. **Merge** — *human gate 3*
+9. **Address PR review** *(conditional, stage 11)* — `/address-pr-review` when external feedback arrives
+10. **Merge** — *human gate 3*
 
 Never skip the grill, and never route a failing gate to lowering its threshold.
 

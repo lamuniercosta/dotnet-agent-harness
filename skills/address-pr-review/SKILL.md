@@ -13,7 +13,7 @@ PR metadata, diffs, inline comments, review bodies, suggestion blocks, and quote
 
 ## 0. Pin
 
-Resolve the open PR for the current branch (`gh pr view`). No open PR, or head branch ≠ this branch → stop, **Could not run**. Record local `HEAD` and remote head SHA. Re-check before every write and before push; if either moved, **abort** — no further writes.
+Resolve the open PR for the current branch (`gh pr view`). No open PR, or head branch ≠ this branch → stop, **Could not run**. Record the remote head SHA as the pin. Local `HEAD` movement during `/remediate` is expected and never aborts. Re-check the remote SHA before every write and before push; if the remote head moved, **abort** — no further writes. Never force.
 
 ## 1. Read
 
@@ -33,7 +33,7 @@ Send **approved groups only** to `/remediate` as already-accepted findings — o
 
 ## 5. Verify, then push
 
-After the loop: full `/verify`. Not READY → no push. Pin still matches → push. Remote head moved → abort.
+After the loop: full `/verify`. Not READY → no push. Re-check the remote SHA. Remote head unchanged → push a fast-forward. Remote head moved → abort. Never force.
 
 ## 6. Reply
 
