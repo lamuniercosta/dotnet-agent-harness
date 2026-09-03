@@ -73,15 +73,15 @@ jobs:
           echo "code-review Step 8 includes the findings-artifact sink."
 
       # ---- pr-review user-facing workflow (DEV-114) ---------------------
-      # Supporting skill, not a pipeline stage. Multiple phrases so leftover
-      # helper-verb docs cannot satisfy the gate: the publish chain must appear
-      # as a tight sequence, plus the head-move abort and the decline-field
-      # check. Phrases are frozen-plan wording.
+      # Supporting skill, not a pipeline stage. Multiple distinct phrases so
+      # leftover helper-verb docs or the one-line publish-chain summary cannot
+      # satisfy the gate after step-4/step-5 procedure is deleted. Phrases are
+      # frozen-plan wording.
       - name: pr-review skill documents the user-facing workflow
         run: |
           f=skills/pr-review/SKILL.md
           fail=0
-          compact=$(tr '\n' ' ' < "$f")
+          compact=$(tr '\n' ' ' < "$f" | tr -s ' ')
           if ! printf '%s' "$compact" | grep -qE -- '-Validate.{0,80}-Dedupe.{0,80}-BuildPayload.{0,80}-Preflight.{0,80}-Post'; then
             echo "::error file=$f::missing publish chain (expected -Validate then -Dedupe then -BuildPayload then -Preflight then -Post)"
             fail=1
@@ -90,8 +90,20 @@ jobs:
             echo "::error file=$f::missing head-move abort (expected 'before any GitHub write')"
             fail=1
           fi
+          if ! grep -qF -- 'name both SHAs' "$f"; then
+            echo "::error file=$f::missing step-4 abort procedure (expected 'name both SHAs')"
+            fail=1
+          fi
           if ! grep -qF -- 'decline field' "$f"; then
             echo "::error file=$f::missing decline-field check (expected 'decline field')"
+            fail=1
+          fi
+          if ! grep -qF -- '-Dedupe -Prior' "$f"; then
+            echo "::error file=$f::missing step-5 dedupe procedure (expected '-Dedupe -Prior')"
+            fail=1
+          fi
+          if ! grep -qF -- 'No review draft' "$f"; then
+            echo "::error file=$f::missing step-5 compose rule (expected 'No review draft')"
             fail=1
           fi
           [ "$fail" -eq 0 ] && echo "pr-review skill includes the user-facing workflow."
