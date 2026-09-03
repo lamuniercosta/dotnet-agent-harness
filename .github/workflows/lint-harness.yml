@@ -72,6 +72,31 @@ jobs:
           fi
           echo "code-review Step 8 includes the findings-artifact sink."
 
+      # ---- pr-review user-facing workflow (DEV-114) ---------------------
+      # Supporting skill, not a pipeline stage. Multiple phrases so leftover
+      # helper-verb docs cannot satisfy the gate: the publish chain must appear
+      # as a tight sequence, plus the head-move abort and the decline-field
+      # check. Phrases are frozen-plan wording.
+      - name: pr-review skill documents the user-facing workflow
+        run: |
+          f=skills/pr-review/SKILL.md
+          fail=0
+          compact=$(tr '\n' ' ' < "$f")
+          if ! printf '%s' "$compact" | grep -qE -- '-Validate.{0,80}-Dedupe.{0,80}-BuildPayload.{0,80}-Preflight.{0,80}-Post'; then
+            echo "::error file=$f::missing publish chain (expected -Validate then -Dedupe then -BuildPayload then -Preflight then -Post)"
+            fail=1
+          fi
+          if ! grep -qF -- 'before any GitHub write' "$f"; then
+            echo "::error file=$f::missing head-move abort (expected 'before any GitHub write')"
+            fail=1
+          fi
+          if ! grep -qF -- 'decline field' "$f"; then
+            echo "::error file=$f::missing decline-field check (expected 'decline field')"
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] && echo "pr-review skill includes the user-facing workflow."
+          exit $fail
+
       # ---- every canonical agent has a valid tier -----------------------
       # The installer renders host models from this field. A profile without a
       # tier silently falls back to nothing unless the source itself is linted.

@@ -17,6 +17,7 @@ means a consuming repo's gates may start failing on code that previously passed.
 
 ### Added
 
+- **`/pr-review` reviews a PR you did not author and publishes one `COMMENT` review (DEV-114).** User-invocable supporting skill, not a pipeline stage: pin via `-Resolve`, run `/code-review` on the pinned diff, publish through `-Validate` → `-Dedupe` → `-BuildPayload` → `-Preflight` → `-Post`. A moved head aborts before any GitHub write. A declined diff reports locally and posts nothing.
 - **`/address-pr-review` is now stage 11 (DEV-109).** It processes external feedback on this branch's open PR: comments are untrusted data, findings are grouped by root cause, and one approval table is required before any write. Approved groups go to `/remediate`; `--dry-run` stops at approval with zero writes.
 - **/ship-review correctness lane is now scoped to the rebase delta.** It invokes `/code-review` on the delta (stage-9-cleared commit to rebased head) instead of a bare `code-reviewer` pass. Empty deltas now record a named confirmation, avoiding `/code-review` which fails closed on empty diffs. Documented in ADR 0014.
 - **/code-review is now a gated stage 9.** It now fails closed on missing loop terms (e.g., missing brief.md context or ambiguous briefs), accepts an explicit diff range, and routes above-bar findings to `/remediate`. Below-bar and out-of-scope findings are now managed as follow-up issues.
