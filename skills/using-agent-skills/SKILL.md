@@ -37,6 +37,7 @@ Task arrives
  ├─ Something broke ─────────────────────────→ /diagnosing-bugs
  ├─ Reviewing code (gated, stage 9) ─────────→ /code-review
  │   └─ Accepted findings to close ──────────→ /remediate
+ ├─ Reviewing a PR you did not author ───────→ /pr-review
  ├─ After rebase, before opening the PR ─────→ /ship-review
  ├─ Open PR with external review feedback ───→ /address-pr-review
  ├─ Designing architecture / domain ─────────→ /codebase-design · /domain-modeling

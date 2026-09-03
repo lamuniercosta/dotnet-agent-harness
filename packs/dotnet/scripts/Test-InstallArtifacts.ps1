@@ -367,6 +367,30 @@ try {
         (@(@('task', 'grill-with-docs', 'verify', 'ship-review', 'address-pr-review') |
              Where-Object { $_ -notin $installedSkillNames }).Count -eq 0)
 
+    # Supporting skill, not a pipeline entry: do not append 'pr-review' to the
+    # list above. The installed copies must carry the DEV-114 workflow section.
+    $codexPrReviewPath = Join-Path $codexSkillsPath 'pr-review/SKILL.md'
+    $claudePrReviewPath = Join-Path $repo '.claude/skills/pr-review/SKILL.md'
+    Assert-That 'installed Claude and Codex trees include the pr-review skill' `
+        ((Test-Path -LiteralPath $claudePrReviewPath) -and (Test-Path -LiteralPath $codexPrReviewPath)) `
+        'pr-review ships as a supporting skill; a missing install copy is invisible at runtime'
+    $codexPrReview = ''
+    $claudePrReview = ''
+    if ((Test-Path -LiteralPath $codexPrReviewPath) -and (Test-Path -LiteralPath $claudePrReviewPath)) {
+        $codexPrReview = Get-Content -LiteralPath $codexPrReviewPath -Raw
+        $claudePrReview = Get-Content -LiteralPath $claudePrReviewPath -Raw
+    }
+    Assert-That 'installed Claude pr-review skill includes the user-facing workflow' `
+        (($claudePrReview -match '(?s)-Validate.{0,80}-Dedupe.{0,80}-BuildPayload.{0,80}-Preflight.{0,80}-Post') -and
+         ($claudePrReview -match 'before any GitHub write') -and
+         ($claudePrReview -match 'decline field')) `
+        'the Claude/Cursor copy must keep the publish chain, head-move abort, and decline-field check'
+    Assert-That 'installed Codex pr-review skill includes the user-facing workflow' `
+        (($codexPrReview -match '(?s)-Validate.{0,80}-Dedupe.{0,80}-BuildPayload.{0,80}-Preflight.{0,80}-Post') -and
+         ($codexPrReview -match 'before any GitHub write') -and
+         ($codexPrReview -match 'decline field')) `
+        'the Codex copy must keep the publish chain, head-move abort, and decline-field check'
+
     $codexTask = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'task/SKILL.md') -Raw
     $claudeTask = Get-Content -LiteralPath (Join-Path $repo '.claude/skills/task/SKILL.md') -Raw
     $codexPipeline = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'pipeline/SKILL.md') -Raw
