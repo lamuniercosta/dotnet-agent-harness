@@ -31,6 +31,36 @@
 #      (${{ matrix.os }})' runs 'pr-review helper paginates and keys receipts per
 #      run' on ubuntu-latest and windows-latest.
 #
+# DEV-176 review-render acceptance (quoted labels are exact assertions below):
+#
+#   A1: inline body shape — 'a standard finding produces the exact three-line
+#       inline body' (LF separators on both platforms).
+#   A2: suggestion fence gates — 'a verified suggestion still renders a
+#       committable ```suggestion fence' and 'an unverified suggestion renders
+#       an inert block, never committable'.
+#   A3: evidence in substance, out of body — 'evidence appears in the
+#       fingerprint substance but not in the posted inline body' and 'evidence
+#       does not appear in summary entries for demoted findings'.
+#   A4: fix/suggestion/body exclusion from substance — 'two findings differing
+#       only in fix produce the same fingerprint', 'two findings differing only
+#       in suggestion produce the same fingerprint', and 'two findings
+#       differing only in body produce the same fingerprint'.
+#   A5: over-cap validation — 'an over-cap summary fails validation naming file
+#       and field', 'an over-cap failure_scenario fails validation', 'an
+#       over-cap fix fails validation', and 'a 500-char field passes
+#       validation'.
+#   A6: unified Not inline section — 'PLAUSIBLE, Low-no-rule, and unmappable
+#       findings merge into one Not inline section with distinct reasons'.
+#   A7: identity eviction + ordering independence — 'an unmappable twin does
+#       not evict its mappable partner', 'identity eviction preserves
+#       non-demoted comments after unified demotion', and 'eviction is
+#       deterministic regardless of insertion order'.
+#   A8: MarkdownFallback structural fidelity + edge cases — 'MarkdownFallback
+#       body and inline comments structurally match the input payload',
+#       'MarkdownFallback handles empty comments array', 'MarkdownFallback
+#       preserves Unicode in path and body', and 'MarkdownFallback normalises
+#       CRLF'.
+#
 # Guards the defects found in review of #86 that no test caught:
 #
 #   1. `gh api --paginate` emits one JSON document per page, so any PR crossing a
@@ -364,8 +394,7 @@ Write-Host 'Invoke-BuildPayload routes an un-cited Low finding to the summary'
 
 # End-to-end: the demotion Test-IsInlineEligible performs above needs no extra
 # plumbing to reach the payload — Invoke-BuildPayload already routes anything
-# it rejects into the '## Questions / non-inline findings' section. Prove that
-# rather than assume it.
+# it rejects into the '## Not inline' section. Prove that rather than assume it.
 $buildPayloadSandbox = Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review-buildpayload-selftest'
 New-Item -ItemType Directory -Path $buildPayloadSandbox -Force | Out-Null
 $bpFindingsPath = Join-Path $buildPayloadSandbox 'findings.json'
@@ -386,7 +415,7 @@ try {
     $bpPayload = $bpJson | ConvertFrom-Json
     Assert-Equal 'the un-cited Low finding produces zero inline comments' 0 @($bpPayload.comments).Count
     Assert-True 'the un-cited Low finding appears in the non-inline summary section' `
-        ([string]$bpPayload.body -match '(?m)^## Questions / non-inline findings')
+        ([string]$bpPayload.body -match '(?m)^## Not inline$')
     Assert-True 'the summary names the demoted finding' `
         ([string]$bpPayload.body -match 'trailing whitespace, no cited rule')
 }
@@ -421,12 +450,142 @@ try {
     $bpFilePayload = $bpFileJson | ConvertFrom-Json
     Assert-Equal 'a placement:"file" finding produces zero inline comments' 0 @($bpFilePayload.comments).Count
     Assert-True 'the placement:"file" finding appears in the non-inline summary section' `
-        ([string]$bpFilePayload.body -match '(?m)^## Questions / non-inline findings')
+        ([string]$bpFilePayload.body -match '(?m)^## Not inline$')
     Assert-True 'the summary names the file the finding is about' `
         ([string]$bpFilePayload.body -match [regex]::Escape('src/whole-file.cs'))
 }
 finally {
     Remove-Item -LiteralPath $buildPayloadFileSandbox -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host ''
+Write-Host 'DEV-176 A3/A6/A7/A8: Not inline merge, evidence-out-of-summary, eviction, MarkdownFallback'
+
+$dev176Sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("pr-review-dev176-{0}" -f [guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Path $dev176Sandbox -Force | Out-Null
+try {
+    $mixedFindingsPath = Join-Path $dev176Sandbox 'mixed.json'
+    Set-Content -LiteralPath $mixedFindingsPath -Encoding UTF8 -Value (
+        , @(
+            [pscustomobject]@{
+                severity = 'Medium'; category = 'risk'; file = 'src/plausible.cs'; verdict = 'PLAUSIBLE'
+                placement = 'summary'; summary = 'maybe a leak'
+                evidence = 'UniqueEvidenceToken'
+            }
+            [pscustomobject]@{
+                severity = 'Low'; category = 'standards'; file = 'src/low.cs'; verdict = 'CONFIRMED'
+                placement = 'inline'; line = 3; summary = 'nit trailing space'
+                evidence = 'UniqueEvidenceToken'
+            }
+            [pscustomobject]@{
+                severity = 'Medium'; category = 'risk'; file = 'src/keep.cs'; verdict = 'CONFIRMED'
+                placement = 'inline'; line = 8; summary = 'real inline defect'
+                failure_scenario = 'caller hits null'
+            }
+        ) | ConvertTo-Json -Depth 20
+    )
+    $mixedJson = Invoke-BuildPayload -FindingsPath $mixedFindingsPath `
+        -BaseSha ('1' * 40) -HeadSha ('2' * 40) -BodyText 'Summary body.'
+    $mixedPayload = $mixedJson | ConvertFrom-Json
+    Assert-True 'evidence does not appear in summary entries for demoted findings' `
+        (([string]$mixedPayload.body -notmatch 'UniqueEvidenceToken') -and
+         ([string]$mixedPayload.body -notmatch '(?m)^Evidence:'))
+
+    $unmapped = [pscustomobject]@{
+        path = 'src/gone.cs'; line = 9; side = 'RIGHT'
+        body = "**High** · risk`nGhost finding`n`nFailure scenario: none"
+    }
+    $withUnmapped = [pscustomobject]@{
+        commit_id = $mixedPayload.commit_id
+        event     = $mixedPayload.event
+        body      = $mixedPayload.body
+        comments  = @(@($mixedPayload.comments) + $unmapped)
+    }
+    $merged = Move-UnmappableToSummary -Payload $withUnmapped -UnmappableComments @($unmapped)
+    $mergedBody = [string]$merged.body
+    Assert-True 'PLAUSIBLE, Low-no-rule, and unmappable findings merge into one Not inline section with distinct reasons' `
+        (((@([regex]::Matches($mergedBody, '(?m)^## Not inline$')).Count) -eq 1) -and
+         ($mergedBody -match '\[PLAUSIBLE\]') -and
+         ($mergedBody -match '\[Low, no rule\]') -and
+         ($mergedBody -match '\[unmappable: not in diff\]') -and
+         ($mergedBody -notmatch '(?m)^### '))
+
+    $keepA = [pscustomobject]@{ path = 'src/a.cs'; line = 1; side = 'RIGHT'; body = 'keep A' }
+    $drop  = [pscustomobject]@{ path = 'src/b.cs'; line = 2; side = 'RIGHT'; body = 'drop me' }
+    $keepB = [pscustomobject]@{ path = 'src/c.cs'; line = 3; side = 'RIGHT'; body = 'keep B' }
+    $evictPayload = [pscustomobject]@{
+        commit_id = 'abc'; event = 'COMMENT'; body = 'Summary.'; comments = @($keepA, $drop, $keepB)
+    }
+    $evicted = Move-UnmappableToSummary -Payload $evictPayload -UnmappableComments @($drop)
+    $evictedPaths = @($evicted.comments | ForEach-Object { $_.path })
+    Assert-True 'identity eviction preserves non-demoted comments after unified demotion' `
+        (($evictedPaths -contains 'src/a.cs') -and ($evictedPaths -contains 'src/c.cs') -and
+         ($evictedPaths -notcontains 'src/b.cs') -and (@($evicted.comments).Count -eq 2))
+
+    $reversedPayload = [pscustomobject]@{
+        commit_id = 'abc'; event = 'COMMENT'; body = 'Summary.'; comments = @($keepB, $drop, $keepA)
+    }
+    $evictedAgain = Move-UnmappableToSummary -Payload $evictPayload -UnmappableComments @($drop)
+    $evictedReversed = Move-UnmappableToSummary -Payload $reversedPayload -UnmappableComments @($drop)
+    $revPaths = @($evictedReversed.comments | ForEach-Object { $_.path })
+    Assert-True 'eviction is deterministic regardless of insertion order' `
+        ((@($evicted.comments).Count -eq 2) -and (@($evictedAgain.comments).Count -eq 2) -and
+         (@($evictedReversed.comments).Count -eq 2) -and
+         ($revPaths -contains 'src/a.cs') -and ($revPaths -contains 'src/c.cs') -and
+         ($revPaths -notcontains 'src/b.cs') -and
+         ((@($evicted.comments | ForEach-Object { $_.path }) -join ',') -eq
+          (@($evictedAgain.comments | ForEach-Object { $_.path }) -join ',')))
+
+    $fallbackPayload = [pscustomobject]@{
+        commit_id = 'deadbeef'
+        event     = 'COMMENT'
+        body      = "Summary paragraph.`nSecond line."
+        comments  = @(
+            [pscustomobject]@{ path = 'src/a.cs'; line = 12; side = 'RIGHT'; body = 'Inline one.' }
+            [pscustomobject]@{ path = 'src/b.cs'; line = 4; start_line = 3; side = 'LEFT'; body = 'Inline two.' }
+        )
+    }
+    $fallbackMd = ConvertTo-ReviewMarkdown -Payload $fallbackPayload
+    Assert-True 'MarkdownFallback body and inline comments structurally match the input payload' `
+        (($fallbackMd -match [regex]::Escape('Summary paragraph.')) -and
+         ($fallbackMd -match [regex]::Escape('Second line.')) -and
+         ($fallbackMd -match [regex]::Escape('Inline one.')) -and
+         ($fallbackMd -match [regex]::Escape('Inline two.')) -and
+         ($fallbackMd -match [regex]::Escape('src/a.cs:12 (RIGHT)')) -and
+         ($fallbackMd -match [regex]::Escape('src/b.cs:3-4 (LEFT)')))
+
+    $emptyCommentsPayload = [pscustomobject]@{
+        commit_id = 'deadbeef'; event = 'COMMENT'; body = $null; comments = @()
+    }
+    $emptyMd = ConvertTo-ReviewMarkdown -Payload $emptyCommentsPayload
+    Assert-True 'MarkdownFallback handles empty comments array' `
+        (($emptyMd -match '(?m)^## Summary$') -and ($emptyMd -notmatch '(?m)^## Inline comments$'))
+
+    $unicodePayload = [pscustomobject]@{
+        commit_id = 'deadbeef'; event = 'COMMENT'; body = 'café — 日本語'
+        comments  = @(
+            [pscustomobject]@{ path = 'src/café.cs'; line = 1; side = 'RIGHT'; body = 'naïve 日本語' }
+        )
+    }
+    $unicodeMd = ConvertTo-ReviewMarkdown -Payload $unicodePayload
+    Assert-True 'MarkdownFallback preserves Unicode in path and body' `
+        (($unicodeMd -match 'café — 日本語') -and ($unicodeMd -match [regex]::Escape('src/café.cs:1 (RIGHT)')) -and
+         ($unicodeMd -match 'naïve 日本語'))
+
+    $crlfPayload = [pscustomobject]@{
+        commit_id = 'deadbeef'; event = 'COMMENT'
+        body      = "line one`r`nline two"
+        comments  = @(
+            [pscustomobject]@{ path = 'src/a.cs'; line = 1; side = 'RIGHT'; body = "alpha`r`nbeta" }
+        )
+    }
+    $crlfMd = ConvertTo-ReviewMarkdown -Payload $crlfPayload
+    Assert-True 'MarkdownFallback normalises CRLF' `
+        (($crlfMd -match "line one`nline two") -and ($crlfMd -match "alpha`nbeta") -and
+         ($crlfMd -notmatch "`r"))
+}
+finally {
+    Remove-Item -LiteralPath $dev176Sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host ''
@@ -509,6 +668,42 @@ $threw = $false
 try { [void](Format-InlineCommentBody -Finding $deepIndent) } catch { $threw = $true }
 Assert-True 'a four-space-indented fence cannot close a block and is not refused' (-not $threw)
 
+# DEV-176 A1: three content lines with a blank separator before the failure
+# scenario, joined with LF on both platforms. Evidence and fix stay off the body.
+$standardFinding = [pscustomobject]@{
+    severity = 'Medium'; category = 'risk'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+    placement = 'inline'; line = 5
+    summary = 'Null deref'
+    failure_scenario = 'Empty list throws'
+    evidence = 'must never be posted'
+    fix = 'guard the empty list'
+}
+$expectedInlineBody = "**Medium** · risk`nNull deref`n`nFailure scenario: Empty list throws"
+Assert-Equal 'a standard finding produces the exact three-line inline body' `
+    $expectedInlineBody (Format-InlineCommentBody -Finding $standardFinding)
+
+# DEV-176 A3: evidence is fingerprint material, never posted inline.
+$evidenceFinding = [pscustomobject]@{
+    severity = 'Medium'; category = 'risk'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+    placement = 'inline'; line = 5
+    summary = 'Null deref'
+    failure_scenario = 'Empty list throws'
+    evidence = 'UniqueEvidenceToken'
+}
+$evidenceBody = Format-InlineCommentBody -Finding $evidenceFinding
+$evidenceSubstance = Get-NormalizedSubstance -Finding $evidenceFinding
+$withoutEvidence = [pscustomobject]@{
+    severity = 'Medium'; category = 'risk'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+    placement = 'inline'; line = 5
+    summary = 'Null deref'
+    failure_scenario = 'Empty list throws'
+}
+Assert-True 'evidence appears in the fingerprint substance but not in the posted inline body' `
+    (($evidenceSubstance -match 'uniqueevidencetoken') -and
+     ($evidenceBody -notmatch 'UniqueEvidenceToken') -and
+     ($evidenceBody -notmatch '(?m)^Evidence:') -and
+     ((Get-FindingFingerprint -Finding $evidenceFinding) -ne (Get-FindingFingerprint -Finding $withoutEvidence)))
+
 # The two CLI verbs refuse the same fence end-to-end. Their violation calls exit,
 # so they run as a subprocess (the process that would die is a throwaway child).
 $fenceSandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("pr-review-fence-{0}" -f [guid]::NewGuid().ToString('n'))
@@ -575,6 +770,49 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $fenceSandbox -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host ''
+Write-Host 'DEV-176 A5: over-cap validation names file and field'
+
+$capSandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("pr-review-cap-{0}" -f [guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Path $capSandbox -Force | Out-Null
+try {
+    function New-CappedFinding {
+        param([string]$Field, [int]$Length)
+        $obj = [ordered]@{
+            severity = 'Medium'; category = 'risk'; file = 'src/a.cs'; verdict = 'CONFIRMED'
+            placement = 'inline'; line = 5
+            summary = 'ok'; failure_scenario = 'ok'
+        }
+        $obj[$Field] = ('x' * $Length)
+        return [pscustomobject]$obj
+    }
+
+    foreach ($field in @('summary', 'failure_scenario', 'fix')) {
+        $overPath = Join-Path $capSandbox "over-$field.json"
+        Set-Content -LiteralPath $overPath -Encoding UTF8 -Value (, @((New-CappedFinding -Field $field -Length 501)) | ConvertTo-Json -Depth 20)
+        $over = Invoke-HelperOffline -HelperArgs @('-Validate', '-Findings', $overPath)
+        $label = switch ($field) {
+            'summary' { 'an over-cap summary fails validation naming file and field' }
+            'failure_scenario' { 'an over-cap failure_scenario fails validation' }
+            'fix' { 'an over-cap fix fails validation' }
+        }
+        Assert-True $label `
+            (($over.ExitCode -eq 1) -and
+             ($over.Text -match [regex]::Escape("findings[0].$field")) -and
+             ($over.Text -match 'src/a.cs') -and
+             ($over.Text -match 'exceeds 500-character cap'))
+    }
+
+    $boundaryPath = Join-Path $capSandbox 'boundary.json'
+    Set-Content -LiteralPath $boundaryPath -Encoding UTF8 -Value (, @((New-CappedFinding -Field 'summary' -Length 500)) | ConvertTo-Json -Depth 20)
+    $boundary = Invoke-HelperOffline -HelperArgs @('-Validate', '-Findings', $boundaryPath)
+    Assert-True 'a 500-char field passes validation' `
+        (($boundary.ExitCode -eq 0) -and ($boundary.Text -match 'VALIDATION OK'))
+}
+finally {
+    Remove-Item -LiteralPath $capSandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host ''
@@ -706,6 +944,37 @@ $findingC = [pscustomobject]@{
 }
 Assert-True 'a different finding still gets a different semantic key' `
     ((Get-FindingSemanticFingerprint -Finding $findingA) -ne (Get-FindingSemanticFingerprint -Finding $findingC))
+
+# DEV-176 A4: remedy text (fix, suggestion, body) must not split a defect identity.
+$substanceBase = [pscustomobject]@{
+    category = 'risk'; file = 'src/a.cs'; side = 'RIGHT'; line = 120
+    summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+    evidence = 'stack at Parse'
+}
+$differFix = [pscustomobject]@{
+    category = 'risk'; file = 'src/a.cs'; side = 'RIGHT'; line = 120
+    summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+    evidence = 'stack at Parse'; fix = 'return early'
+}
+$differSuggestion = [pscustomobject]@{
+    category = 'risk'; file = 'src/a.cs'; side = 'RIGHT'; line = 120
+    summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+    evidence = 'stack at Parse'; suggestion = 'return Array.Empty<int>();'
+}
+$differBody = [pscustomobject]@{
+    category = 'risk'; file = 'src/a.cs'; side = 'RIGHT'; line = 120
+    summary = 'Null deref on empty input'; failure_scenario = 'Empty list throws'
+    evidence = 'stack at Parse'; body = 'a completely different posted body'
+}
+Assert-True 'two findings differing only in fix produce the same fingerprint' `
+    (((Get-FindingFingerprint -Finding $substanceBase) -eq (Get-FindingFingerprint -Finding $differFix)) -and
+     ((Get-FindingSemanticFingerprint -Finding $substanceBase) -eq (Get-FindingSemanticFingerprint -Finding $differFix)))
+Assert-True 'two findings differing only in suggestion produce the same fingerprint' `
+    (((Get-FindingFingerprint -Finding $substanceBase) -eq (Get-FindingFingerprint -Finding $differSuggestion)) -and
+     ((Get-FindingSemanticFingerprint -Finding $substanceBase) -eq (Get-FindingSemanticFingerprint -Finding $differSuggestion)))
+Assert-True 'two findings differing only in body produce the same fingerprint' `
+    (((Get-FindingFingerprint -Finding $substanceBase) -eq (Get-FindingFingerprint -Finding $differBody)) -and
+     ((Get-FindingSemanticFingerprint -Finding $substanceBase) -eq (Get-FindingSemanticFingerprint -Finding $differBody)))
 
 # Two defects, two sites, one wording. Dropping location from the semantic key
 # made these one finding, and the second one disappeared.
@@ -1704,7 +1973,7 @@ try {
         Assert-Equal 'the surviving twin is the one whose range is in the diff' 20 `
             ([int]@($twinComments | ForEach-Object { $_.start_line })[0])
         Assert-Equal 'the demoted twin is named once in the summary' 1 `
-            (@([regex]::Matches([string]$twinOut.body, '(?m)^## Unmappable findings$')).Count)
+            (@([regex]::Matches([string]$twinOut.body, '(?m)^## Not inline$')).Count)
 
         # ── Preflight: a LEFT-side comment on a genuinely deleted line ────────
         # Every other -Preflight/-Post fixture in this file comments on the
@@ -2107,7 +2376,7 @@ try {
         $posted5 = Get-Content -LiteralPath (Join-Path $workspace5 'review.json') -Raw | ConvertFrom-Json
         Assert-Equal 'a finding past the 300-file cap stays inline' 1 @($posted5.comments).Count
         Assert-True 'nothing is demoted to the summary on a 301-file PR' `
-            (-not ([string]$posted5.body -match 'Unmappable findings'))
+            (-not ([string]$posted5.body -match '(?m)^## Not inline$'))
 
         # ── The remap retry must not republish a POST that landed ────────────
         # A non-zero result from the POST covers two different worlds: the
@@ -2240,7 +2509,7 @@ try {
         $remapOut = Get-Content -LiteralPath (Join-Path $workspaceRemap 'review.json') -Raw | ConvertFrom-Json
         Assert-Equal 'the resubmitted payload demotes the comment out of the inline list' 0 @($remapOut.comments).Count
         Assert-True 'the resubmitted payload names the demoted comment in the summary' `
-            ([string]$remapOut.body -match '(?m)^## Unmappable findings$')
+            ([string]$remapOut.body -match '(?m)^## Not inline$')
         Assert-True 'the true remap ends with a receipt' `
             (Test-Path -LiteralPath (Join-Path $workspaceRemap 'post-result.json'))
 
