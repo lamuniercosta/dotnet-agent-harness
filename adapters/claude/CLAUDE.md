@@ -120,8 +120,8 @@ configured model and effort. Only `fast` is pinned to a cheaper model by default
 6. `/architect` — mutation ≥ threshold
 7. `/code-review` *(gated, stage 9)* — above-bar findings → `/remediate` → re-review
 8. rebase → `/ship-review` → open the PR
-11. `/address-pr-review` *(conditional, stage 11)* when external feedback arrives
-12. merge — **human gate 3**
+9. `/address-pr-review` *(conditional, stage 11)* when external feedback arrives
+10. merge — **human gate 3**
 
 Consult `/using-agent-skills` at the start of any non-trivial task; it routes to
 the right stage and supporting skills.
