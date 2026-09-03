@@ -94,7 +94,7 @@ $script:PlacementEnum = @('inline', 'file', 'summary')
 # suggestion block early and continue with arbitrary Markdown — including a
 # second, unverified suggestion fence that no gate inspected — so both -Validate
 # and -BuildPayload refuse a finding that carries one.
-$script:VerbatimFindingFields = @('summary', 'failure_scenario', 'evidence')
+$script:VerbatimFindingFields = @('summary', 'failure_scenario', 'evidence', 'fix')
 
 # Owner-only (0700). Held as a constant because the create and the verify have
 # to agree: New-PrivateDirectory applies it atomically on Unix and
@@ -859,6 +859,18 @@ function Test-FindingObject {
         }
     }
 
+    $findingFile = [string](Get-PropertyValue -Object $Finding -Name 'file')
+    foreach ($capped in @('summary', 'failure_scenario', 'fix')) {
+        if (-not (Test-HasProperty -Object $Finding -Name $capped)) { continue }
+        $raw = Get-PropertyValue -Object $Finding -Name $capped
+        if ($null -eq $raw) { continue }
+        $cappedText = [string]$raw
+        if ($cappedText.Length -gt 500) {
+            Add-Violation -List $Violations -Path "$Path.$capped" `
+                -Message "exceeds 500-character cap (file: $findingFile, actual: $($cappedText.Length))"
+        }
+    }
+
     foreach ($sideProp in @('side', 'start_side')) {
         if (Test-HasProperty -Object $Finding -Name $sideProp) {
             $sideVal = [string](Get-PropertyValue -Object $Finding -Name $sideProp)
@@ -1063,11 +1075,12 @@ function Invoke-Validate {
 
 function Get-NormalizedSubstance {
     param($Finding)
+    # Locked substance: summary + failure_scenario + evidence. Remedy text
+    # (body, suggestion, fix) must not split a defect identity.
     $parts = @(
         [string](Get-PropertyValue -Object $Finding -Name 'summary')
         [string](Get-PropertyValue -Object $Finding -Name 'failure_scenario')
         [string](Get-PropertyValue -Object $Finding -Name 'evidence')
-        [string](Get-PropertyValue -Object $Finding -Name 'body')
     )
     $text = ($parts -join ' ')
     $text = $text.ToLowerInvariant()
@@ -1708,7 +1721,6 @@ function Format-InlineCommentBody {
     $category = [string](Get-PropertyValue -Object $Finding -Name 'category')
     $summary = [string](Get-PropertyValue -Object $Finding -Name 'summary')
     $failure = [string](Get-PropertyValue -Object $Finding -Name 'failure_scenario')
-    $evidence = [string](Get-PropertyValue -Object $Finding -Name 'evidence')
     $suggestion = [string](Get-PropertyValue -Object $Finding -Name 'suggestion')
 
     foreach ($verbatim in $script:VerbatimFindingFields) {
@@ -1721,9 +1733,9 @@ function Format-InlineCommentBody {
 
     $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add("**${severity}** · ${category}")
-    if ($summary) { $lines.Add($summary) }
-    if ($failure) { $lines.Add(""); $lines.Add("Failure scenario: $failure") }
-    if ($evidence) { $lines.Add(""); $lines.Add("Evidence: $evidence") }
+    $lines.Add($summary)
+    $lines.Add('')
+    $lines.Add("Failure scenario: $failure")
     if ($suggestion) {
         if (Test-CarriesFenceMarker -Text $suggestion) {
             throw ("Finding for '$([string](Get-PropertyValue -Object $Finding -Name 'file'))' has a " +
@@ -1839,6 +1851,84 @@ function New-ReviewCommentFromFinding {
     return [pscustomobject]$comment
 }
 
+function Get-NotInlineReasonTag {
+    param($Finding)
+    $verdict = [string](Get-PropertyValue -Object $Finding -Name 'verdict')
+    if ($verdict.Equals('PLAUSIBLE', [System.StringComparison]::OrdinalIgnoreCase)) {
+        return 'PLAUSIBLE'
+    }
+    $severity = [string](Get-PropertyValue -Object $Finding -Name 'severity')
+    if ($severity.Equals('Low', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $rule = [string](Get-PropertyValue -Object $Finding -Name 'rule')
+        if (-not (Test-IsRuleCitation -Text $rule)) {
+            return 'Low, no rule'
+        }
+    }
+    return 'not inline'
+}
+
+function ConvertTo-Lf {
+    param([string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return [string]$Text }
+    return $Text.Replace("`r`n", "`n").Replace("`r", "`n")
+}
+
+function Convert-LegacyNotInlineHeadings {
+    param([string]$Body)
+    $text = ConvertTo-Lf $Body
+    # Old helper headings are not a substitute for ## Not inline. Rewrite them
+    # so demotions merge into one section instead of being skipped or doubled.
+    $text = [regex]::Replace($text, '(?m)^##\s+Questions(?:\s*/\s*non-inline findings)?\s*$', '## Not inline')
+    $text = [regex]::Replace($text, '(?m)^##\s+Unmappable findings\s*$', '## Not inline')
+    return $text
+}
+
+function Merge-NotInlineSection {
+    param(
+        [string]$Body,
+        [string[]]$Entries
+    )
+    $text = Convert-LegacyNotInlineHeadings -Body $Body
+    $block = [System.Collections.Generic.List[string]]::new()
+    if ($text -notmatch '(?m)^##\s+Not inline\b') {
+        if (-not [string]::IsNullOrWhiteSpace($text)) { $block.Add('') }
+        $block.Add('## Not inline')
+        $block.Add('')
+    }
+    foreach ($entry in @($Entries)) {
+        if ($null -ne $entry) { $block.Add([string]$entry) }
+    }
+    if ($block.Count -eq 0) { return $text }
+    $joined = ($block -join "`n")
+    if ([string]::IsNullOrWhiteSpace($text)) { return ($joined.TrimStart() + "`n") }
+    return ($text.TrimEnd() + "`n" + $joined + "`n")
+}
+
+function Format-UnmappableNotInlineEntry {
+    param($Comment)
+    $path = [string](Get-PropertyValue -Object $Comment -Name 'path')
+    $line = Get-PropertyValue -Object $Comment -Name 'line'
+    $cbody = ConvertTo-Lf ([string](Get-PropertyValue -Object $Comment -Name 'body'))
+    $kept = [System.Collections.Generic.List[string]]::new()
+    foreach ($rawLine in @($cbody -split "`n")) {
+        $trimmed = $rawLine.Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+        if ($trimmed -match '^(Evidence|Failure scenario):') { continue }
+        $kept.Add($trimmed)
+    }
+    $one = $null
+    if ($kept.Count -ge 2 -and $kept[0] -match '^\*\*') {
+        $one = $kept[1]
+    }
+    elseif ($kept.Count -ge 1) {
+        $one = [regex]::Replace($kept[0], '\s+', ' ').Trim()
+    }
+    if ($one) {
+        return "- [unmappable: not in diff] ``${path}:${line}`` — $one"
+    }
+    return "- [unmappable: not in diff] ``${path}:${line}``"
+}
+
 function Invoke-BuildPayload {
     param(
         [Parameter(Mandatory)][string]$FindingsPath,
@@ -1895,15 +1985,12 @@ function Invoke-BuildPayload {
         }
     }
 
-    # PLAUSIBLE / non-inline findings are never inline; surface them briefly if
-    # the caller did not already mention them (append only when summary-only list
-    # is non-empty and body lacks an explicit Questions heading).
-    if ($summaryOnly.Count -gt 0 -and $summaryBody -notmatch '(?m)^##\s+Questions\b') {
-        $q = [System.Collections.Generic.List[string]]::new()
-        $q.Add('')
-        $q.Add('## Questions / non-inline findings')
+    # PLAUSIBLE / Low-without-rule / other non-inline findings stay out of
+    # comments and land in one ## Not inline section. Caller headings such as
+    # ## Questions are rewritten, never treated as a reason to skip.
+    if ($summaryOnly.Count -gt 0) {
+        $entries = [System.Collections.Generic.List[string]]::new()
         foreach ($f in $summaryOnly) {
-            $verdict = [string](Get-PropertyValue -Object $f -Name 'verdict')
             $sev = [string](Get-PropertyValue -Object $f -Name 'severity')
             $cat = [string](Get-PropertyValue -Object $f -Name 'category')
             $sum = [string](Get-PropertyValue -Object $f -Name 'summary')
@@ -1912,9 +1999,10 @@ function Invoke-BuildPayload {
                     "'summary' containing a Markdown code fence. " + (Get-FenceRejectionDetail))
             }
             $file = [string](Get-PropertyValue -Object $f -Name 'file')
-            $q.Add("- [$verdict] **$sev**/$cat ``$file`` — $sum")
+            $tag = Get-NotInlineReasonTag -Finding $f
+            $entries.Add("- [$tag] **$sev**/$cat ``$file`` — $sum")
         }
-        $summaryBody = $summaryBody.TrimEnd() + "`n" + ($q -join "`n") + "`n"
+        $summaryBody = Merge-NotInlineSection -Body $summaryBody -Entries @($entries)
     }
 
     $payload = [pscustomobject]@{
@@ -2007,24 +2095,26 @@ function Get-PayloadSource {
 function ConvertTo-ReviewMarkdown {
     param($Payload)
 
+    $lf = "`n"
     $sb = [System.Text.StringBuilder]::new()
-    [void]$sb.AppendLine('# Pull request review (manual fallback)')
-    [void]$sb.AppendLine()
-    [void]$sb.AppendLine("commit_id: ``$($Payload.commit_id)``")
-    [void]$sb.AppendLine('event: COMMENT')
-    [void]$sb.AppendLine()
-    [void]$sb.AppendLine('## Summary')
-    [void]$sb.AppendLine()
-    [void]$sb.AppendLine([string]$Payload.body)
-    [void]$sb.AppendLine()
+    [void]$sb.Append("# Pull request review (manual fallback)$lf")
+    [void]$sb.Append($lf)
+    [void]$sb.Append("commit_id: ``$($Payload.commit_id)``$lf")
+    [void]$sb.Append("event: COMMENT$lf")
+    [void]$sb.Append($lf)
+    [void]$sb.Append("## Summary$lf")
+    [void]$sb.Append($lf)
+    [void]$sb.Append((ConvertTo-Lf ([string]$Payload.body)))
+    [void]$sb.Append($lf)
+    [void]$sb.Append($lf)
 
     $comments = @()
     if (Test-HasProperty -Object $Payload -Name 'comments') {
         $comments = @((Get-PropertyValue -Object $Payload -Name 'comments'))
     }
     if ($comments.Count -gt 0) {
-        [void]$sb.AppendLine('## Inline comments')
-        [void]$sb.AppendLine()
+        [void]$sb.Append("## Inline comments$lf")
+        [void]$sb.Append($lf)
         $n = 1
         foreach ($c in $comments) {
             $path = [string](Get-PropertyValue -Object $c -Name 'path')
@@ -2033,10 +2123,11 @@ function ConvertTo-ReviewMarkdown {
             $side = [string](Get-PropertyValue -Object $c -Name 'side')
             if (-not $side) { $side = 'RIGHT' }
             $loc = if ($null -ne $start) { "${path}:${start}-${line} ($side)" } else { "${path}:${line} ($side)" }
-            [void]$sb.AppendLine("### Comment $n — ``$loc``")
-            [void]$sb.AppendLine()
-            [void]$sb.AppendLine([string](Get-PropertyValue -Object $c -Name 'body'))
-            [void]$sb.AppendLine()
+            [void]$sb.Append("### Comment $n — ``$loc``$lf")
+            [void]$sb.Append($lf)
+            [void]$sb.Append((ConvertTo-Lf ([string](Get-PropertyValue -Object $c -Name 'body'))))
+            [void]$sb.Append($lf)
+            [void]$sb.Append($lf)
             $n++
         }
     }
@@ -3034,28 +3125,19 @@ function Move-UnmappableToSummary {
     )
 
     $body = [string]$Payload.body
-    $section = [System.Collections.Generic.List[string]]::new()
-    $section.Add('')
-    $section.Add('## Unmappable findings')
-    $section.Add('')
-    $section.Add('The following findings could not be mapped to a current diff location and were moved out of inline comments:')
-    $section.Add('')
+    $entries = [System.Collections.Generic.List[string]]::new()
     if (-not [string]::IsNullOrWhiteSpace($CoverageNote)) {
         # Say which cause applies. A demotion because the map ran out of files is
         # a coverage gap, not a stale location, and reading it as the latter
         # sends the reader looking for a defect that is not there.
-        $section.Add("Note: the changed-file map was incomplete — $CoverageNote. Some of these may be map gaps rather than stale locations.")
-        $section.Add('')
+        $entries.Add("Note: the changed-file map was incomplete — $CoverageNote. Some of these may be map gaps rather than stale locations.")
+        $entries.Add('')
     }
     foreach ($c in $UnmappableComments) {
-        $path = [string](Get-PropertyValue -Object $c -Name 'path')
-        $line = Get-PropertyValue -Object $c -Name 'line'
-        $cbody = [string](Get-PropertyValue -Object $c -Name 'body')
-        $section.Add("### ``${path}:${line}``")
-        $section.Add('')
-        $section.Add($cbody)
-        $section.Add('')
+        $entries.Add((Format-UnmappableNotInlineEntry -Comment $c))
     }
+
+    $newBody = Merge-NotInlineSection -Body $body -Entries @($entries)
 
     # Evict by object identity, never by a rendered-content key. Every caller
     # partitions $Payload.comments and hands back the same object references, so
@@ -3084,7 +3166,7 @@ function Move-UnmappableToSummary {
     return [pscustomobject]@{
         commit_id = [string]$Payload.commit_id
         event     = 'COMMENT'
-        body      = ($body.TrimEnd() + "`n" + ($section -join "`n"))
+        body      = $newBody
         comments  = $kept
     }
 }
@@ -3463,8 +3545,8 @@ function Invoke-Post {
         }
 
         # Rebuild the body from the original payload, not from $working. By this
-        # point $working's body may already carry a pre-flight "## Unmappable
-        # findings" section and a run marker; reusing it would append a second
+        # point $working's body may already carry a pre-flight "## Not inline"
+        # section and a run marker; reusing it would append a second
         # section below the first and leave the reader with two contradictory
         # lists of what was demoted.
         $working = [pscustomobject]@{

@@ -12,6 +12,7 @@ means a consuming repo's gates may start failing on code that previously passed.
 
 ### Fixed
 
+- **`pr-review` helper review render is a three-line inline body with one `## Not inline` section (DEV-176).** Evidence stays in the fingerprint and out of the post. `fix`, `suggestion`, and `body` do not split substance. Over-cap (>500) `summary`/`failure_scenario`/`fix` fails validation naming file and field. Markdown fallback matches the payload, including empty/null/CRLF/Unicode cases.
 - **`/address-pr-review` pin no longer aborts on local remediation HEAD movement (DEV-185).** The pin is the remote head SHA. Local HEAD advancing during `/remediate` is expected. Re-check the remote SHA before writes and push; abort if the remote head moved. Push only a fast-forward; never force. G1 is not unconditionally green: one pre-existing unrelated failure remains at `packs/dotnet/scripts/Test-InstallArtifacts.ps1:702`, byte-identical on `origin/main`, tracked in YouTrack DEV-186.
 
 ### Added

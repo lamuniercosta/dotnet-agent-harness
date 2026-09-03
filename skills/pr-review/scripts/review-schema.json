@@ -83,13 +83,17 @@
           "type": "string",
           "description": "Candidate replacement text. Suggestion text containing a fence marker is refused outright."
         },
+        "fix": {
+          "type": "string",
+          "description": "Prose description of the recommended fix. Distinct from suggestion (exact replacement code). Excluded from the inline comment body and from dedupe substance."
+        },
         "suggestion_verified": {
           "type": "boolean",
           "description": "The suggestion block is emitted as a GitHub ```suggestion fence only when this is true, meaning the replacement was checked to be exact, local, and correct at the pinned head; otherwise the text is rendered as a plain fenced code block that cannot be committed with one click."
         },
         "body": {
           "type": "string",
-          "description": "Optional pre-rendered inline comment body. When absent, -BuildPayload composes one from severity/category/summary/failure_scenario/evidence/suggestion."
+          "description": "Optional pre-rendered inline comment body. When absent, -BuildPayload composes one from severity/category/summary/failure_scenario/suggestion."
         },
         "repo": {
           "type": "string",
