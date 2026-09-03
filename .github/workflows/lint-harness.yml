@@ -59,6 +59,19 @@ jobs:
           [ "$fail" -eq 0 ] && echo "All $(ls -d skills/*/ | wc -l) skills valid."
           exit $fail
 
+      # ---- code-review Step 8 findings-artifact sink --------------------
+      # The JSON findings artifact is an additive third sink on
+      # skills/code-review/SKILL.md. Adapters and root docs do not copy Step 8,
+      # so this grep is the harness-side assertion that the primary wording
+      # remains. Phrase is the frozen-plan instruction, not a hyphenated alias.
+      - name: Code-review skill writes a findings artifact
+        run: |
+          if ! grep -qF 'findings artifact as JSON' skills/code-review/SKILL.md; then
+            echo "::error file=skills/code-review/SKILL.md::missing Step 8 findings-artifact sink (expected 'findings artifact as JSON')"
+            exit 1
+          fi
+          echo "code-review Step 8 includes the findings-artifact sink."
+
       # ---- every canonical agent has a valid tier -----------------------
       # The installer renders host models from this field. A profile without a
       # tier silently falls back to nothing unless the source itself is linted.

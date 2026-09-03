@@ -135,6 +135,8 @@ Publish every verified finding ranked most-severe first. Prefer the host's nativ
 
 If the host has no structured review mechanism, emit the findings under a `## Findings` Markdown heading using the same fields. Say `No findings.` when nothing survives verification. Never suppress the findings merely because a host-specific reporting tool is unavailable.
 
+Additionally write a findings artifact as JSON via a native JSON serializer only (no concatenation or interpolation). Envelope: `schema` pr-review/findings@1; `head_sha` repository-resolved full 40-char; required `fixed_point` (base ref/SHA); `generated_at` UTC Z; `declined`; `decline_reason`; `findings` matching `skills/pr-review/scripts/review-schema.json` `$defs/finding`. Verified only. Clean: declined false, findings []. Decline only from evidenced DEV-113 no-compiled-C#: declined true, non-null decline_reason, findings []. Finding requires severity, category, file, verdict; add line, start_line, side when pinned, plus summary, failure_scenario, short_summary; rule if Standards cites one; emit `fix` only when the schema carries it, otherwise omit. Absolute caller path else host temp/scratch. Allowed roots: `<temp>/pr-review` and temp/scratch — not working tree unless gitignored. Symlink/reparse check; no unsafe overwrite; atomic temp+rename. Report the path.
+
 Then add a short text summary only — not a restatement of the findings:
 
 ```
