@@ -805,13 +805,17 @@ try {
 
     # -BuildPayload shares Test-FindingObject, so it refuses the fence before it
     # renders anything — the second entry point the injection review flagged.
-    $buildFencePath = Join-Path $fenceSandbox 'build-fence.json'
-    Set-Content -LiteralPath $buildFencePath -Encoding UTF8 -Value (, @((New-FenceFinding -Field 'summary')) | ConvertTo-Json -Depth 20)
-    $buildFence = Invoke-HelperOffline -HelperArgs @(
-        '-BuildPayload', '-Findings', $buildFencePath, '-BaseSha', ('1' * 40), '-HeadSha', ('2' * 40), '-BodyText', 'Summary.')
-    Assert-Equal '-BuildPayload refuses a code fence in summary (exit 1)' 1 $buildFence.ExitCode
-    Assert-True '-BuildPayload reports the findings validation failed' `
-        ($buildFence.Text -match 'VALIDATION FAILED \(findings\)')
+    foreach ($field in @('summary', 'failure_scenario', 'evidence')) {
+        $buildFencePath = Join-Path $fenceSandbox "build-fence-$field.json"
+        Set-Content -LiteralPath $buildFencePath -Encoding UTF8 -Value (, @((New-FenceFinding -Field $field)) | ConvertTo-Json -Depth 20)
+        $buildFence = Invoke-HelperOffline -HelperArgs @(
+            '-BuildPayload', '-Findings', $buildFencePath, '-BaseSha', ('1' * 40), '-HeadSha', ('2' * 40), '-BodyText', 'Summary.')
+        Assert-Equal "-BuildPayload refuses a code fence in '$field' (exit 1)" 1 $buildFence.ExitCode
+        Assert-True "-BuildPayload names findings[0].$field as the offender" `
+            ($buildFence.Text -match [regex]::Escape("findings[0].$field"))
+        Assert-True "-BuildPayload reports the findings validation failed for '$field'" `
+            ($buildFence.Text -match 'VALIDATION FAILED \(findings\)')
+    }
 
     $buildCleanPath = Join-Path $fenceSandbox 'build-clean.json'
     Set-Content -LiteralPath $buildCleanPath -Encoding UTF8 -Value (, @([pscustomobject]@{
@@ -1616,11 +1620,34 @@ Set-Content -LiteralPath (Join-Path $fixtures 'tree-mismatch.json') -Encoding UT
         '{"path":"src/f' + $_ + '.cs","mode":"100644","type":"blob","sha":"' + (Get-TestBlobSha $_) + '","size":10}'
     }) -join ',') + ',{"path":"src/f301.cs","mode":"100644","type":"blob","sha":"' + $treeMismatch301 + '","size":10}]}'
 )
+$treeMismatchMid = Get-TestBlobSha 888888
+Set-Content -LiteralPath (Join-Path $fixtures 'tree-mismatch-midlist.json') `
+    -Encoding UTF8 -Value @(
+    '{"sha":"treemismatchmid","truncated":false,"tree":[' +
+    ((1..301 | ForEach-Object {
+        $sha = if ($_ -eq 150) { $treeMismatchMid } else { Get-TestBlobSha $_ }
+        '{"path":"src/f' + $_ + '.cs","mode":"100644","type":"blob","sha":"' +
+            $sha + '","size":10}'
+    }) -join ',') + ']}'
+)
 
 # A GraphQL partial success: HTTP 200 carrying both data and top-level errors.
 Set-Content -LiteralPath (Join-Path $fixtures 'threads-partial.json') -Encoding UTF8 -Value @'
 {"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}},
  "errors":[{"message":"Although you appear to have the correct authorization credentials, the org has enabled OAuth App access restrictions"}]}
+'@
+
+# Same partial-success shape, but with real nodes so a regression that discards
+# returned threads while still flagging incomplete cannot stay green.
+Set-Content -LiteralPath (Join-Path $fixtures 'threads-partial-with-nodes.json') -Encoding UTF8 -Value @'
+{"data":{"repository":{"pullRequest":{"reviewThreads":{
+  "pageInfo":{"hasNextPage":false,"endCursor":null},
+  "nodes":[{"id":"PRT_1","isResolved":false,"comments":{
+    "pageInfo":{"hasNextPage":false},
+    "nodes":[{"id":"PRC_1","body":"test comment","author":{"login":"bot"}}]
+  }}]
+}}}},
+"errors":[{"message":"OAuth App access restrictions"}]}
 '@
 
 Set-Content -LiteralPath (Join-Path $fixtures 'commits.json') -Encoding UTF8 -Value @"
@@ -2214,6 +2241,77 @@ try {
             # release drops the handle and leaves the file.
             Assert-True 'the lock file survives its release' (Test-Path -LiteralPath $lockPathA)
 
+            # ── Two-process race: both children must take FileShare.None ─────
+            # The single-process hold above proves -Post *respects* an exclusive
+            # lock. It does not prove the helper *takes* one: opening with
+            # FileShare.ReadWrite would still fail against this process's
+            # FileShare.None hold. Two real -Post processes against a fresh run
+            # (no receipt yet) must both be denied while a third holder blocks
+            # them, for longer than the 1s timeout, and name the concurrent post.
+            $resolveRace = Invoke-Helper -HelperArgs @('-Resolve', $target)
+            Assert-Equal 'a resolve for the race test succeeds' 0 $resolveRace.ExitCode
+            $workspaceRace = $null
+            if ($resolveRace.Text -match '(?m)^workspace:\s*(.+)$') {
+                $workspaceRace = $Matches[1].Trim()
+            }
+            $payloadRace = Join-Path $workspaceRace 'review.input.json'
+            Set-Content -LiteralPath $payloadRace -Encoding UTF8 -Value @"
+{"commit_id":"$headSha","event":"COMMENT","body":"Race test.","comments":[]}
+"@
+            $env:PRREVIEW_POST_LOCK_TIMEOUT_SECONDS = '1'
+            $lockPathRace = Join-Path $workspaceRace 'post.lock'
+            $heldRace = [System.IO.File]::Open($lockPathRace,
+                [System.IO.FileMode]::OpenOrCreate,
+                [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
+            try {
+                Use-FakeGhEnv
+                # Use-FakeGhEnv does NOT set TEMP/TMP/TMPDIR (only Invoke-Helper does).
+                # Set them explicitly so children stay in the sandbox.
+                $env:TMPDIR = $tempHome
+                $env:TEMP = $tempHome
+                $env:TMP = $tempHome
+                $outA = Join-Path $tempHome "race-a-$([guid]::NewGuid().ToString('n')).txt"
+                $outB = Join-Path $tempHome "race-b-$([guid]::NewGuid().ToString('n')).txt"
+                $errA = Join-Path $tempHome "race-a-err-$([guid]::NewGuid().ToString('n')).txt"
+                $errB = Join-Path $tempHome "race-b-err-$([guid]::NewGuid().ToString('n')).txt"
+                $postsBefore = Get-PostCount
+
+                $procA = Start-Process pwsh -NoNewWindow -ArgumentList @(
+                    '-NoProfile', '-File', $helper, '-Post', '-Payload', $payloadRace
+                ) -RedirectStandardOutput $outA -RedirectStandardError $errA -PassThru
+                $procB = Start-Process pwsh -NoNewWindow -ArgumentList @(
+                    '-NoProfile', '-File', $helper, '-Post', '-Payload', $payloadRace
+                ) -RedirectStandardOutput $outB -RedirectStandardError $errB -PassThru
+
+                $doneA = $procA.WaitForExit(10000)
+                $doneB = $procB.WaitForExit(10000)
+                Assert-True 'race process A exited within 10s' $doneA
+                Assert-True 'race process B exited within 10s' $doneB
+
+                Assert-Equal 'race process A fails against the held lock' 1 $procA.ExitCode
+                Assert-Equal 'race process B fails against the held lock' 1 $procB.ExitCode
+
+                # Invoke-Helper merges stderr into stdout (2>&1). The helper
+                # throws the concurrent-post message, so match both streams.
+                $textA = (@(Get-Content -LiteralPath $outA -Raw -ErrorAction SilentlyContinue) +
+                    @(Get-Content -LiteralPath $errA -Raw -ErrorAction SilentlyContinue)) -join "`n"
+                $textB = (@(Get-Content -LiteralPath $outB -Raw -ErrorAction SilentlyContinue) +
+                    @(Get-Content -LiteralPath $errB -Raw -ErrorAction SilentlyContinue)) -join "`n"
+                Assert-True 'race process A names the concurrent post' ($textA -match 'already in progress')
+                Assert-True 'race process B names the concurrent post' ($textB -match 'already in progress')
+
+                Assert-Equal 'two blocked posts publish nothing' $postsBefore (Get-PostCount)
+            }
+            finally { $heldRace.Dispose() }
+
+            # After release, the same workspace posts successfully — the lock
+            # did not poison the run.
+            $postsBefore = Get-PostCount
+            $postAfterRace = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadRace)
+            Assert-Equal 'the race workspace posts after the lock is released' 0 $postAfterRace.ExitCode
+            Assert-Equal 'the race post publishes exactly once' ($postsBefore + 1) (Get-PostCount)
+            $env:PRREVIEW_POST_LOCK_TIMEOUT_SECONDS = '2'
+
             # The wait is configurable, and a value that is not a positive whole
             # number of seconds must be refused rather than read as 0 — which
             # would turn the wait into no wait at all.
@@ -2284,6 +2382,25 @@ try {
         Assert-True 'incomplete thread coverage is reported to the caller' `
             ($resolve4.Text -match 'threadCoverage: INCOMPLETE')
 
+        # ── Partial GraphQL with nodes: keep the data AND flag coverage ──────
+        # threads-partial.json has nodes:[], so it cannot distinguish
+        # kept-the-data-and-flagged from dropped-the-data-and-flagged.
+        $script:testThreads = 'threads-partial-with-nodes.json'
+        $resolvePartialNodes = Invoke-Helper -HelperArgs @('-Resolve', $target)
+        $script:testThreads = 'threads.json'
+        Assert-Equal 'resolve survives a partial GraphQL response that still carries nodes' 0 $resolvePartialNodes.ExitCode
+        $workspacePartialNodes = $null
+        if ($resolvePartialNodes.Text -match '(?m)^workspace:\s*(.+)$') {
+            $workspacePartialNodes = $Matches[1].Trim()
+        }
+        $threadStatePartialNodes = Get-Content -LiteralPath (Join-Path $workspacePartialNodes 'review-threads.json') -Raw |
+            ConvertFrom-Json
+        Assert-True 'partial GraphQL with nodes still marks coverage incomplete' `
+            (-not [bool]$threadStatePartialNodes.complete)
+        $partialNodeIds = @($threadStatePartialNodes.threads | ForEach-Object { [string]$_.id })
+        Assert-True 'partial GraphQL preserves returned reviewThreads.nodes' `
+            ($partialNodeIds -contains 'PRT_1')
+
         # ── A warning line ahead of the JSON must not sink the whole page ────
         # gh's stderr is merged into stdout, so a deprecation notice can precede
         # the GraphQL body. A raw parse drops it as "no data" and falsely marks
@@ -2351,6 +2468,20 @@ try {
         }
         catch { $mapMismatchThrew = $true }
         Assert-True 'a blob sha mismatch aborts before trusting the fallback' $mapMismatchThrew
+
+        $script:testTree = 'tree-mismatch-midlist.json'
+        Use-FakeGhEnv
+        $mapMidMismatchThrew = $false
+        $mapMidMismatchError = ''
+        try {
+            [void](Get-PinnedDiffFiles -Owner 'acme' -Repo 'widgets' -Number 7 `
+                    -BaseSha $baseSha -HeadSha $headSha -ExpectedFileCount 301)
+        }
+        catch { $mapMidMismatchThrew = $true; $mapMidMismatchError = [string]$_ }
+        Assert-True 'a mid-list blob sha mismatch aborts before trusting the fallback' `
+            $mapMidMismatchThrew
+        Assert-True 'the mid-list mismatch error names the sha discrepancy' `
+            ($mapMidMismatchError -match 'blob sha mismatch')
 
         $script:testTree = 'tree-truncated.json'
         Use-FakeGhEnv
@@ -2660,6 +2791,11 @@ try {
             $pinnedSame = Get-Content -LiteralPath (Join-Path $workspaceSame 'pinned.json') -Raw | ConvertFrom-Json
             Assert-Equal 'a same-repository PR resolves to the owning repo''s owner' 'acme' ([string]$pinnedSame.owner)
             Assert-Equal 'a same-repository PR resolves to the owning repo''s name' 'widgets' ([string]$pinnedSame.repo)
+            Assert-True 'a same-repo 301-file resolve does not report incomplete coverage' `
+                (-not ($resolveSame.Text -match 'fileMapCoverage: INCOMPLETE'))
+            $mapSame = @(Get-Content -LiteralPath (Join-Path $workspaceSame 'changed-files.json') `
+                    -Raw | ConvertFrom-Json)
+            Assert-Equal 'a same-repo 301-file resolve maps all changed files' 301 $mapSame.Count
         }
         $resolveSameCalls = Get-GhLogSince -Offset $resolveSameLogOffset
         Assert-True 'a same-repository PR proves its pinned tree against its own repo' `
@@ -2693,6 +2829,12 @@ try {
             Assert-Equal 'a fork PR still resolves repo to the base repository' 'widgets' ([string]$pinnedFork.repo)
             Assert-Equal 'the pinned head sha is still the one the base-repo PR view reported' `
                 $headSha ([string]$pinnedFork.headSha)
+
+            Assert-True 'a fork 301-file resolve does not report incomplete coverage' `
+                (-not ($resolveFork.Text -match 'fileMapCoverage: INCOMPLETE'))
+            $mapFork = @(Get-Content -LiteralPath (Join-Path $workspaceFork 'changed-files.json') `
+                    -Raw | ConvertFrom-Json)
+            Assert-Equal 'a fork 301-file resolve maps all changed files' 301 $mapFork.Count
 
             $payloadPathFork = Join-Path $workspaceFork 'review.input.json'
             Set-Content -LiteralPath $payloadPathFork -Encoding UTF8 -Value @"
