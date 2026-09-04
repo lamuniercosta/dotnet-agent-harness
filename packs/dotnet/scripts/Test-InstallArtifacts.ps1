@@ -390,6 +390,16 @@ try {
          ($codexPrReview -match 'before any GitHub write') -and
          ($codexPrReview -match 'decline field')) `
         'the Codex copy must keep the publish chain, head-move abort, and decline-field check'
+    $claudePrReviewCommon = Join-Path $repo '.claude/skills/pr-review/scripts/_pr-review-common.ps1'
+    $claudePrReviewWorkspace = Join-Path $repo '.claude/skills/pr-review/scripts/_pr-review-workspace.ps1'
+    $codexPrReviewCommon = Join-Path $codexSkillsPath 'pr-review/scripts/_pr-review-common.ps1'
+    $codexPrReviewWorkspace = Join-Path $codexSkillsPath 'pr-review/scripts/_pr-review-workspace.ps1'
+    Assert-That 'installed Claude and Codex trees include _pr-review-common.ps1' `
+        ((Test-Path -LiteralPath $claudePrReviewCommon) -and (Test-Path -LiteralPath $codexPrReviewCommon)) `
+        'Copy-Tree must land the common library on both host skill paths; a missing file is invisible until runtime'
+    Assert-That 'installed Claude and Codex trees include _pr-review-workspace.ps1' `
+        ((Test-Path -LiteralPath $claudePrReviewWorkspace) -and (Test-Path -LiteralPath $codexPrReviewWorkspace)) `
+        'Copy-Tree must land the workspace library on both host skill paths; a missing file is invisible until runtime'
 
     $codexTask = Get-Content -LiteralPath (Join-Path $codexSkillsPath 'task/SKILL.md') -Raw
     $claudeTask = Get-Content -LiteralPath (Join-Path $repo '.claude/skills/task/SKILL.md') -Raw

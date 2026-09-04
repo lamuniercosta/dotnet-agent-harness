@@ -1,5 +1,6 @@
 #!/usr/bin/env pwsh
-# Self-test for skills/pr-review/scripts/pr-review.ps1.
+# Self-test for skills/pr-review/scripts/pr-review.ps1 and its two AST-loaded
+# libraries (_pr-review-common.ps1, _pr-review-workspace.ps1).
 #
 # Issue #91 acceptance index (the quoted labels are exact assertions below):
 #
@@ -89,9 +90,11 @@
 #  13. -Resolve gathered six paginated reads of mutable state with no closing
 #      pin check, so evidence from two diffs could land under one pinned pair.
 #
-# Unit checks dot-source the helper's top-level functions out of its AST (the
-# script's own dispatch calls exit, so it cannot be dot-sourced directly).
-# End-to-end checks run the real script against a fake `gh` on PATH.
+# Unit checks replay top-level functions out of each helper file's AST via
+# ParseFile (common -> workspace -> entrypoint). Library files are never
+# dot-sourced: the entrypoint's dispatch calls exit, and a library with
+# unexpected top-level code must not run in this process. End-to-end checks
+# run the real entrypoint against a fake `gh` on PATH.
 #
 #   pwsh ./scripts/local/Test-PrReviewHelper.ps1
 
@@ -102,9 +105,17 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $repoRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$helper = Join-Path $repoRoot 'skills/pr-review/scripts/pr-review.ps1'
-if (-not (Test-Path -LiteralPath $helper)) {
-    throw "Helper not found: $helper"
+$helperDir = Join-Path $repoRoot 'skills/pr-review/scripts'
+$helperCommon = Join-Path $helperDir '_pr-review-common.ps1'
+$helperWorkspace = Join-Path $helperDir '_pr-review-workspace.ps1'
+$helper = Join-Path $helperDir 'pr-review.ps1'
+# Load order is a contract: common before workspace before entrypoint. Same
+# order the entrypoint must use when it dot-sources the libraries at runtime.
+$helperFiles = @($helperCommon, $helperWorkspace, $helper)
+foreach ($helperFile in $helperFiles) {
+    if (-not (Test-Path -LiteralPath $helperFile)) {
+        throw "Helper not found: $helperFile"
+    }
 }
 
 $failures = 0
@@ -129,7 +140,7 @@ function Assert-Equal {
 
 # ---------------------------------------------------------------------------
 # Load the helper's top-level functions and constants without running its
-# dispatch block.
+# dispatch block. ParseFile every file; never dot-source a library.
 #
 # The constants are replayed out of the AST rather than restated here. Several
 # validators read $script:SeverityEnum and friends, so a hand-copied duplicate
@@ -137,30 +148,74 @@ function Assert-Equal {
 # against the stale copy — the tests would still pass, just no longer about the
 # shipped schema. Assignments referencing $PSScriptRoot are skipped: that would
 # resolve to this test's directory, not the helper's.
+#
+# constantsLoaded is the union count across all three files (SchemaPath is
+# skipped). Rebaseline this exact threshold when a constant moves or is added.
+# expectedHelperFunctionCount is the union of top-level functions across
+# common, workspace, and entrypoint after the split.
 # ---------------------------------------------------------------------------
 
-$parseErrors = $null
-$tokens = $null
-$ast = [System.Management.Automation.Language.Parser]::ParseFile($helper, [ref]$tokens, [ref]$parseErrors)
-if ($parseErrors -and $parseErrors.Count -gt 0) {
-    throw "Helper does not parse: $($parseErrors[0].Message)"
-}
-foreach ($fn in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
-    . ([scriptblock]::Create($fn.Extent.Text))
-}
+$expectedHelperFunctionCount = 87
+$expectedConstantsLoaded = 12
+
+$asts = [System.Collections.Generic.List[object]]::new()
+$loadedFunctionNames = [System.Collections.Generic.List[string]]::new()
 $constantsLoaded = 0
-foreach ($statement in $ast.EndBlock.Statements) {
-    if ($statement -isnot [System.Management.Automation.Language.AssignmentStatementAst]) { continue }
-    $target = $statement.Left
-    if ($target -isnot [System.Management.Automation.Language.VariableExpressionAst]) { continue }
-    if (-not $target.VariablePath.UserPath.StartsWith('script:')) { continue }
-    if ($statement.Right.Extent.Text -match '\$PSScriptRoot') { continue }
-    . ([scriptblock]::Create($statement.Extent.Text))
-    $constantsLoaded++
+foreach ($helperFile in $helperFiles) {
+    $parseErrors = $null
+    $tokens = $null
+    $fileAst = [System.Management.Automation.Language.Parser]::ParseFile($helperFile, [ref]$tokens, [ref]$parseErrors)
+    if ($parseErrors -and $parseErrors.Count -gt 0) {
+        throw "Helper does not parse ($helperFile): $($parseErrors[0].Message)"
+    }
+    $asts.Add($fileAst)
+    foreach ($fn in $fileAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
+        if ($loadedFunctionNames.Contains($fn.Name)) {
+            throw "Duplicate function name '$($fn.Name)' across helper files."
+        }
+        $loadedFunctionNames.Add($fn.Name)
+        . ([scriptblock]::Create($fn.Extent.Text))
+    }
+    foreach ($statement in $fileAst.EndBlock.Statements) {
+        if ($statement -isnot [System.Management.Automation.Language.AssignmentStatementAst]) { continue }
+        $target = $statement.Left
+        if ($target -isnot [System.Management.Automation.Language.VariableExpressionAst]) { continue }
+        if (-not $target.VariablePath.UserPath.StartsWith('script:')) { continue }
+        if ($statement.Right.Extent.Text -match '\$PSScriptRoot') { continue }
+        . ([scriptblock]::Create($statement.Extent.Text))
+        $constantsLoaded++
+    }
 }
-if ($constantsLoaded -lt 6) {
-    throw "Expected the helper's top-level script constants to load; got $constantsLoaded."
+if ($constantsLoaded -ne $expectedConstantsLoaded) {
+    throw "Expected the helper's top-level script constants to load; got $constantsLoaded (expected $expectedConstantsLoaded)."
 }
+
+Write-Host ''
+Write-Host 'AST load (common -> workspace -> entrypoint)'
+Assert-Equal 'function count loaded from all three files matches expected total' `
+    $expectedHelperFunctionCount $loadedFunctionNames.Count
+Assert-Equal 'no duplicate function names exist across helper files' `
+    $loadedFunctionNames.Count @($loadedFunctionNames | Select-Object -Unique).Count
+
+Write-Host ''
+Write-Host 'New-PrReviewIdentity (malformed identity is refused at construction)'
+$identityMissingThrew = $false
+try {
+    [void](New-PrReviewIdentity -Owner 'acme' -Repo 'widgets' -Number 7 -HeadSha 'abcdef1' -BaseSha '1234567')
+}
+catch {
+    $identityMissingThrew = $true
+}
+Assert-True 'a PrReviewIdentity missing a field is refused at construction' $identityMissingThrew
+
+$identityBadShaThrew = $false
+try {
+    [void](New-PrReviewIdentity -Owner 'acme' -Repo 'widgets' -Number 7 -HeadSha 'not-hex' -BaseSha '1234567' -RunId 'abc123')
+}
+catch {
+    $identityBadShaThrew = $true
+}
+Assert-True 'a PrReviewIdentity with a malformed SHA is refused at construction' $identityBadShaThrew
 
 Write-Host ''
 Write-Host 'pr-review helper: pagination, receipts, and workspace safety'
@@ -1412,28 +1467,30 @@ Write-Host 'AST: the helper spawns only gh as an external process'
 
 # Scenario 18: SKILL.md's trust boundary rests on gh being the only external
 # program this script can start, and on git never being invoked directly.
-# Static analysis over the parsed helper (the same $ast loaded at the top of
-# this file), not a runtime spy, so it holds for every code path whether or
-# not these self-tests happen to exercise it.
+# Static analysis over the union of all three parsed helper files (the same
+# $asts loaded at the top of this file), not a runtime spy, so it holds for
+# every code path whether or not these self-tests happen to exercise it.
 $spawnFindings = [System.Collections.Generic.List[string]]::new()
-foreach ($cmd in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)) {
-    $cmdName = $cmd.GetCommandName()
-    if (-not [string]::IsNullOrEmpty($cmdName)) {
-        if ($cmdName -eq 'git') {
-            $spawnFindings.Add("direct 'git' invocation at line $($cmd.Extent.StartLineNumber)")
+foreach ($fileAst in $asts) {
+    foreach ($cmd in $fileAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true)) {
+        $cmdName = $cmd.GetCommandName()
+        if (-not [string]::IsNullOrEmpty($cmdName)) {
+            if ($cmdName -eq 'git') {
+                $spawnFindings.Add("direct 'git' invocation at line $($cmd.Extent.StartLineNumber)")
+            }
+            if ($cmdName -match '(?i)^(start-process|invoke-expression|iex)$') {
+                $spawnFindings.Add("'$cmdName' at line $($cmd.Extent.StartLineNumber)")
+            }
         }
-        if ($cmdName -match '(?i)^(start-process|invoke-expression|iex)$') {
-            $spawnFindings.Add("'$cmdName' at line $($cmd.Extent.StartLineNumber)")
+        # The call operator (&) invoking a *variable* is a dynamic external command
+        # decided at runtime rather than named in source. gh's own dispatch goes
+        # through Get-GhCommandPath and System.Diagnostics.Process (checked
+        # below), never through '&'.
+        if ($cmd.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Ampersand -and
+            $cmd.CommandElements.Count -gt 0 -and
+            $cmd.CommandElements[0] -is [System.Management.Automation.Language.VariableExpressionAst]) {
+            $spawnFindings.Add("'&' over a variable at line $($cmd.Extent.StartLineNumber)")
         }
-    }
-    # The call operator (&) invoking a *variable* is a dynamic external command
-    # decided at runtime rather than named in source. gh's own dispatch goes
-    # through Get-GhCommandPath and System.Diagnostics.Process (checked
-    # below), never through '&'.
-    if ($cmd.InvocationOperator -eq [System.Management.Automation.Language.TokenKind]::Ampersand -and
-        $cmd.CommandElements.Count -gt 0 -and
-        $cmd.CommandElements[0] -is [System.Management.Automation.Language.VariableExpressionAst]) {
-        $spawnFindings.Add("'&' over a variable at line $($cmd.Extent.StartLineNumber)")
     }
 }
 Assert-Equal 'no CommandAst invokes git, Start-Process, Invoke-Expression, or "&" over a variable' `
@@ -1441,14 +1498,17 @@ Assert-Equal 'no CommandAst invokes git, Start-Process, Invoke-Expression, or "&
 foreach ($finding in $spawnFindings) { Write-Host "    - $finding" -ForegroundColor DarkYellow }
 
 # Every direct use of System.Diagnostics.Process to start something. Exactly
-# one is expected: Invoke-Gh's bounded-timeout runner.
+# one is expected across the union of all three files: Invoke-Gh's
+# bounded-timeout runner.
 $processStarts = [System.Collections.Generic.List[object]]::new()
-foreach ($node in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.MemberExpressionAst] }, $true)) {
-    $memberName = $null
-    try { $memberName = [string]$node.Member.Value } catch { $memberName = $null }
-    if ($memberName -ne 'Start') { continue }
-    if ($node.Expression.Extent.Text -match 'Diagnostics\.Process') {
-        $processStarts.Add($node)
+foreach ($fileAst in $asts) {
+    foreach ($node in $fileAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.MemberExpressionAst] }, $true)) {
+        $memberName = $null
+        try { $memberName = [string]$node.Member.Value } catch { $memberName = $null }
+        if ($memberName -ne 'Start') { continue }
+        if ($node.Expression.Extent.Text -match 'Diagnostics\.Process') {
+            $processStarts.Add($node)
+        }
     }
 }
 Assert-Equal 'exactly one System.Diagnostics.Process start site exists' 1 $processStarts.Count
