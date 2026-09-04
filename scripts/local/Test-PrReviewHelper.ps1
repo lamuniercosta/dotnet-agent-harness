@@ -1765,6 +1765,12 @@ if ($joined -eq 'repo view --json nameWithOwner -q .nameWithOwner') {
 # Posting appends to a mutable review list, so a later GET sees what was posted.
 # That is what lets the test simulate a crash after a successful POST.
 if ($joined -match '--method\s+POST' -and $joined -match 'pulls/7/reviews') {
+    # Hold the helper's post.lock for the race test: this shim runs while
+    # Open-PostLock is still held, so a slow POST extends the critical section
+    # without touching production code.
+    if ($env:PRREVIEW_TEST_POST_DELAY_SECONDS) {
+        Start-Sleep -Seconds ([int]$env:PRREVIEW_TEST_POST_DELAY_SECONDS)
+    }
     # An API failure that never reaches GitHub at all — no review is created,
     # and the message deliberately avoids every word the remap-retry regex
     # looks for, so this always takes the markdown-fallback path, never the
@@ -2241,13 +2247,10 @@ try {
             # release drops the handle and leaves the file.
             Assert-True 'the lock file survives its release' (Test-Path -LiteralPath $lockPathA)
 
-            # ── Two-process race: both children must take FileShare.None ─────
-            # The single-process hold above proves -Post *respects* an exclusive
-            # lock. It does not prove the helper *takes* one: opening with
-            # FileShare.ReadWrite would still fail against this process's
-            # FileShare.None hold. Two real -Post processes against a fresh run
-            # (no receipt yet) must both be denied while a third holder blocks
-            # them, for longer than the 1s timeout, and name the concurrent post.
+            # ── Two-process race: one acquires FileShare.None, the other loses ─
+            # No pre-held lock. The two children race each other. The winner's
+            # critical section is extended by the POST delay so the loser's 1s
+            # lock timeout fires while the winner still holds the lock.
             $resolveRace = Invoke-Helper -HelperArgs @('-Resolve', $target)
             Assert-Equal 'a resolve for the race test succeeds' 0 $resolveRace.ExitCode
             $workspaceRace = $null
@@ -2258,59 +2261,60 @@ try {
             Set-Content -LiteralPath $payloadRace -Encoding UTF8 -Value @"
 {"commit_id":"$headSha","event":"COMMENT","body":"Race test.","comments":[]}
 "@
+
             $env:PRREVIEW_POST_LOCK_TIMEOUT_SECONDS = '1'
-            $lockPathRace = Join-Path $workspaceRace 'post.lock'
-            $heldRace = [System.IO.File]::Open($lockPathRace,
-                [System.IO.FileMode]::OpenOrCreate,
-                [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::None)
-            try {
-                Use-FakeGhEnv
-                # Use-FakeGhEnv does NOT set TEMP/TMP/TMPDIR (only Invoke-Helper does).
-                # Set them explicitly so children stay in the sandbox.
-                $env:TMPDIR = $tempHome
-                $env:TEMP = $tempHome
-                $env:TMP = $tempHome
-                $outA = Join-Path $tempHome "race-a-$([guid]::NewGuid().ToString('n')).txt"
-                $outB = Join-Path $tempHome "race-b-$([guid]::NewGuid().ToString('n')).txt"
-                $errA = Join-Path $tempHome "race-a-err-$([guid]::NewGuid().ToString('n')).txt"
-                $errB = Join-Path $tempHome "race-b-err-$([guid]::NewGuid().ToString('n')).txt"
-                $postsBefore = Get-PostCount
+            $env:PRREVIEW_TEST_POST_DELAY_SECONDS = '3'
+            Use-FakeGhEnv
+            $env:TMPDIR = $tempHome
+            $env:TEMP = $tempHome
+            $env:TMP = $tempHome
 
-                $procA = Start-Process pwsh -NoNewWindow -ArgumentList @(
-                    '-NoProfile', '-File', $helper, '-Post', '-Payload', $payloadRace
-                ) -RedirectStandardOutput $outA -RedirectStandardError $errA -PassThru
-                $procB = Start-Process pwsh -NoNewWindow -ArgumentList @(
-                    '-NoProfile', '-File', $helper, '-Post', '-Payload', $payloadRace
-                ) -RedirectStandardOutput $outB -RedirectStandardError $errB -PassThru
-
-                $doneA = $procA.WaitForExit(10000)
-                $doneB = $procB.WaitForExit(10000)
-                Assert-True 'race process A exited within 10s' $doneA
-                Assert-True 'race process B exited within 10s' $doneB
-
-                Assert-Equal 'race process A fails against the held lock' 1 $procA.ExitCode
-                Assert-Equal 'race process B fails against the held lock' 1 $procB.ExitCode
-
-                # Invoke-Helper merges stderr into stdout (2>&1). The helper
-                # throws the concurrent-post message, so match both streams.
-                $textA = (@(Get-Content -LiteralPath $outA -Raw -ErrorAction SilentlyContinue) +
-                    @(Get-Content -LiteralPath $errA -Raw -ErrorAction SilentlyContinue)) -join "`n"
-                $textB = (@(Get-Content -LiteralPath $outB -Raw -ErrorAction SilentlyContinue) +
-                    @(Get-Content -LiteralPath $errB -Raw -ErrorAction SilentlyContinue)) -join "`n"
-                Assert-True 'race process A names the concurrent post' ($textA -match 'already in progress')
-                Assert-True 'race process B names the concurrent post' ($textB -match 'already in progress')
-
-                Assert-Equal 'two blocked posts publish nothing' $postsBefore (Get-PostCount)
-            }
-            finally { $heldRace.Dispose() }
-
-            # After release, the same workspace posts successfully — the lock
-            # did not poison the run.
+            $outA = Join-Path $tempHome "race-a-$([guid]::NewGuid().ToString('n')).txt"
+            $outB = Join-Path $tempHome "race-b-$([guid]::NewGuid().ToString('n')).txt"
+            $errA = Join-Path $tempHome "race-a-err-$([guid]::NewGuid().ToString('n')).txt"
+            $errB = Join-Path $tempHome "race-b-err-$([guid]::NewGuid().ToString('n')).txt"
             $postsBefore = Get-PostCount
+
+            $procA = Start-Process pwsh -NoNewWindow -ArgumentList @(
+                '-NoProfile', '-File', $helper, '-Post', '-Payload', $payloadRace
+            ) -RedirectStandardOutput $outA -RedirectStandardError $errA -PassThru
+            $procB = Start-Process pwsh -NoNewWindow -ArgumentList @(
+                '-NoProfile', '-File', $helper, '-Post', '-Payload', $payloadRace
+            ) -RedirectStandardOutput $outB -RedirectStandardError $errB -PassThru
+
+            # Winner: ~3s (POST delay) + overhead. Loser: ~1.25s (1s timeout + retry).
+            # 15s WaitForExit is generous for both.
+            $doneA = $procA.WaitForExit(15000)
+            $doneB = $procB.WaitForExit(15000)
+            Assert-True 'race process A exited within 15s' $doneA
+            Assert-True 'race process B exited within 15s' $doneB
+
+            $textA = (@(Get-Content -LiteralPath $outA -Raw -ErrorAction SilentlyContinue) +
+                @(Get-Content -LiteralPath $errA -Raw -ErrorAction SilentlyContinue)) -join "`n"
+            $textB = (@(Get-Content -LiteralPath $outB -Raw -ErrorAction SilentlyContinue) +
+                @(Get-Content -LiteralPath $errB -Raw -ErrorAction SilentlyContinue)) -join "`n"
+
+            $exits = @($procA.ExitCode, $procB.ExitCode) | Sort-Object
+            Assert-Equal 'exactly one racer wins (exit 0)' 0 $exits[0]
+            Assert-Equal 'exactly one racer loses (exit 1)' 1 $exits[1]
+
+            # The loser must name the concurrent post.
+            $loserText = if ($procA.ExitCode -eq 1) { $textA } else { $textB }
+            Assert-True 'the losing racer names the concurrent post' `
+                ($loserText -match 'already in progress')
+
+            Assert-Equal 'exactly one review is published in the race' `
+                ($postsBefore + 1) (Get-PostCount)
+
+            $env:PRREVIEW_TEST_POST_DELAY_SECONDS = ''
+            $env:PRREVIEW_POST_LOCK_TIMEOUT_SECONDS = '2'
+
+            # After both children exit, the winner has released the lock. A
+            # same-workspace post must still succeed (idempotent retry) and
+            # must not publish a second review.
             $postAfterRace = Invoke-Helper -HelperArgs @('-Post', '-Payload', $payloadRace)
             Assert-Equal 'the race workspace posts after the lock is released' 0 $postAfterRace.ExitCode
             Assert-Equal 'the race post publishes exactly once' ($postsBefore + 1) (Get-PostCount)
-            $env:PRREVIEW_POST_LOCK_TIMEOUT_SECONDS = '2'
 
             # The wait is configurable, and a value that is not a positive whole
             # number of seconds must be refused rather than read as 0 — which
@@ -2393,13 +2397,18 @@ try {
         if ($resolvePartialNodes.Text -match '(?m)^workspace:\s*(.+)$') {
             $workspacePartialNodes = $Matches[1].Trim()
         }
-        $threadStatePartialNodes = Get-Content -LiteralPath (Join-Path $workspacePartialNodes 'review-threads.json') -Raw |
-            ConvertFrom-Json
-        Assert-True 'partial GraphQL with nodes still marks coverage incomplete' `
-            (-not [bool]$threadStatePartialNodes.complete)
-        $partialNodeIds = @($threadStatePartialNodes.threads | ForEach-Object { [string]$_.id })
-        Assert-True 'partial GraphQL preserves returned reviewThreads.nodes' `
-            ($partialNodeIds -contains 'PRT_1')
+        if ($workspacePartialNodes -and (Test-Path -LiteralPath $workspacePartialNodes)) {
+            $threadStatePartialNodes = Get-Content -LiteralPath (Join-Path $workspacePartialNodes 'review-threads.json') -Raw |
+                ConvertFrom-Json
+            Assert-True 'partial GraphQL with nodes still marks coverage incomplete' `
+                (-not [bool]$threadStatePartialNodes.complete)
+            $partialNodeIds = @($threadStatePartialNodes.threads | ForEach-Object { [string]$_.id })
+            Assert-True 'partial GraphQL preserves returned reviewThreads.nodes' `
+                ($partialNodeIds -contains 'PRT_1')
+        }
+        else {
+            Assert-True 'partial GraphQL with nodes produced a workspace to inspect' $false
+        }
 
         # ── A warning line ahead of the JSON must not sink the whole page ────
         # gh's stderr is merged into stdout, so a deprecation notice can precede
@@ -2982,6 +2991,7 @@ finally {
             'PRREVIEW_TEST_BIG', 'PRREVIEW_TEST_CHANGED_FILES', 'PRREVIEW_TEST_BASE_MOVE_AFTER',
             'PRREVIEW_TEST_HEAD_MOVE_AFTER', 'PRREVIEW_TEST_POST_LANDS_THEN_FAILS',
             'PRREVIEW_TEST_POST_FAILS', 'PRREVIEW_TEST_POST_FAIL_LINE_ONCE', 'PRREVIEW_TEST_POST_ATTEMPTS',
+            'PRREVIEW_TEST_POST_DELAY_SECONDS',
             'PRREVIEW_TEST_COMPARE_FIXTURE', 'PRREVIEW_TEST_PR_READS',
             'PRREVIEW_TEST_TREE', 'PRREVIEW_TEST_TREE_FAIL',
             'PRREVIEW_TEST_BASE_REPO', 'PRREVIEW_TEST_HEAD_REPO', 'PRREVIEW_TEST_REPO_VIEW')) {
