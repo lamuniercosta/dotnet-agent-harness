@@ -31,6 +31,10 @@
 #   9. Cross-platform execution: lint-harness / 'PowerShell self-tests
 #      (${{ matrix.os }})' runs 'pr-review helper paginates and keys receipts per
 #      run' on ubuntu-latest and windows-latest.
+#  10. Skip reporting (DEV-116): four junction/symlink skip sites record a
+#      distinct stable reason via Skip-Test; the summary prints the skip count
+#      next to the failure count; when $env:CI -eq 'true', any skip exits
+#      non-zero. Local runs with skips still exit 0.
 #
 # DEV-176 review-render acceptance (quoted labels are exact assertions below):
 #
@@ -120,6 +124,7 @@ foreach ($helperFile in $helperFiles) {
 
 $failures = 0
 $checks = 0
+$skipped = 0
 
 function Assert-True {
     param([string]$Name, [bool]$Condition)
@@ -136,6 +141,12 @@ function Assert-Equal {
         Write-Host "  FAIL     $Name (expected=$Expected actual=$Actual)" -ForegroundColor Red
         $script:failures++
     }
+}
+
+function Skip-Test {
+    param([string]$Reason)
+    $script:skipped++
+    Write-Host "  SKIP     $Reason" -ForegroundColor Yellow
 }
 
 # ---------------------------------------------------------------------------
@@ -333,7 +344,7 @@ try {
     $linkCreated = $true
 }
 catch {
-    Write-Host "  SKIP     could not create a directory junction/symlink to test ancestor containment ($($_.Exception.Message))" -ForegroundColor Yellow
+    Skip-Test 'ancestor-junction-unavailable'
 }
 
 try {
@@ -375,7 +386,7 @@ try {
             ([string]::IsNullOrEmpty($leaked) -or $leaked -notmatch 'super secret ancestor-junction payload')
     }
     else {
-        Write-Host '  SKIP     ancestor-reparse containment assertions (junction/symlink unavailable in this environment)' -ForegroundColor Yellow
+        Skip-Test 'ancestor-reparse-containment-unavailable'
     }
 
     # The round-2 Critical: with -Out set, the old code dropped the
@@ -2956,7 +2967,7 @@ try {
             $reparseCreated = $true
         }
         catch {
-            Write-Host "  SKIP     could not create a directory junction/symlink to test workspace reparse refusal ($($_.Exception.Message))" -ForegroundColor Yellow
+            Skip-Test 'workspace-junction-unavailable'
         }
         if ($reparseCreated) {
             $reparseThrew = $false
@@ -2966,7 +2977,7 @@ try {
             Assert-True 'the refusal names it as a symlink or junction' ($reparseMessage -match 'symlink or junction')
         }
         else {
-            Write-Host '  SKIP     workspace reparse-point refusal assertion (junction/symlink unavailable in this environment)' -ForegroundColor Yellow
+            Skip-Test 'workspace-reparse-refusal-unavailable'
         }
         Remove-Item -LiteralPath $reparseParent -Recurse -Force -ErrorAction SilentlyContinue
         Remove-Item -LiteralPath $reparseOutside -Recurse -Force -ErrorAction SilentlyContinue
@@ -3024,8 +3035,13 @@ Assert-Equal 'every required scenario id is claimed by a section in this file' 0
 
 Write-Host ''
 if ($failures -gt 0) {
-    Write-Host "$failures of $checks checks FAILED" -ForegroundColor Red
+    Write-Host "$failures of $checks checks FAILED, $skipped skipped" -ForegroundColor Red
     exit 1
 }
-Write-Host "$checks checks passed" -ForegroundColor Green
+$summary = "$checks checks passed, $skipped skipped"
+if ($skipped -gt 0 -and $env:CI -eq 'true') {
+    Write-Host $summary -ForegroundColor Yellow
+    exit 1
+}
+Write-Host $summary -ForegroundColor Green
 exit 0
