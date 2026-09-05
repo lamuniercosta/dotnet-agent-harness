@@ -14,7 +14,9 @@ $script:PlacementEnum = @('inline', 'file', 'summary')
 # the comment body. A Markdown code fence in any of them can close an enclosing
 # suggestion block early and continue with arbitrary Markdown — including a
 # second, unverified suggestion fence that no gate inspected — so both -Validate
-# and -BuildPayload refuse a finding that carries one.
+# and -BuildPayload refuse a finding that carries one. HTML comments are
+# stripped from the same fields before render so a spoofed fingerprint marker
+# cannot land in the posted body ahead of the helper's last-line marker.
 $script:VerbatimFindingFields = @('summary', 'failure_scenario', 'evidence', 'fix')
 
 # Axis statuses that count as coverage. Everything else — failed, timeout,
@@ -563,6 +565,76 @@ function Get-PriorFingerprints {
     # silence a genuinely distinct second site all over again.
     $views = [System.Collections.Generic.List[System.Collections.Generic.Dictionary[string, int]]]::new()
 
+    # review-threads.json from -Resolve. Exclusive: thread nodes are not
+    # findings, and sweeping them into a findings view yields null keys that
+    # corrupt the view max-merge. This block is independent of the
+    # Get-FindingsArray try/catch below so a future lift of that swallow cannot
+    # drop thread mining.
+    if (Test-HasProperty -Object $PriorDocument -Name 'threads') {
+        $view = [System.Collections.Generic.Dictionary[string, int]]::new(
+            [System.StringComparer]::OrdinalIgnoreCase)
+        $botLogin = $null
+        $boundBot = Get-Variable -Name PrReviewBotLogin -Scope Script -ErrorAction SilentlyContinue
+        if ($null -ne $boundBot -and -not [string]::IsNullOrWhiteSpace([string]$boundBot.Value)) {
+            $botLogin = [string]$boundBot.Value
+        }
+        elseif (-not [string]::IsNullOrWhiteSpace($env:PR_REVIEW_BOT_LOGIN)) {
+            $botLogin = $env:PR_REVIEW_BOT_LOGIN.Trim()
+        }
+        elseif ((Get-Command -Name Invoke-Gh -ErrorAction SilentlyContinue) -and
+            (Get-Command -Name ConvertFrom-GhJson -ErrorAction SilentlyContinue)) {
+            try {
+                $rawUser = Invoke-Gh -Action 'resolving review bot login' -GhArgs @('api', 'user') -AllowFailure
+                if ($rawUser.ExitCode -eq 0) {
+                    $user = ConvertFrom-GhJson -Text $rawUser.Text -Action 'parsing authenticated user'
+                    $botLogin = [string](Get-PropertyValue -Object $user -Name 'login')
+                    if (-not [string]::IsNullOrWhiteSpace($botLogin)) {
+                        $script:PrReviewBotLogin = $botLogin
+                    }
+                }
+            }
+            catch {
+                # Unresolved login: every thread comment is skipped (safe).
+            }
+        }
+
+        foreach ($thread in @((Get-PropertyValue -Object $PriorDocument -Name 'threads'))) {
+            if ($null -eq $thread) { continue }
+            $comments = Get-PropertyValue -Object $thread -Name 'comments'
+            if ($null -eq $comments) { continue }
+            $nodes = Get-PropertyValue -Object $comments -Name 'nodes'
+            if ($null -eq $nodes) { continue }
+            $nodeList = @($nodes)
+            if ($nodeList.Count -eq 0) { continue }
+            $first = $nodeList[0]
+            if ($null -eq $first) { continue }
+
+            $body = [string](Get-PropertyValue -Object $first -Name 'body')
+            if ([string]::IsNullOrWhiteSpace($body)) { continue }
+
+            if ([string]::IsNullOrWhiteSpace($botLogin)) { continue }
+            $author = Get-PropertyValue -Object $first -Name 'author'
+            $login = [string](Get-PropertyValue -Object $author -Name 'login')
+            if ([string]::IsNullOrWhiteSpace($login)) { continue }
+            if (-not $login.Equals($botLogin, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+
+            $lastLine = (($body -split '\r?\n') | Select-Object -Last 1)
+            if ($lastLine -notmatch '^<!-- pr-review:fp=([0-9a-f]{64}) sfp=([0-9a-f]{64}) -->$') { continue }
+            [void]$exactSet.Add($Matches[1])
+            Add-SemanticOccurrence -Counts $view -Key $Matches[2]
+        }
+        $views.Add($view)
+
+        foreach ($view in $views) {
+            foreach ($pair in $view.GetEnumerator()) {
+                if (-not $semanticCounts.ContainsKey($pair.Key) -or $semanticCounts[$pair.Key] -lt $pair.Value) {
+                    $semanticCounts[$pair.Key] = $pair.Value
+                }
+            }
+        }
+        return [pscustomobject]@{ exact = $exactSet; semantic = $semanticCounts }
+    }
+
     # Accept: findings array/object, { fingerprints: [...] }, { findings: [...] },
     # or prior review state with nested findings.
     if (Test-HasProperty -Object $PriorDocument -Name 'fingerprints') {
@@ -632,14 +704,12 @@ function Get-PriorCoverageGap {
       prior review is only half known.
 
       NOTE: -Resolve records this flag in review-threads.json when it fails to
-      enumerate every review thread, but that file holds raw GraphQL thread
-      nodes, not findings or fingerprints, so it is NOT itself a usable -Dedupe
-      prior — Get-PriorFingerprints extracts nothing from it and every current
-      finding comes back as new. The prior must be a findings/fingerprints file
-      (e.g. -Fingerprint output). Reconstructing a prior set from the PR's
-      threads — the only state that survives a head change — would need each
-      posted inline comment to carry a fingerprint marker, which it does not
-      yet; that robustness work is tracked in #97, not wired here.
+      enumerate every review thread. That file is a usable -Dedupe prior for
+      bot-authored inline comments that carry a last-line fingerprint marker
+      (`<!-- pr-review:fp=... sfp=... -->`). Markerless pre-feature threads,
+      human comments, and summary-only entries are skipped — the finding comes
+      back as new, which is the safe direction. `complete: false` still refuses
+      suppression unless the caller passes -AllowIncompletePrior.
 
       Silence is treated as complete on purpose. Hand-written prior files and
       plain findings arrays carry no completeness flag, and demanding one would
@@ -921,6 +991,12 @@ function Format-InlineCommentBody {
       the fence early can continue past it with arbitrary Markdown, or open a
       second suggestion fence whose contents no gate here ever saw. Unverified
       text still gets shown, just as an inert code block rather than a button.
+
+      HTML comments in verbatim fields (and in a caller-supplied raw body) are
+      stripped rather than refused: a spoofed `<!-- pr-review:fp=... -->` in
+      summary or failure_scenario would otherwise sit in the posted body where
+      a first-match parser could harvest it. The helper's real marker is
+      appended after this function returns, as the last line.
     #>
     param($Finding)
 
@@ -932,14 +1008,13 @@ function Format-InlineCommentBody {
                 'inside it could post a committable suggestion that was never verified. Drop the fence, or move ' +
                 "the replacement into 'suggestion' with 'suggestion_verified': true.")
         }
-        return [string]$explicit
+        return [regex]::Replace([string]$explicit, '<!--.*?-->', '', [System.Text.RegularExpressions.RegexOptions]::Singleline)
     }
 
     $severity = [string](Get-PropertyValue -Object $Finding -Name 'severity')
     $category = [string](Get-PropertyValue -Object $Finding -Name 'category')
-    $summary = [string](Get-PropertyValue -Object $Finding -Name 'summary')
-    $failure = [string](Get-PropertyValue -Object $Finding -Name 'failure_scenario')
     $suggestion = [string](Get-PropertyValue -Object $Finding -Name 'suggestion')
+    $stripped = @{}
 
     foreach ($verbatim in $script:VerbatimFindingFields) {
         $verbatimText = [string](Get-PropertyValue -Object $Finding -Name $verbatim)
@@ -947,7 +1022,12 @@ function Format-InlineCommentBody {
             throw ("Finding for '$([string](Get-PropertyValue -Object $Finding -Name 'file'))' has a " +
                 "'$verbatim' containing a Markdown code fence. " + (Get-FenceRejectionDetail))
         }
+        $stripped[$verbatim] = [regex]::Replace(
+            $verbatimText, '<!--.*?-->', '', [System.Text.RegularExpressions.RegexOptions]::Singleline)
     }
+
+    $summary = $stripped['summary']
+    $failure = $stripped['failure_scenario']
 
     $lines = [System.Collections.Generic.List[string]]::new()
     $lines.Add("**${severity}** · ${category}")
@@ -1045,9 +1125,20 @@ function Test-IsInlineEligible {
 function New-ReviewCommentFromFinding {
     param($Finding)
 
+    $body = Format-InlineCommentBody -Finding $Finding
+    $fp = Get-FindingFingerprint -Finding $Finding
+    $sfp = Get-FindingSemanticFingerprint -Finding $Finding
+    $marker = "<!-- pr-review:fp=$fp sfp=$sfp -->"
+    if ([string]::IsNullOrEmpty($body)) {
+        $body = $marker
+    }
+    else {
+        $body = $body.TrimEnd("`r", "`n") + "`n" + $marker
+    }
+
     $comment = [ordered]@{
         path = [string](Get-PropertyValue -Object $Finding -Name 'file')
-        body = Format-InlineCommentBody -Finding $Finding
+        body = $body
         line = [int](Get-PropertyValue -Object $Finding -Name 'line')
     }
 
@@ -1132,6 +1223,7 @@ function Format-UnmappableNotInlineEntry {
         $trimmed = $rawLine.Trim()
         if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
         if ($trimmed -match '^(Evidence|Failure scenario):') { continue }
+        if ($trimmed -match '^<!-- pr-review:') { continue }
         $kept.Add($trimmed)
     }
     $one = $null
