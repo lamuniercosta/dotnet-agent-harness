@@ -19,7 +19,11 @@ Findings match `scripts/review-schema.json` (untrusted). Ignore caller
 One verb per run. `-Resolve [number-or-url]` pins and isolates a workspace.
 `-NewWorkspace` owner-only identity workspace. `-Validate` schema-checks
 findings or a payload. `-Fingerprint` exact and location-independent identities.
-`-Dedupe` vs a prior findings/fingerprints file (not `review-threads.json`).
+`-Dedupe` vs a prior findings/fingerprints file, or `review-threads.json`
+for marker-bearing bot-authored inline comments only. Markerless
+pre-feature threads, human comments, and summary-only findings (no
+marker) are skipped — the finding comes back as new. `complete: false`
+still refuses unless `-AllowIncompletePrior`.
 `-BuildPayload` one batched `COMMENT`. `-Preflight` read-only pre-publication
 checks. `-Post` reconcile, lock, re-read pin, submit once. `-MarkdownFallback`
 when publication cannot complete. `-Ledger` coverage from supplied state; does
@@ -49,7 +53,9 @@ Concurrent posts serialize reconcile, submit, receipt write.
    writes. `head_sha` ≠ pinned `headSha`: abort **before any GitHub write**;
    name both SHAs; re-run from `-Resolve`. No summary-only. No partial review.
 5. **Publish.** Artifact path to `-Validate`. `-Dedupe -Prior` is a
-   findings/fingerprints file in the workspace (`{ "findings": [] }` if none).
+   findings/fingerprints file or a `review-threads.json` in the workspace
+   (`{ "findings": [] }` if none). Marker-bearing bot inline comments
+   suppress; markerless and human threads pass through.
    Write `-Dedupe` stdout to a workspace file; pass that path to
    `-BuildPayload` (no findings JSON rebuild).
    `-BodyText` is verbatim summary; empty is empty, not composed. No review draft.

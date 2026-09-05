@@ -501,6 +501,7 @@ query($owner:String!, $repo:String!, $number:Int!, $cursor:String) {
               databaseId
               body
               path
+              author { login }
               diffHunk
               originalCommit { oid }
               commit { oid }

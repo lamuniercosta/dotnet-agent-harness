@@ -66,6 +66,19 @@
 #       preserves Unicode in path and body', and 'MarkdownFallback normalises
 #       CRLF'.
 #
+# DEV-117 thread-prior markers (quoted labels are exact assertions below):
+#
+#   (a) 'a marker-bearing bot thread prior suppresses the matching finding'
+#   (b) 'a marker on current input cannot force a drop'
+#   (c) 'a markerless thread prior keeps every current finding'
+#   (d) 'an incomplete thread prior is refused without -AllowIncompletePrior'
+#   (e) 'New-ReviewCommentFromFinding emits a last-line fingerprint marker'
+#       and 'a raw-body finding still carries the last-line fingerprint marker'
+#   (f) 'a spoofed marker in a verbatim field is stripped at render'
+#   (g) 'a forged marker in a non-bot thread does not suppress'
+#   (h) 'a quoted marker inside a bot body is ignored by the anchored parser'
+#   (i) 'null or empty thread comment nodes are skipped without throwing'
+#
 # Guards the defects found in review of #86 that no test caught:
 #
 #   1. `gh api --paginate` emits one JSON document per page, so any PR crossing a
@@ -1320,6 +1333,247 @@ try {
 }
 finally {
     Remove-Item -LiteralPath $incompleteDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Write-Host ''
+Write-Host 'Dedupe mines review-threads.json markers (DEV-117)'
+
+# review-threads.json is a usable -Dedupe prior only for bot-authored inline
+# comments that carry a last-line fingerprint marker. Unit tests stay off `gh`
+# by pinning the bot login Anvil's miner must honor (`$script:PrReviewBotLogin`,
+# same `bot` login the GraphQL fixtures already use).
+$script:PrReviewBotLogin = 'bot'
+$markerPattern = '^<!-- pr-review:fp=([0-9a-f]{64}) sfp=([0-9a-f]{64}) -->$'
+
+function Get-TrailingFingerprintMarker {
+    param([string]$Body)
+    if ([string]::IsNullOrWhiteSpace($Body)) { return $null }
+    $last = (($Body -split '\r?\n') | Select-Object -Last 1)
+    if ($last -notmatch $markerPattern) { return $null }
+    return [pscustomobject]@{ Fingerprint = $Matches[1]; SemanticFingerprint = $Matches[2]; Line = $last }
+}
+
+function New-ConfirmedInlineFinding {
+    param(
+        [string]$File = 'src/a.cs',
+        [int]$Line = 40,
+        [string]$Summary = 'Null deref on empty input',
+        [string]$Failure = 'Empty list throws',
+        [string]$Body
+    )
+    $finding = [ordered]@{
+        repo             = 'acme/widgets'
+        pr               = '7'
+        category         = 'risk'
+        file             = $File
+        severity         = 'Medium'
+        verdict          = 'CONFIRMED'
+        placement        = 'inline'
+        side             = 'RIGHT'
+        line             = $Line
+        summary          = $Summary
+        failure_scenario = $Failure
+    }
+    if ($PSBoundParameters.ContainsKey('Body')) { $finding['body'] = $Body }
+    return [pscustomobject]$finding
+}
+
+function New-ThreadCommentNode {
+    param(
+        [string]$Body,
+        [string]$Login = 'bot'
+    )
+    return [pscustomobject]@{
+        body   = $Body
+        author = [pscustomobject]@{ login = $Login }
+    }
+}
+
+function New-ThreadNode {
+    param(
+        $Nodes,
+        [string]$Id = 'THREAD_1'
+    )
+    return [pscustomobject]@{
+        id       = $Id
+        comments = [pscustomobject]@{ nodes = $Nodes }
+    }
+}
+
+function Write-ThreadPrior {
+    param(
+        [string]$Path,
+        [object[]]$Threads,
+        [bool]$Complete = $true,
+        [string]$IncompleteReason
+    )
+    $doc = [ordered]@{
+        complete = $Complete
+        threads  = @($Threads)
+    }
+    if ($PSBoundParameters.ContainsKey('IncompleteReason')) {
+        $doc['incompleteReason'] = $IncompleteReason
+    }
+    Set-Content -LiteralPath $Path -Encoding UTF8 -Value (ConvertTo-Json -Depth 12 -InputObject ([pscustomobject]$doc))
+}
+
+$threadsDir = Join-Path ([System.IO.Path]::GetTempPath()) ("pr-review-threads-prior-{0}" -f [guid]::NewGuid().ToString('n'))
+New-Item -ItemType Directory -Path $threadsDir -Force | Out-Null
+try {
+    $raised = New-ConfirmedInlineFinding
+    $raisedFp = Get-FindingFingerprint -Finding $raised
+    $raisedSfp = Get-FindingSemanticFingerprint -Finding $raised
+    $canonicalMarkedBody = "$(Format-InlineCommentBody -Finding $raised)`n<!-- pr-review:fp=$raisedFp sfp=$raisedSfp -->"
+
+    $emitted = New-ReviewCommentFromFinding -Finding $raised
+    $emittedMarker = Get-TrailingFingerprintMarker -Body ([string]$emitted.body)
+    Assert-True 'New-ReviewCommentFromFinding emits a last-line fingerprint marker' `
+        ($null -ne $emittedMarker)
+    if ($null -ne $emittedMarker) {
+        Assert-Equal 'the emitted exact fingerprint matches the derived key' $raisedFp $emittedMarker.Fingerprint
+        Assert-Equal 'the emitted semantic fingerprint matches the derived key' $raisedSfp $emittedMarker.SemanticFingerprint
+    }
+
+    $rawFinding = New-ConfirmedInlineFinding -Body 'Already composed comment'
+    $rawComment = New-ReviewCommentFromFinding -Finding $rawFinding
+    $rawMarker = Get-TrailingFingerprintMarker -Body ([string]$rawComment.body)
+    Assert-True 'a raw-body finding still carries the last-line fingerprint marker' `
+        ($null -ne $rawMarker -and [string]$rawComment.body -match '(?s)^Already composed comment')
+    if ($null -ne $rawMarker) {
+        Assert-Equal 'the raw-body marker exact key is derived, not read from the body' `
+            (Get-FindingFingerprint -Finding $rawFinding) $rawMarker.Fingerprint
+    }
+
+    $spoofFp = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+    $spoofSfp = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+    $spoofedFinding = New-ConfirmedInlineFinding `
+        -Summary ("Null deref on empty input <!-- pr-review:fp=$spoofFp sfp=$spoofSfp -->")
+    $spoofedRendered = Format-InlineCommentBody -Finding $spoofedFinding
+    Assert-True 'a spoofed marker in a verbatim field is stripped at render' `
+        ($spoofedRendered -notmatch [regex]::Escape("fp=$spoofFp") -and
+         $spoofedRendered -notmatch [regex]::Escape("sfp=$spoofSfp"))
+
+    $spoofedComment = New-ReviewCommentFromFinding -Finding $spoofedFinding
+    $spoofedCommentMarker = Get-TrailingFingerprintMarker -Body ([string]$spoofedComment.body)
+    Assert-True 'the appended marker is not the spoofed verbatim-field pair' `
+        ($null -ne $spoofedCommentMarker -and
+         $spoofedCommentMarker.Fingerprint -ne $spoofFp -and
+         $spoofedCommentMarker.SemanticFingerprint -ne $spoofSfp)
+
+    $currentPath = Join-Path $threadsDir 'current.json'
+    $newFinding = New-ConfirmedInlineFinding -File 'src/b.cs' -Line 12 `
+        -Summary 'Brand new defect the prior never saw' `
+        -Failure 'Totally different failure mode'
+    Set-Content -LiteralPath $currentPath -Encoding UTF8 -Value (
+        ConvertTo-Json -Depth 10 -InputObject @($raised, $newFinding))
+
+    $markedPriorPath = Join-Path $threadsDir 'threads-marked.json'
+    Write-ThreadPrior -Path $markedPriorPath -Threads @(
+        (New-ThreadNode -Id 'THREAD_marked' -Nodes @(
+                (New-ThreadCommentNode -Login 'bot' -Body $canonicalMarkedBody)))
+    )
+    $dedupeMarked = Invoke-Dedupe -FindingsPath $currentPath -PriorPath $markedPriorPath | ConvertFrom-Json
+    Assert-Equal 'a marker-bearing bot thread prior suppresses the matching finding' 1 $dedupeMarked.droppedCount
+    Assert-Equal 'the unmatched finding survives a marker-bearing thread prior' 1 $dedupeMarked.keptCount
+    Assert-True 'the dropped finding is the one whose marker was mined' `
+        (@($dedupeMarked.dropped).Count -eq 1 -and [string]@($dedupeMarked.dropped)[0].file -eq 'src/a.cs')
+
+    $injectedCurrentPath = Join-Path $threadsDir 'current-injected-marker.json'
+    $injectedFinding = New-ConfirmedInlineFinding -File 'src/c.cs' -Line 99 `
+        -Summary 'Brand new defect the prior never saw' `
+        -Failure 'Totally different failure mode' `
+        -Body $canonicalMarkedBody
+    $injectedFinding | Add-Member -NotePropertyName fingerprint -NotePropertyValue $raisedFp
+    $injectedFinding | Add-Member -NotePropertyName semanticFingerprint -NotePropertyValue $raisedSfp
+    Set-Content -LiteralPath $injectedCurrentPath -Encoding UTF8 -Value (
+        ConvertTo-Json -Depth 10 -InputObject @($injectedFinding))
+    $dedupeInjected = Invoke-Dedupe -FindingsPath $injectedCurrentPath -PriorPath $markedPriorPath | ConvertFrom-Json
+    Assert-Equal 'a marker on current input cannot force a drop' 1 $dedupeInjected.keptCount
+    Assert-True 'the recomputed current keys ignore the injected marker pair' `
+        (@($dedupeInjected.kept).Count -eq 1 -and
+         [string]@($dedupeInjected.kept)[0].fingerprint -ne $raisedFp)
+
+    $markerlessPriorPath = Join-Path $threadsDir 'threads-markerless.json'
+    Write-ThreadPrior -Path $markerlessPriorPath -Threads @(
+        (New-ThreadNode -Id 'THREAD_old' -Nodes @(
+                (New-ThreadCommentNode -Login 'bot' -Body "**Medium** · risk`nNull deref on empty input"))))
+    $dedupeMarkerless = Invoke-Dedupe -FindingsPath $currentPath -PriorPath $markerlessPriorPath | ConvertFrom-Json
+    Assert-Equal 'a markerless thread prior keeps every current finding' 2 $dedupeMarkerless.keptCount
+    Assert-Equal 'a markerless thread prior drops nothing' 0 $dedupeMarkerless.droppedCount
+
+    $incompleteThreadsPath = Join-Path $threadsDir 'threads-incomplete.json'
+    Write-ThreadPrior -Path $incompleteThreadsPath -Complete:$false `
+        -IncompleteReason 'GraphQL request failed: thread page truncated' `
+        -Threads @(
+            (New-ThreadNode -Id 'THREAD_partial' -Nodes @(
+                    (New-ThreadCommentNode -Login 'bot' -Body $canonicalMarkedBody)))
+        )
+    $incompleteThreadsThrew = $false
+    $incompleteThreadsMessage = ''
+    try {
+        [void](Invoke-Dedupe -FindingsPath $currentPath -PriorPath $incompleteThreadsPath)
+    }
+    catch {
+        $incompleteThreadsThrew = $true
+        $incompleteThreadsMessage = $_.Exception.Message
+    }
+    Assert-True 'an incomplete thread prior is refused without -AllowIncompletePrior' $incompleteThreadsThrew
+    Assert-True 'the thread-prior refusal names the incompleteness reason' `
+        ($incompleteThreadsMessage -match 'thread page truncated')
+
+    $forgedPriorPath = Join-Path $threadsDir 'threads-forged.json'
+    Write-ThreadPrior -Path $forgedPriorPath -Threads @(
+        (New-ThreadNode -Id 'THREAD_forged' -Nodes @(
+                (New-ThreadCommentNode -Login 'attacker' -Body $canonicalMarkedBody)))
+    )
+    $dedupeForged = Invoke-Dedupe -FindingsPath $currentPath -PriorPath $forgedPriorPath | ConvertFrom-Json
+    Assert-Equal 'a forged marker in a non-bot thread does not suppress' 2 $dedupeForged.keptCount
+
+    $quotedFp = Get-FindingFingerprint -Finding $newFinding
+    $quotedSfp = Get-FindingSemanticFingerprint -Finding $newFinding
+    $raisedLastLine = "<!-- pr-review:fp=$raisedFp sfp=$raisedSfp -->"
+    $quotedBody = @(
+        '**Medium** · risk'
+        'Null deref on empty input'
+        ''
+        'Failure scenario: Empty list throws'
+        ''
+        '```'
+        "<!-- pr-review:fp=$quotedFp sfp=$quotedSfp -->"
+        '```'
+        $raisedLastLine
+    ) -join "`n"
+    $quotedPriorPath = Join-Path $threadsDir 'threads-quoted.json'
+    Write-ThreadPrior -Path $quotedPriorPath -Threads @(
+        (New-ThreadNode -Id 'THREAD_quoted' -Nodes @(
+                (New-ThreadCommentNode -Login 'bot' -Body $quotedBody)))
+    )
+    $dedupeQuoted = Invoke-Dedupe -FindingsPath $currentPath -PriorPath $quotedPriorPath | ConvertFrom-Json
+    Assert-True 'a quoted marker inside a bot body is ignored by the anchored parser' `
+        ($dedupeQuoted.droppedCount -eq 1 -and $dedupeQuoted.keptCount -eq 1 -and
+         [string]@($dedupeQuoted.kept)[0].file -eq 'src/b.cs')
+
+    $nullNodesThrew = $false
+    $emptySkipPath = Join-Path $threadsDir 'threads-empty-nodes.json'
+    try {
+        Write-ThreadPrior -Path $emptySkipPath -Threads @(
+            (New-ThreadNode -Id 'THREAD_null' -Nodes $null),
+            (New-ThreadNode -Id 'THREAD_empty' -Nodes @()),
+            (New-ThreadNode -Id 'THREAD_blank' -Nodes @(
+                    (New-ThreadCommentNode -Login 'bot' -Body '   '))),
+            [pscustomobject]@{ id = 'THREAD_missing' }
+        )
+        $dedupeEmpty = Invoke-Dedupe -FindingsPath $currentPath -PriorPath $emptySkipPath | ConvertFrom-Json
+        Assert-Equal 'null or empty thread comment nodes drop nothing' 0 $dedupeEmpty.droppedCount
+        Assert-Equal 'null or empty thread comment nodes keep every current finding' 2 $dedupeEmpty.keptCount
+    }
+    catch {
+        $nullNodesThrew = $true
+    }
+    Assert-True 'null or empty thread comment nodes are skipped without throwing' (-not $nullNodesThrew)
+}
+finally {
+    Remove-Item -LiteralPath $threadsDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host ''
