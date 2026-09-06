@@ -1,47 +1,31 @@
 {
   "schemaVersion": 1,
-  "measuredAt": "2026-09-05T13:46:23.9231750Z",
+  "measuredAt": "2026-09-06T18:36:38.9884456Z",
   "hosts": {
     "claude": {
-      "bytes": 35877,
-      "estTokens": 8970,
+      "bytes": 20515,
+      "estTokens": 5129,
       "files": [
         "rules/pipeline/agent-pipeline.mdc",
-        "rules/pipeline/architect-gate.mdc",
-        "rules/pipeline/coding-conventions.mdc",
-        "rules/pipeline/cyclomatic-complexity.mdc",
         "rules/pipeline/delegation.mdc",
         "rules/pipeline/documentation-sources.mdc",
-        "rules/pipeline/github-workflow.mdc",
-        "rules/pipeline/jetbrains-inspections.mdc",
-        "rules/pipeline/readme-maintenance.mdc",
-        "rules/pipeline/refactor-gate.mdc",
-        "rules/pipeline/roslyn-analyzers.mdc",
         "adapters/claude/CLAUDE.md"
       ]
     },
     "codex": {
-      "bytes": 17852,
-      "estTokens": 4463,
+      "bytes": 13917,
+      "estTokens": 3480,
       "files": [
         "adapters/codex/AGENTS.md"
       ]
     },
     "cursor": {
-      "bytes": 29476,
-      "estTokens": 7369,
+      "bytes": 14016,
+      "estTokens": 3504,
       "files": [
         "rules/pipeline/agent-pipeline.mdc",
-        "rules/pipeline/architect-gate.mdc",
-        "rules/pipeline/coding-conventions.mdc",
-        "rules/pipeline/cyclomatic-complexity.mdc",
         "rules/pipeline/delegation.mdc",
-        "rules/pipeline/documentation-sources.mdc",
-        "rules/pipeline/github-workflow.mdc",
-        "rules/pipeline/jetbrains-inspections.mdc",
-        "rules/pipeline/readme-maintenance.mdc",
-        "rules/pipeline/refactor-gate.mdc",
-        "rules/pipeline/roslyn-analyzers.mdc"
+        "rules/pipeline/documentation-sources.mdc"
       ]
     }
   }
