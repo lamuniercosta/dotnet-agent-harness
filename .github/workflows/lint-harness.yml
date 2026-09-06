@@ -317,6 +317,14 @@ jobs:
           }
           Write-Host '-WhatIf wrote nothing, as promised.'
 
+      - name: Context-floor reporter self-tests
+        shell: pwsh
+        run: ./scripts/local/Test-ContextFloor.ps1
+
+      - name: Context floor has not regressed
+        shell: pwsh
+        run: ./scripts/local/Report-ContextFloor.ps1 -Baseline
+
   secrets:
     name: gitleaks
     runs-on: ubuntu-latest
