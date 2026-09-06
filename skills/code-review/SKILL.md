@@ -78,21 +78,6 @@ On top of whatever the repo documents, the Standards axis always carries the **s
 - **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.
 - **Always a judgement call.** Each smell is a labelled heuristic ("possible Feature Envy"), never a hard violation — cap these at **Medium** severity unless the repo documents the rule explicitly.
 
-Each smell reads *what it is* → *how to fix*; match it against the diff:
-
-- **Mysterious Name** — a method, variable, or type whose name doesn't reveal what it does or holds. → rename it; if no honest name comes, the design's murky.
-- **Duplicated Code** — the same logic shape appears in more than one hunk or file in the change. → extract the shared shape, call it from both.
-- **Feature Envy** — a method that reaches into another object's data more than its own. → move the method onto the data it envies.
-- **Data Clumps** — the same few fields or params keep travelling together. → in C#, bundle them into a `record` and pass that.
-- **Primitive Obsession** — a `string`/`Guid`/`decimal` standing in for a domain concept that deserves its own type. → give the concept its own small type (a `readonly record struct` ID wrapper, a `Money` record). Watch for raw `string` entity IDs and un-typed API arguments.
-- **Repeated Switches** — the same `switch`/pattern-match on the same type recurs across the change. → replace with polymorphism, or one exhaustive switch expression both sites share.
-- **Shotgun Surgery** — one logical change forces scattered edits across many files in the diff. → gather what changes together into one module.
-- **Divergent Change** — one file or module is edited for several unrelated reasons. → split so each module changes for one reason.
-- **Speculative Generality** — abstraction, parameters, or hooks added for needs the spec doesn't have. → delete it; inline back until a real need shows. The canonical .NET form: an `IFooService` interface with exactly one implementation and no test double using it — flag it unless the repo's standards endorse interface-first DI everywhere.
-- **Message Chains** — long `a.B().C().D()` navigation the caller shouldn't depend on. → hide the walk behind one method on the first object. (Fluent builder APIs and LINQ chains are exempt — those are interfaces designed for chaining.)
-- **Middle Man** — a class that mostly just delegates onward. → cut it, call the real target direct. The canonical .NET forms: a repository that wraps the data-access driver one-to-one adding nothing, or a command handler that only forwards to a service.
-- **Refused Bequest** — a subclass or implementer that ignores or overrides most of what it inherits, or throws `NotImplementedException` on interface members. → drop the inheritance, use composition, or split the interface.
-
 ### 6. Run the axis sub-agents in parallel
 
 Start all applicable axes together when the host supports parallel delegation. Route each axis to the agent that knows the domain:
@@ -111,11 +96,7 @@ independent.
 
 Every prompt gets: the diff command, the commit list, the blast-radius table from step 2, and the relevant step-3 pre-pass results.
 
-**Risk sub-agent** — brief: "Review the diff for defects, highest blast radius first. Cover, in priority order: (1) **data access** — N+1 / missing `Include` or projection, raw SQL with user input, missing `CancellationToken`; (2) **security** — endpoints without explicit `[Authorize]`/`[AllowAnonymous]`, unvalidated input, secrets in code, PII in logs; (3) **concurrency** — `.Result`/`.Wait()`, `async void`, token not propagated end-to-end, unsafe shared state; (4) **integration** — missing retry/timeout on external calls, non-idempotent consumers, swallowed exceptions; (5) **correctness** — business-logic errors, null/empty/boundary cases, entities leaking past the DTO boundary; (6) **test coverage** — changed behaviour with no corresponding test change. For each finding give `file:line`, a one-sentence defect statement, and a concrete failure scenario (inputs/state → wrong output or crash). Assign each a severity per the scale supplied. Report the top 15 findings ranked by severity; say so if you had to cut any."
-
-**Standards sub-agent** — brief: "Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, baseline smells are always judgement calls capped at Medium, and a documented repo standard overrides the baseline. Skip anything `dotnet format` or Roslyn analyzers enforce. For each finding give `file:line` and the concrete maintenance cost it imposes. Report the top 15 ranked by severity." Include the standards-source list from step 5 **plus the smell baseline pasted in full** — the sub-agent has no other access to it.
-
-**Spec sub-agent** — brief: "Report: (a) requirements the spec asked for that are missing or partial; (b) behaviour in the diff that wasn't asked for (scope creep); (c) requirements that look implemented but where the implementation looks wrong. Quote the spec line for each finding, and give `file:line` where the diff does or should address it. Assign severity per the scale supplied. Report all findings — spec gaps are rarely numerous."
+_Each sub-agent reads its own axis brief from this skill's directory. Read `./risk-brief.md`, `./standards-brief.md`, or `./spec-brief.md`. If any companion file cannot be read, stop and report — do not proceed without it._
 
 If no spec was found, skip the Spec sub-agent and note it in the report.
 
