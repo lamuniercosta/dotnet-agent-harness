@@ -4,40 +4,40 @@ This repository uses **dotnet-agent-harness**. The pipeline, gates, and conventi
 below are enforced by scripts, not by good intentions.
 
 Both platforms load these rules natively. The always-on ones are imported below;
-the file-scoped ones live in `.claude/rules/vendor/` with `paths:` frontmatter and
-load automatically when you touch a matching file.
+the glob-scoped ones live in `.claude/rules/pipeline/` and `.claude/rules/vendor/`
+with `paths:` frontmatter and load automatically when you touch a matching file.
 
 ## Always-on rules
 
-Imported from `.cursor/rules/` deliberately. These eleven exist in exactly one place:
+Imported from `.cursor/rules/` deliberately. These three exist in exactly one place:
 Cursor requires them at that path to load them, and an `@import` resolves any
 relative path, so copying them into `.claude/rules/` would create two files that
 drift. One file, one home, both platforms.
+
+Five C# gate rules auto-load when editing `.cs` files. Three procedure rules
+(`github-workflow`, `readme-maintenance`, `architect-gate`) load through their
+pipeline skills.
 
 If you are working Claude-only, do not delete `.cursor/` — every import below
 resolves into it.
 
 @.cursor/rules/agent-pipeline.mdc
 @.cursor/rules/delegation.mdc
-@.cursor/rules/github-workflow.mdc
-@.cursor/rules/coding-conventions.mdc
 @.cursor/rules/documentation-sources.mdc
-@.cursor/rules/cyclomatic-complexity.mdc
-@.cursor/rules/roslyn-analyzers.mdc
-@.cursor/rules/jetbrains-inspections.mdc
-@.cursor/rules/refactor-gate.mdc
-@.cursor/rules/architect-gate.mdc
-@.cursor/rules/readme-maintenance.mdc
 
 ## File-scoped rules
 
-`.claude/rules/vendor/` holds eight .NET reference rules with `paths:` frontmatter,
-so they load only when you touch a matching file — `.csproj`, workflow YAML, test
-projects, and so on. Nothing to invoke; they arrive when relevant.
+`.claude/rules/pipeline/` holds five C# gate rules with `paths:` frontmatter, so
+they auto-load when you touch a `.cs` file, plus three procedure rules that load
+only through skills. `.claude/rules/vendor/` holds eight .NET reference rules
+with `paths:` frontmatter, so they load only when you touch a matching file —
+`.csproj`, workflow YAML, test projects, and so on. Nothing to invoke; they
+arrive when relevant.
 
-They are third-party reference (see `NOTICE`) and rank **below** this repo's own
-config, the always-on rules above, and the pattern in neighbouring code. Where one
-contradicts the repo, the repo wins — say so rather than following it silently.
+Vendor rules are third-party reference (see `NOTICE`) and rank **below** this
+repo's own config, the always-on rules above, and the pattern in neighbouring
+code. Where one contradicts the repo, the repo wins — say so rather than
+following it silently.
 
 ## Configuration
 

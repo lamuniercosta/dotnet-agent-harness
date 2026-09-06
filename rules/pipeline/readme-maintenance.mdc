@@ -1,6 +1,6 @@
 ---
 description: Keep README.md current with feature and bug work that changes the product
-alwaysApply: true
+alwaysApply: false
 ---
 
 # README Maintenance

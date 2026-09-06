@@ -22,6 +22,10 @@ disclose that fallback. This gate depends on no external review service.
 - After `/code-review` is clean and the branch has been rebased, before creating the PR
 - When the user says "ship", "ready to PR", "final review"
 
+Read `.cursor/rules/github-workflow.mdc` (branch, commit, rebase, PR conventions)
+and `.cursor/rules/readme-maintenance.mdc` (product README currency) — these are
+the skill-load path for both rules at stage 10.
+
 ## Steps
 
 Resolve the active `FEATURE_DIR` the same way as `/pipeline`: use the value
@@ -102,3 +106,5 @@ fix-and-re-run is round two. After the cap, unresolved review items move to
 - `/verify` — the blocking gate this runs first
 - `/code-review` — the correctness lane over the rebase delta; also standalone at stage 9
 - `/pipeline` — where this sits in the stage order (stage 10, after rebase and before the PR)
+- `.cursor/rules/github-workflow.mdc` — branch, commit, rebase, and PR conventions
+- `.cursor/rules/readme-maintenance.mdc` — product README currency before ship

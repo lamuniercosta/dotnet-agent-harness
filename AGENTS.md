@@ -63,12 +63,13 @@ how one renders for Codex, run `install.ps1` against a scratch repository.
 
 ## Always-on rules are not auto-loaded here either
 
-A consumer install distils the eleven always-on rules into its own `AGENTS.md`
-because Codex has no `@import` and a consumer has no other copy to read. This
-repo authors those rules, so restating them here would add a third copy that can
-go stale. Read them from the source when a task touches them:
+A consumer install distils the three always-on rules into its own `AGENTS.md`
+because Codex has no `@import` and a consumer has no other copy to read. The
+eight scoped rules load through skills (and, on Cursor/Claude, glob/`paths`
+matching). This repo authors those rules, so restating them here would add a
+third copy that can go stale. Read them from the source when a task touches them:
 
-- `rules/pipeline/*.mdc` — the always-on pipeline and convention rules
+- `rules/pipeline/*.mdc` — pipeline and convention rules (3 always-on; 5 glob-scoped; 3 skill-load)
 - `rules/vendor/*.md` — glob-scoped vendor rules
 
 If this file and `rules/` ever disagree, `rules/` is the source and this file is

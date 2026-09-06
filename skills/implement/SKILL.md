@@ -14,6 +14,8 @@ $ARGUMENTS
 - Human gate 1 passed (spec/plan/tasks approved). If acceptance tests were generated (opt-in), Human gate 2 (Gherkin spot-checked) also passed
 - `FEATURE_DIR/acceptance/*.feature` exists **only if** the optional Gherkin stage ran — acceptance tests are opt-in for now
 - Read the `agent-pipeline` rule (`.cursor/rules/agent-pipeline.mdc`) for stage order and handoff rules
+- When touching `.cs` files, read `.cursor/rules/coding-conventions.mdc` and the C# gate rules (`cyclomatic-complexity`, `roslyn-analyzers`, `jetbrains-inspections`)
+- Read `.cursor/rules/readme-maintenance.mdc` — product README updates at stage 6 load through this skill
 
 Resolve feature directory via `.specify/scripts/powershell/check-prerequisites.ps1 -Json -RequireTasks -IncludeTasks`.
 

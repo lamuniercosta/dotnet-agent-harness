@@ -107,6 +107,32 @@ function Get-MarkdownSection {
     return $section
 }
 
+function Test-AlwaysApplyFalse {
+    param([Parameter(Mandatory)][string]$Path)
+    $raw = Get-Content -LiteralPath $Path -Raw
+    return [bool]($raw -match '(?m)^alwaysApply:\s*false\s*$')
+}
+
+function Copy-AlwaysApplyFalseRules {
+    <# Copies only files whose frontmatter is alwaysApply: false. #>
+    param([string]$Source, [string]$Dest, [string]$Label)
+
+    if (-not (Test-Path $Source)) {
+        Add-Result $Label 'MISSING' "not found: $Source"
+        return
+    }
+
+    $scoped = @(Get-ChildItem $Source -Force -File | Where-Object { Test-AlwaysApplyFalse $_.FullName })
+
+    if ($PSCmdlet.ShouldProcess($Dest, "sync $Label")) {
+        New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+        foreach ($file in $scoped) {
+            Copy-Item $file.FullName (Join-Path $Dest $file.Name) -Force
+        }
+    }
+    Add-Result $Label 'SYNCED' "$($scoped.Count) files"
+}
+
 function Copy-Tree {
     <# Mirrors a directory the harness owns. Refreshed every run. #>
     param([string]$Source, [string]$Dest, [string]$Label)
@@ -446,6 +472,16 @@ if ($Platform -in @('codex', 'all')) {
 
 Copy-Tree (Join-Path $harnessRoot 'rules/pipeline') (Join-Path $TargetRepo '.cursor/rules') 'rules -> .cursor/rules (Claude @imports these)'
 
+# Scoped pipeline rules (alwaysApply: false) also reach Claude Code through
+# .claude/rules/pipeline/, the same dual-directory model as vendor rules.
+# The 5 glob-scoped files carry paths: and auto-load on .cs edits; the 3
+# skill-load files have no paths: and do not auto-load. The 3 always-on
+# rules stay on @import only — copying them here would double-load.
+Copy-AlwaysApplyFalseRules `
+    (Join-Path $harnessRoot 'rules/pipeline') `
+    (Join-Path $TargetRepo '.claude/rules/pipeline') `
+    'scoped pipeline rules -> .claude/rules/pipeline (alwaysApply: false)'
+
 # The vendored glob-scoped rules are the ONE thing written twice, and only
 # because both platforms have native glob loading from DIFFERENT directories
 # with DIFFERENT keys:
@@ -563,8 +599,9 @@ if ($Platform -in @('codex', 'all')) {
     Add-Result '.codex/hooks.json' 'SYNCED' 'hook wiring'
 
     # Codex reads AGENTS.md from the repo ROOT and has no @import, so unlike
-    # CLAUDE.md this adapter is a self-contained distillation of the same ten
-    # rules rather than a list of pointers.
+    # CLAUDE.md this adapter is a self-contained distillation of the three
+    # always-on rules rather than a list of pointers. The other pipeline rules
+    # load through skills and glob scoping.
     #
     # That is exactly why the append trick used for CLAUDE.md is wrong here.
     # Appending ten lines of @imports under a repo's own instructions is small and

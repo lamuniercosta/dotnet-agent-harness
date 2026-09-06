@@ -1,6 +1,6 @@
 ---
 description: GitHub issue intake, branch naming, commit, and rebase-before-PR conventions
-alwaysApply: true
+alwaysApply: false
 ---
 
 # GitHub Workflow

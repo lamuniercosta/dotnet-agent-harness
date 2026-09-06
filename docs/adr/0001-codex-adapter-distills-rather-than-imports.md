@@ -1,8 +1,12 @@
 # Codex adapter distils the rules, and initially shipped no hook wiring
 
 The hook portion of this decision is superseded by
-[ADR 0002](./0002-codex-hooks-preserve-advisory-semantics.md). The `AGENTS.md`
-and project-local configuration decisions remain current.
+[ADR 0002](./0002-codex-hooks-preserve-advisory-semantics.md). The full-
+distillation model for `AGENTS.md` is amended by
+[ADR 0018](./0018-glob-and-skill-scoping-for-pipeline-rules.md) — the Codex
+adapter still distils, but only the three always-on rules; the remaining eight
+load through skill invocation. The project-local configuration decisions remain
+current.
 
 Codex reads `AGENTS.md` from the repo root but has no `@import`, so the ten
 always-on rules cannot be referenced the way `CLAUDE.md` references

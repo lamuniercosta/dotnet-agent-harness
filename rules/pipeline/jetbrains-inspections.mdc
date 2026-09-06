@@ -1,6 +1,9 @@
 ---
 description: JetBrains/Rider inspection gate for C# changes (InspectCode)
-alwaysApply: true
+globs: "**/*.cs"
+paths:
+  - "**/*.cs"
+alwaysApply: false
 ---
 
 # JetBrains Inspections

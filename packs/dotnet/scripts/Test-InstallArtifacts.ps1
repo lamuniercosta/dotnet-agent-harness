@@ -178,6 +178,32 @@ try {
         ($legacyCodexAgentRefs.Count -eq 0) `
         (($legacyCodexAgentRefs | ForEach-Object { "$($_.Path):$($_.LineNumber)" }) -join ', ')
 
+    $claudePipelineDir = Join-Path $repo '.claude/rules/pipeline'
+    $claudePipelineFiles = @()
+    if (Test-Path -LiteralPath $claudePipelineDir) {
+        $claudePipelineFiles = @(Get-ChildItem -LiteralPath $claudePipelineDir -File -Force)
+    }
+    Assert-That '.claude/rules/pipeline contains exactly 8 scoped rules' `
+        ($claudePipelineFiles.Count -eq 8) `
+        "found $($claudePipelineFiles.Count) files"
+    $allAlwaysApplyFalse = $true
+    $pathsFrontmatterCount = 0
+    foreach ($pipelineFile in $claudePipelineFiles) {
+        $pipelineRaw = Get-Content -LiteralPath $pipelineFile.FullName -Raw
+        if ($pipelineRaw -notmatch '(?m)^alwaysApply:\s*false\s*$') {
+            $allAlwaysApplyFalse = $false
+        }
+        if ($pipelineRaw -match '(?m)^paths:\s*$') {
+            $pathsFrontmatterCount++
+        }
+    }
+    Assert-That 'every .claude/rules/pipeline file is alwaysApply: false' `
+        (($claudePipelineFiles.Count -eq 8) -and $allAlwaysApplyFalse) `
+        'copied files must be the alwaysApply: false pipeline rules'
+    Assert-That 'five .claude/rules/pipeline files carry paths: frontmatter' `
+        ($pathsFrontmatterCount -eq 5) `
+        "found $pathsFrontmatterCount files with paths:"
+
     Assert-That 'absent CLAUDE.md is created with every import' `
         (@([regex]::Matches($claude, '(?m)^@\.cursor/rules/')).Count -eq $expectedImports)
 
