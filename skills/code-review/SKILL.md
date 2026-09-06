@@ -73,7 +73,7 @@ Look for the originating spec, in this order:
 
 Anything in the repo that documents how code should be written: `CODING_STANDARDS.md`, `CONTRIBUTING.md`, the conventions sections of `CLAUDE.md`/`AGENTS.md`, `.cursor/rules/*.mdc`, `harness.yml` (the gate thresholds), and — .NET-specific — `.editorconfig` (style + analyzer severities), `Directory.Build.props` (`AnalysisLevel`, `AnalysisMode`, `TreatWarningsAsErrors`, analyzer package references), `BannedSymbols.txt`, and any `.globalconfig`.
 
-On top of whatever the repo documents, the Standards axis always carries the **smell baseline** below — a fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
+On top of whatever the repo documents, the Standards axis always carries the **smell baseline** in `./smell-baseline.md` (same directory as this `SKILL.md`) — a fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
 
 - **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.
 - **Always a judgement call.** Each smell is a labelled heuristic ("possible Feature Envy"), never a hard violation — cap these at **Medium** severity unless the repo documents the rule explicitly.
@@ -94,9 +94,9 @@ profiles. If the host exposes no subagent mechanism, run each brief inline in
 sequence and say so in the final summary, so the reader knows the axes were not
 independent.
 
-Every prompt gets: the diff command, the commit list, the blast-radius table from step 2, and the relevant step-3 pre-pass results.
+Every prompt gets: the diff command, the commit list, the blast-radius table from step 2, the relevant step-3 pre-pass results, and the Severity table from this skill (`## Severity`).
 
-_Each sub-agent reads its own axis brief from this skill's directory. Read `./risk-brief.md`, `./standards-brief.md`, or `./spec-brief.md`. If any companion file cannot be read, stop and report — do not proceed without it._
+_Each sub-agent reads its own axis brief from the directory that contains this `SKILL.md`. Resolve `./risk-brief.md`, `./standards-brief.md`, and `./spec-brief.md` relative to that directory, not the process working directory. If any companion file cannot be read, stop and report — do not proceed without it._
 
 If no spec was found, skip the Spec sub-agent and note it in the report.
 
