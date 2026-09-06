@@ -1,0 +1,3 @@
+Report — per file/hunk where relevant — (a) every place the diff violates a documented standard: cite the standard (file + the rule); and (b) any baseline smell you spot: name it and quote the hunk. Distinguish hard violations from judgement calls — documented-standard breaches can be hard, baseline smells are always judgement calls capped at Medium, and a documented repo standard overrides the baseline. Skip anything `dotnet format` or Roslyn analyzers enforce. For each finding give `file:line` and the concrete maintenance cost it imposes. Report the top 15 ranked by severity.
+
+Read the smell baseline from `./smell-baseline.md` and include it in your review.

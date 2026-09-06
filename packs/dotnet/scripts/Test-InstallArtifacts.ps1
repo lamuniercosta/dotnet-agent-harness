@@ -612,6 +612,34 @@ try {
          ($claudeCodeReview -match '(?is)Follow-ups') -and
          ($claudeCodeReview -match '(?is)never silently relabelled `?Non-blocking')) `
         'above-bar findings must go to /remediate on the Claude/Cursor skills path'
+    $claudeSmellBaseline = Join-Path $repo '.claude/skills/code-review/smell-baseline.md'
+    $claudeRiskBrief = Join-Path $repo '.claude/skills/code-review/risk-brief.md'
+    $claudeStandardsBrief = Join-Path $repo '.claude/skills/code-review/standards-brief.md'
+    $claudeSpecBrief = Join-Path $repo '.claude/skills/code-review/spec-brief.md'
+    $codexSmellBaseline = Join-Path $codexSkillsPath 'code-review/smell-baseline.md'
+    $codexRiskBrief = Join-Path $codexSkillsPath 'code-review/risk-brief.md'
+    $codexStandardsBrief = Join-Path $codexSkillsPath 'code-review/standards-brief.md'
+    $codexSpecBrief = Join-Path $codexSkillsPath 'code-review/spec-brief.md'
+    Assert-That 'installed Claude and Codex trees include all four code-review companion files' `
+        ((Test-Path -LiteralPath $claudeSmellBaseline) -and (Test-Path -LiteralPath $codexSmellBaseline) -and
+         (Test-Path -LiteralPath $claudeRiskBrief) -and (Test-Path -LiteralPath $codexRiskBrief) -and
+         (Test-Path -LiteralPath $claudeStandardsBrief) -and (Test-Path -LiteralPath $codexStandardsBrief) -and
+         (Test-Path -LiteralPath $claudeSpecBrief) -and (Test-Path -LiteralPath $codexSpecBrief)) `
+        'Copy-Tree must land smell-baseline.md, risk-brief.md, standards-brief.md, and spec-brief.md on both host skill paths'
+    $claudeSmellText = if (Test-Path -LiteralPath $claudeSmellBaseline) { Get-Content -LiteralPath $claudeSmellBaseline -Raw } else { '' }
+    $codexSmellText = if (Test-Path -LiteralPath $codexSmellBaseline) { Get-Content -LiteralPath $codexSmellBaseline -Raw } else { '' }
+    $claudeRiskText = if (Test-Path -LiteralPath $claudeRiskBrief) { Get-Content -LiteralPath $claudeRiskBrief -Raw } else { '' }
+    $codexRiskText = if (Test-Path -LiteralPath $codexRiskBrief) { Get-Content -LiteralPath $codexRiskBrief -Raw } else { '' }
+    $claudeStandardsText = if (Test-Path -LiteralPath $claudeStandardsBrief) { Get-Content -LiteralPath $claudeStandardsBrief -Raw } else { '' }
+    $codexStandardsText = if (Test-Path -LiteralPath $codexStandardsBrief) { Get-Content -LiteralPath $codexStandardsBrief -Raw } else { '' }
+    $claudeSpecText = if (Test-Path -LiteralPath $claudeSpecBrief) { Get-Content -LiteralPath $claudeSpecBrief -Raw } else { '' }
+    $codexSpecText = if (Test-Path -LiteralPath $codexSpecBrief) { Get-Content -LiteralPath $codexSpecBrief -Raw } else { '' }
+    Assert-That 'installed code-review companions keep frozen sentinel phrases on both hosts' `
+        (($claudeSmellText -match 'Mysterious Name') -and ($codexSmellText -match 'Mysterious Name') -and
+         ($claudeRiskText -match 'highest blast radius first') -and ($codexRiskText -match 'highest blast radius first') -and
+         ($claudeStandardsText -match 'baseline smell') -and ($codexStandardsText -match 'baseline smell') -and
+         ($claudeSpecText -match 'scope creep') -and ($codexSpecText -match 'scope creep')) `
+        'A6: smell-baseline=Mysterious Name; risk-brief=highest blast radius first; standards-brief=baseline smell; spec-brief=scope creep'
     Assert-That 'Claude address-pr-review keeps slash syntax, --dry-run, and approval-before-write' `
         (($claudeAddressPrReview -match '(?is)--dry-run') -and
          ($claudeAddressPrReview -match '(?is)/remediate') -and
