@@ -5,33 +5,42 @@ never open Cursor.
 
 ## Why a Claude-only project still has one
 
-The eleven always-on rules here exist in exactly one place, and `CLAUDE.md` reaches
+The three always-on rules here exist in exactly one place, and `CLAUDE.md` reaches
 them by import:
 
 ```
 @.cursor/rules/agent-pipeline.mdc
-@.cursor/rules/github-workflow.mdc
-...
+@.cursor/rules/delegation.mdc
+@.cursor/rules/documentation-sources.mdc
 ```
 
-Cursor can only auto-load rules from `.cursor/rules/`, and a Claude `@import`
-resolves any relative path — so one copy here serves both, while a copy in each
-tree would be two files free to drift.
+Five C# gate rules load via `globs:` when `.cs` files are touched. Three
+procedure rules (`github-workflow`, `readme-maintenance`, `architect-gate`) load
+via skill invocation, not as always-on imports.
 
-**Deleting this directory silently breaks all eleven imports.** Nothing errors; the
+Cursor can only auto-load rules from `.cursor/rules/`, and a Claude `@import`
+resolves any relative path — so the three always-on copies here serve both,
+while a copy in each tree would be two files free to drift. Claude Code also
+receives the eight scoped pipeline rules under `.claude/rules/pipeline/` (with
+`paths:` on the five C# gates) so those auto-load without `@import`.
+
+**Deleting this directory silently breaks all three always-on imports.** Nothing errors; the
 rules just stop arriving, and the symptom is "the agent ignores our conventions".
 
 ## What's in here
 
 | Path | Loaded by |
 |---|---|
-| `*.mdc` | Cursor natively; Claude Code via `CLAUDE.md` imports |
+| always-on `*.mdc` (3) | Cursor natively; Claude Code via `CLAUDE.md` imports |
+| glob-scoped `*.mdc` (5) | Cursor via `globs:`; Claude Code from `.claude/rules/pipeline/` using `paths:` |
+| skill-load `*.mdc` (3) | Skill invocation (not auto-loaded) |
 | `vendor/*.md` | Cursor via `globs:`; Claude Code from its **own** copy at `.claude/rules/vendor/` using `paths:` |
 
 `vendor/` is the one thing written twice, because Cursor does not read
 `.claude/rules/` and the two platforms use different frontmatter keys with
 different semantics. Both copies are regenerated on every install — edit
-`rules/vendor/` in the harness, not either copy here.
+`rules/vendor/` in the harness, not either copy here. The eight scoped pipeline
+rules follow the same two-copy pattern under `.claude/rules/pipeline/`.
 
 ## Editing
 

@@ -1,6 +1,9 @@
 ---
 description: Cyclomatic complexity gate for C# changes (CA1502)
-alwaysApply: true
+globs: "**/*.cs"
+paths:
+  - "**/*.cs"
+alwaysApply: false
 ---
 
 # Cyclomatic Complexity

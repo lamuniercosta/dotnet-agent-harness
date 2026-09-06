@@ -11,7 +11,7 @@ VERSION               stamped into a consumer's harness.yml on install
 install.ps1           adopt-first installer; new-project.sh calls it too
 skills/               25 SKILL.md — canonical source for host discovery copies
 .claude/agents/       7 canonical agents — rendered for all three hosts
-rules/pipeline/       11 authored always-on rules
+rules/pipeline/       11 authored rules (3 always-on, 5 glob-scoped, 3 skill-load)
 rules/vendor/         8 third-party .NET rules, glob-scoped (see NOTICE)
 hooks/                4 hook scripts + self-tests
 adapters/             the only per-platform files
@@ -39,8 +39,10 @@ example disagree.
 Skills live under `skills/`; agents live under `.claude/agents/` as their
 canonical source. Installation generates the host discovery copies, including
 syntax changes, without turning any installed copy into another source. Rules
-live under `.cursor/rules/` because only Cursor can auto-load them, and
-`CLAUDE.md` `@import`s them from there.
+are authored under `rules/pipeline/`. The three always-on rules install to
+`.cursor/rules/` and `CLAUDE.md` `@import`s them from there. The eight scoped
+rules also install to `.cursor/rules/`; Claude Code additionally receives them
+under `.claude/rules/pipeline/` so the five C# gates auto-load via `paths:`.
 
 Vendored rules are written to two trees because Cursor does not read
 `.claude/rules/`, and the hosts use different frontmatter keys with different
@@ -52,10 +54,18 @@ semantics. That asymmetry is documented in `rules/vendor/README.md`.
 directory) and `description`. Route it from `skills/using-agent-skills/SKILL.md`
 or nobody will find it.
 
-**A rule** — `rules/pipeline/<name>.mdc` with `alwaysApply: true`, and add an
-`@import` line to `adapters/claude/CLAUDE.md`. CI checks every import resolves.
-If the rule must reach Codex, distil its full behavior into
-`adapters/codex/AGENTS.md`; Codex has no `@import`.
+**A rule** — `rules/pipeline/<name>.mdc`. Choose the scoping mechanism:
+
+- Always-on (`alwaysApply: true`): only for rules that must load every turn
+  (`agent-pipeline`, `delegation`, `documentation-sources`). Add an `@import`
+  line to `adapters/claude/CLAUDE.md`. CI checks every import resolves. Distil
+  the behavior into `adapters/codex/AGENTS.md`; Codex has no `@import`.
+- Glob-scoped (`alwaysApply: false` plus `globs:` and `paths:`): C# gate
+  procedures that should auto-load when matching files are touched. Do not
+  `@import` them; Claude loads the copy under `.claude/rules/pipeline/`.
+- Skill-load (`alwaysApply: false`, no globs/paths): procedure rules that fire
+  at a stage boundary. Reference the rule from the relevant `skills/*/SKILL.md`
+  so Codex and skill invocation still reach it. Do not `@import` them.
 
 **An agent** — add one canonical `.claude/agents/<name>.md` profile with a valid
 `tier`, `readonly`, and `tools` field. Do not add host copies. Extend

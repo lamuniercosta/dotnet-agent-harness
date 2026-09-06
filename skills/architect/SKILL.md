@@ -13,6 +13,7 @@ $ARGUMENTS
 
 - `/refactor` complete
 - Read the `agent-pipeline` rule (`.cursor/rules/agent-pipeline.mdc`) for stage order and handoff rules
+- Read the `architect-gate` rule (`.cursor/rules/architect-gate.mdc`) for mutation and suite procedure
 
 ## Goals
 

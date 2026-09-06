@@ -1,6 +1,9 @@
 ---
 description: C# coding conventions
-alwaysApply: true
+globs: "**/*.cs"
+paths:
+  - "**/*.cs"
+alwaysApply: false
 ---
 
 # Coding Conventions

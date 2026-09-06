@@ -1,6 +1,9 @@
 ---
 description: Refactor gate — cyclomatic complexity at the refactor threshold, property tests, deduplication
-alwaysApply: true
+globs: "**/*.cs"
+paths:
+  - "**/*.cs"
+alwaysApply: false
 ---
 
 # Refactor Gate

@@ -19,7 +19,7 @@ scripts actually catch defects.
 | **Gates** | 6 | Numeric thresholds, each a script with a real exit code |
 | **Skills** | 25 | `SKILL.md` files — process, pipeline stages, and .NET reference |
 | **Agents** | 7 | Tiered subagents for noisy stages and cheap mechanical errands |
-| **Rules** | 11 + 8 | Authored always-on rules, plus vendored glob-scoped .NET guidance |
+| **Rules** | 3 + 8 + 8 | Three always-on; eight scoped (5 glob + 3 skill-load); eight vendored |
 | **Hooks** | 4 | Destructive-command guard, secret scan, format-on-edit, gate reminder |
 
 The adapters contain the host-specific wiring. The `skills/` and
@@ -105,8 +105,9 @@ The canonical source plus host-specific delivery files:
 .claude/agents/          7 generated profiles ← Claude Code
 .cursor/agents/          7 generated profiles ← Cursor
 .codex/agents/           7 generated TOML profiles ← Codex
-.cursor/rules/          11 rules    ← Cursor globs them; CLAUDE.md @imports them
+.cursor/rules/           3 always-on + 5 glob + 3 skill-load ← Cursor loads always-on and globs; CLAUDE.md @imports the 3
 .cursor/rules/vendor/    8 rules    ← glob-scoped, `globs:`  (Cursor)
+.claude/rules/pipeline/  8 rules    ← 5 with `paths:` auto-load on `.cs`; 3 skill-load (no auto-load)
 .claude/rules/vendor/    8 rules    ← glob-scoped, `paths:`  (Claude Code)
 scripts/                gate scripts + hooks/
 harness.yml             your thresholds + the harness version
@@ -221,7 +222,7 @@ default would be the exact failure the gates exist to prevent.
 ```
 skills/              25 SKILL.md sources → host discovery directories on install
 .claude/agents/       7 canonical profiles → three host discovery formats
-rules/pipeline/      11 authored always-on rules
+rules/pipeline/      11 authored rules (3 always-on, 5 glob-scoped, 3 skill-load)
 rules/vendor/         8 third-party .NET rules, isolated and attributed (see NOTICE)
 hooks/                4 hook scripts + 3 self-tests
 adapters/             the only per-platform files: hook wiring, MCP, agent instructions

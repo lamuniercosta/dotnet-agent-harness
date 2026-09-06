@@ -5,9 +5,11 @@ below are enforced by scripts, not by good intentions.
 
 Codex reads this file natively from the repository root. Unlike the Cursor and
 Claude Code adapters, it **imports nothing** — Codex has no `@import`, so the
-always-on rules are distilled here in full rather than referenced. The same rules
-live in `.cursor/rules/*.mdc`; if the two ever disagree, those files are the
-source and this one is stale — say so rather than picking one silently.
+three always-on rules are distilled here rather than referenced. The eight
+scoped rules load through skill invocation (and, on Cursor/Claude, glob/`paths`
+matching). `.cursor/rules/*.mdc` is the canonical source for each; if this file
+and those ever disagree, those files are the source and this one is stale —
+say so rather than picking one silently.
 
 Read [Limitations under Codex](#limitations-under-codex) before your first
 session. Project hooks must be reviewed before their safety nets run.
@@ -64,16 +66,6 @@ parallel writable errands must have disjoint file sets. Review the diff afterwar
 If an errand is ambiguous, partial, or untrustworthy, finish it inline and do not
 re-brief the cheap agent. If partial edits already exist, review the current diff
 and continue from it; do not roll back automatically.
-
-## Coding conventions
-
-- Define an interface in the same file as its primary implementation
-  (`IQueueClient`/`QueueClient`). Separate files only where the architecture
-  already demands it, e.g. `Business/Abstractions/`.
-- Name types and members by **functionality, not vendor**: `MessageTracePropagator`,
-  not `ServiceBusTracePropagator`. Vendor names are for SDK types and
-  vendor-mandated config keys only.
-- Follow the pattern in neighbouring code over any example in this file.
 
 ## Documentation sources
 
@@ -170,30 +162,6 @@ wrong interpreter is worse than a failure to launch.
 Anything that must write (`dotnet test`, `dotnet stryker`) needs at least
 `workspace-write`.
 
-## Gates, in order
-
-**After editing any `.cs` file**, and before calling implementation work done, all
-three of these must pass:
-
-| Script | Catches |
-|---|---|
-| `./scripts/run-roslyn-analyzers.ps1` | CA/IDE/VSTHRD/RS. Severities in `.editorconfig`; banned APIs in `BannedSymbols.txt` |
-| `./scripts/run-cyclomatic-complexity.ps1` | `CA1502`, ceiling from `gates.complexity.implement` in `harness.yml` (default 15) |
-| `./scripts/run-jetbrains-inspectcode.ps1` | WARNING+ inspections `dotnet build` and Roslyn miss, notably duplication |
-
-**Refactor gate** — the complexity bar tightens to `gates.complexity.refactor` in
-`harness.yml` (default 6). Fix `CA1502` by extracting helpers and using early
-returns; `#pragma warning disable CA1502` is for generated or genuinely
-irreducible code, with a justification, never to clear the gate. FsCheck property
-tests are required for pure/domain logic in changed code, tagged
-`[Trait("Category", "Property")]`.
-
-**Architect gate** — `dotnet tool restore`, then
-`dotnet stryker --config-file stryker-config.json`, plus the full suite. The score
-floor is `gates.mutation.threshold` in `harness.yml` (default 80), as a percentage
-on changed code. Run `./scripts/run-gherkin-mutation.ps1` only when
-`specs/<feature>/acceptance/*.feature` exists; it must leave zero survivors.
-
 ## Workflow
 
 The harness pipeline runs in fixed order. In Codex, use the matching harness skill when
@@ -205,8 +173,8 @@ the phase directly — see [Limitations](#limitations-under-codex).
    spec. Non-negotiable; a spec written before the grill encodes the wrong nouns
 3. **Spec → plan → tasks** — *human gate 1*
 4. **Implement** — TDD; tests must pass
-5. **Refactor** — the refactor gate above
-6. **Architect** — the architect gate above
+5. **Refactor** — `/refactor`
+6. **Architect** — `/architect`
 7. **Code review** *(gated, stage 9)* — `/code-review`; above-bar findings → `/remediate` → re-review
 8. **Ship** — rebase → `/ship-review` → open the PR
 9. **Address PR review** *(conditional, stage 11)* — `/address-pr-review` when external feedback arrives
@@ -214,43 +182,7 @@ the phase directly — see [Limitations](#limitations-under-codex).
 
 Never skip the grill, and never route a failing gate to lowering its threshold.
 
-`/code-review` and `/ship-review` have no numeric gate, unlike Implement/Refactor/Architect above — they must be given a stop condition explicitly, in `brief.md`, before Stage 6 (Implement): a closing bar (which severities block), a frozen scope ("anything else is a follow-up issue, not a finding in this round."), and a round cap of two rounds (initial pass + one fix-and-re-run). The closing bar and frozen scope decide which findings get a fix commit on the open loop; below-bar or out-of-scope items become follow-up issues, never a fix commit on this loop. Past the cap, unresolved findings become follow-up issues instead of more fix commits. A Critical or High finding deferred to a follow-up still keeps the stage at **NEEDS FIXES** and prevents READY or a PR suggestion — deferral stops further fix commits, it does not make the diff READY. Amendments to the closing bar or scope after a loop starts are a new issue, not a widening of the current one.
-
-## GitHub workflow
-
-- Read issues through `gh` only: `gh issue view 142 --json number,title,body,labels`
-- Branch with `./scripts/new-task-branch.ps1 -Issue 142` (`-Type bug`, or
-  `-Description "..." -Type feature`). Pattern: `{feature|bug|hotfix}/{issue}-{slug}`.
-  `hotfix` is never inferred — it is always asked for explicitly.
-- That creates a **git worktree** at `<repo>.worktrees/{type}-{issue}-{slug}`, beside
-  the repo, and everything after intake happens in it: `cd` there and run
-  `dotnet tool restore`. One checkout serialises tasks, so a dirty main checkout does
-  not block intake. `-NoWorktree` switches this checkout instead and still refuses a
-  dirty tree. Never put a worktree inside the repo — git hides linked worktrees from
-  `git status`, but `dotnet build`, InspectCode, and recursive globs still walk them.
-  `harness.yml` is copied in for you (gitignored, so git will not); `.specify/` is not,
-  so run `specify init` there before any `$speckit-*` step. Clean up with
-  `git worktree remove <path>` after the merge.
-- Commit subjects carry the issue as a **suffix, never a prefix**:
-  `Add dark mode toggle (#142)`. A leading `#` is stripped as a comment by git's
-  editor path, silently losing the reference.
-- Rebase before a PR: `./scripts/rebase-task-branch.ps1 -Push`. It forces with
-  `--force-with-lease` only when the rebase rewrote already-pushed history; a
-  first push is a plain `--set-upstream` push.
-- Only commit when asked. Never open or push a PR on your own initiative.
-
-## README maintenance
-
-Update `README.md` when a change alters something a **consumer of the service**
-needs to know: API surface (endpoints, request/response shapes, status codes),
-behaviour (retry, recovery, validation, error handling), configuration (settings,
-environment variables, `appsettings*.json` keys), telemetry (span/metric names,
-attribute values), or the data model. Mark resolved entries under Risks &
-Limitations as **Resolved / Implemented / Mitigated**.
-
-Process and workflow changes — gate scripts, analyzer severities, `.editorconfig`,
-rules, MCP servers — do **not** belong in `README.md`. They belong in the rule
-that owns them under `.cursor/rules/`, and in this file.
+`/code-review` and `/ship-review` have no numeric gate, unlike Implement/Refactor/Architect — they must be given a stop condition explicitly, in `brief.md`, before Stage 6 (Implement): a closing bar (which severities block), a frozen scope ("anything else is a follow-up issue, not a finding in this round."), and a round cap of two rounds (initial pass + one fix-and-re-run). The closing bar and frozen scope decide which findings get a fix commit on the open loop; below-bar or out-of-scope items become follow-up issues, never a fix commit on this loop. Past the cap, unresolved findings become follow-up issues instead of more fix commits. A Critical or High finding deferred to a follow-up still keeps the stage at **NEEDS FIXES** and prevents READY or a PR suggestion — deferral stops further fix commits, it does not make the diff READY. Amendments to the closing bar or scope after a loop starts are a new issue, not a widening of the current one.
 
 ## Configuration
 

@@ -115,4 +115,4 @@ This fetches and rebases onto the remote default branch, then pushes. On conflic
 
 - `/grill-with-docs` — the mandatory next step
 - `/pipeline` — where this sits in the stage order (stage 0)
-- The `github-workflow` rule — the always-on version of these conventions
+- The `github-workflow` rule — read `.cursor/rules/github-workflow.mdc` for the full conventions

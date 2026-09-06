@@ -1,6 +1,9 @@
 ---
 description: Roslyn analyzer gate for C# changes (CA/IDE warnings at build)
-alwaysApply: true
+globs: "**/*.cs"
+paths:
+  - "**/*.cs"
+alwaysApply: false
 ---
 
 # Roslyn Analyzers

@@ -13,6 +13,7 @@ $ARGUMENTS
 
 - `/implement` complete — all tests green
 - Read the `agent-pipeline` rule (`.cursor/rules/agent-pipeline.mdc`) for stage order and handoff rules
+- Read the `refactor-gate` rule (`.cursor/rules/refactor-gate.mdc`) for complexity, duplication, and property-test procedure
 
 ## Goals
 
