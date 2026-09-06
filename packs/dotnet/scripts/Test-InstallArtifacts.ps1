@@ -732,12 +732,26 @@ try {
         '      claude: inherit'
     )
     $output = Invoke-Install -Repo $repo -Platform 'claude'
+    $installExit = $LASTEXITCODE
     $legacyConfig = Get-Content -LiteralPath $legacyConfigPath -Raw
-    Assert-That 'legacy scalar config fails with migration guidance before version stamping' `
-        (($output -match 'legacy scalar agent tier') -and
-         ($output -match "nest 'model:' and 'effort:'") -and
-         ($legacyConfig -match '(?m)^harnessVersion: 0\.2\.0\r?$') -and
-         ($legacyConfig -notmatch '(?m)^harnessVersion: 0\.3\.0\r?$'))
+    $normalizedOutput = [regex]::Replace($output, '[\r\n]+(?:\s+\|)?\s*', ' ')
+    $c1Exit = $installExit -eq 1
+    $c1Phrase = [bool]($normalizedOutput -match 'legacy scalar agent tier')
+    $c2Guidance = [bool]($normalizedOutput -match "nest 'model:' and 'effort:'")
+    $c3Preserved = [bool]($legacyConfig -match '(?m)^harnessVersion: 0\.2\.0\r?$')
+    $c4Unstamped = [bool]($legacyConfig -notmatch '(?m)^harnessVersion: 0\.3\.0\r?$')
+    Assert-That 'legacy scalar config is rejected by the parser (exit 1 and phrase)' `
+        ($c1Exit -and $c1Phrase) `
+        ("exit=$installExit expected=1; phrase-match=$c1Phrase")
+    Assert-That 'legacy scalar error includes migration guidance after normalisation' `
+        $c2Guidance `
+        "normalised output did not contain nest 'model:' and 'effort:'"
+    Assert-That 'legacy scalar config keeps harnessVersion 0.2.0' `
+        $c3Preserved `
+        'harness.yml no longer has harnessVersion: 0.2.0'
+    Assert-That 'legacy scalar config is not stamped to harnessVersion 0.3.0' `
+        $c4Unstamped `
+        'harness.yml was stamped with harnessVersion: 0.3.0'
 
     # ── Codex adapter: consumer-owned files already exist ────────────────────
     # Deliberately NOT the append treatment CLAUDE.md gets. Eleven @import lines are a
