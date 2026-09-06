@@ -500,7 +500,7 @@ Copy-Tree (Join-Path $harnessRoot 'rules/vendor') (Join-Path $TargetRepo '.curso
 Copy-Tree (Join-Path $harnessRoot 'rules/vendor') (Join-Path $TargetRepo '.claude/rules/vendor') 'vendor rules -> .claude/rules/vendor (paths:)'
 
 # A Claude-only user has every reason to assume .cursor/ is another editor's
-# config and delete it - which silently breaks all ten CLAUDE.md imports with no
+# config and delete it - which silently breaks all three CLAUDE.md imports with no
 # error, just rules that stop arriving. Leave a note in the directory itself.
 if ($PSCmdlet.ShouldProcess((Join-Path $TargetRepo '.cursor/rules/README.md'), 'explain the shared rules directory')) {
     Copy-Item (Join-Path $harnessRoot 'adapters/cursor/rules-README.md') (Join-Path $TargetRepo '.cursor/rules/README.md') -Force
@@ -604,7 +604,7 @@ if ($Platform -in @('codex', 'all')) {
     # load through skills and glob scoping.
     #
     # That is exactly why the append trick used for CLAUDE.md is wrong here.
-    # Appending ten lines of @imports under a repo's own instructions is small and
+    # Appending three lines of @imports under a repo's own instructions is small and
     # reversible; appending a whole ruleset is neither, and it would sit in silent
     # contradiction with whatever the repo already told its agents. An existing
     # AGENTS.md is reported for a hand merge - the same call already made for the

@@ -85,7 +85,7 @@ inline. After removal, the skill SKILL.md becomes the sole load path.
 ### Consumer migration
 
 `install.ps1` SKIPs a consumer's `CLAUDE.md` when `@import` lines already exist
-(lines 519–520). Existing consumers therefore keep their eleven imports after
+(lines 555–557). Existing consumers therefore keep their eleven imports after
 re-install and must manually remove the eight stale imports (or delete and
 re-install their `CLAUDE.md`) to benefit from the reduced context floor. New
 installs receive three imports. A future ticket may add install-time detection
