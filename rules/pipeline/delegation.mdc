@@ -37,8 +37,9 @@ inline.** There is no numeric threshold for this judgment.
   question (1), and its brief cannot be complete without replaying the
   conversation so far (3). One carve-out — a **single reconnaissance pass before
   the first question**, where no conversation exists yet to replay, so a locating
-  errand ("where is X registered?") qualifies on its own merits. A mid-grill lull
-  is not a new pre-grill pass.
+  errand ("where is X registered?") qualifies on its own merits. That pass
+  includes reading deferred format files (`CONTEXT-FORMAT.md`, `ADR-FORMAT.md`);
+  those are facts, not decisions. A mid-grill lull is not a new pre-grill pass.
 - No unspecified writes. If any part of an edit still needs deciding, keep it
   with the parent.
 
