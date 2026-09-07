@@ -58,6 +58,36 @@ correctness **confirmation** in the consolidated report and **do not invoke**
 skip the lane and do not treat emptiness as a missing reviewer. If non-empty,
 invoke `/code-review` with that **explicit diff range**.
 
+Before dispatching, write a pre-pass scratch artifact for Security and Coverage.
+
+**Header** — the artifact starts with a Markdown header block containing these fields:
+
+| Field | Source | Purpose |
+|---|---|---|
+| `repository` | Absolute path to the repo root | Prevents cross-repo collision |
+| `branch` | Current branch name | Context for the reader |
+| `head_sha` | Full 40-char `git rev-parse HEAD` | Freshness — must match consumer's HEAD |
+| `fixed_point` | The stage-9-cleared commit | Prevents wrong-base stale reads |
+| `diff_range` | The rebase-delta three-dot range | Explicit scope binding |
+| `written_at` | UTC ISO-8601 timestamp | Audit trail; not used for verification |
+
+A Security or Coverage consumer verifies `repository`, `head_sha`, `fixed_point`, and `diff_range` against its own environment before trusting the file. If the file is missing, unreadable, or any of those fields mismatch — or the lane cannot verify (no shell, wrong cwd) — it **fails closed**. No fallback to inline relay. `written_at` is not used for verification. `branch` is context for the reader.
+
+**Body**: the diff command, the commit list, the rebase-delta summary, and the `/verify` results table. When the rebase delta is empty, the body also carries the named correctness confirmation.
+
+**Allowed roots**: `<temp>/pr-review` and `<temp>/scratch` only. Both use the platform temporary directory, not a relative path. Working-tree roots are forbidden — no gitignore fallback. Include a repo-unique path segment (for example a hash of the repo root's absolute path) so two repos sharing a temp directory cannot collide. Filename: `pre-pass-<full-40-char-sha>.md`. Short SHAs are forbidden.
+
+**Safe write**: reject symlink/reparse points on the target path before writing. Write to a temp file and rename onto the final path; never write the final path directly. If the target already exists with a different `fixed_point` or `head_sha`, abort rather than overwrite.
+
+**Write-time freshness**: immediately before writing, re-resolve `git rev-parse HEAD`. If it differs from the HEAD captured when the rebase delta and `/verify` evidence were computed, abort (fail closed).
+
+The ship-review artifact is **not** an input to nested `/code-review`. If
+non-empty, `/code-review` receives the **explicit diff range** and computes its
+own pre-pass (Steps 1–3a) over that range, writing an independent artifact
+(different root, different fixed point, different evidence). If empty,
+`/code-review` is not invoked; Security and Coverage still consume the
+ship-review artifact.
+
 Dispatch security, coverage, and (when the rebase delta is non-empty) `/code-review` in a **single message** so they run concurrently — they are independent, and running them in sequence wastes the main context on intermediate output. On an empty rebase delta, record the correctness confirmation in that same turn rather than invoking `/code-review` or omitting the lane.
 
 | Reviewer | Agent | Brief |
@@ -66,7 +96,14 @@ Dispatch security, coverage, and (when the rebase delta is non-empty) `/code-rev
 | Security | `security-reviewer` | `run-vulnerable-packages.ps1`, plus review for secrets/connection strings, injection, missing authorization, permissive CORS, PII in logs or telemetry attributes |
 | Coverage | `mutation-analyst` | Coverage gaps and Stryker survivors against the change set |
 
-Security and coverage each get: the diff command, the commit list, and the `/verify` results table. Correctness gets the named confirmation when the rebase delta is empty, or the explicit range when it is non-empty.
+Security and coverage each get the path to the ship-review pre-pass artifact.
+Each lane reads that file as its first action and verifies `repository`,
+`head_sha`, `fixed_point`, and `diff_range` against its own environment. If the
+file is missing, unreadable, or any of those fields mismatch — or the lane
+cannot verify — it fails closed. Do not also relay the diff command, commit
+list, or `/verify` table inline. Correctness gets the named confirmation when
+the rebase delta is empty, or the explicit range when it is non-empty — never
+the ship-review artifact path.
 
 ### 3. Consolidate
 Merge into one report, de-duplicating where two reviewers found the same thing (keep the more specific statement, note both sources).

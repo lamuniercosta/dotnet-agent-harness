@@ -38,7 +38,7 @@ Blast radius sets review depth, not line count. A one-line middleware change out
 | **Medium** | New feature following existing patterns, bug fix, new endpoint | Standard — checklist pass |
 | **Low** | Docs, formatting, renames, logging statements | Glance — build + tests pass |
 
-Carry this scoring into every sub-agent prompt: tell them which files are Critical/High so they spend their budget there. If the whole diff is Low, say so and skip the fan-out — a glance plus green tooling is the review.
+Record this scoring in the pre-pass artifact (Step 3a) so each axis can spend its budget on Critical/High files. If the whole diff is Low, say so and skip the fan-out — a glance plus green tooling is the review. Do not also relay the table inline into sub-agent prompts.
 
 ### 3. Roslyn pre-pass (before reading any file)
 
@@ -57,7 +57,43 @@ Also run the tooling gate: `dotnet format --verify-no-changes` and `dotnet build
 
 **Skip anything tooling already enforces.** Don't re-litigate whitespace, analyzer-covered naming, or nullable warnings. The review's value is what static analysis misses.
 
-Pass the pre-pass results into the sub-agent prompts — they have no other access to them.
+Do not relay these results inline into sub-agent prompts. Write them into the pre-pass artifact in Step 3a.
+
+### 3a. Write the pre-pass artifact
+
+After Steps 1–3 complete, write one Markdown scratch file that the Step 6 axes read themselves. Report the absolute path for Step 6. There is no fallback to inline relay.
+
+**Header** — every artifact starts with a Markdown header block containing these fields:
+
+| Field | Source | Purpose |
+|---|---|---|
+| `repository` | Absolute path to the repo root | Prevents cross-repo collision |
+| `branch` | Current branch name | Context for the reader |
+| `head_sha` | Full 40-char `git rev-parse HEAD` | Freshness — must match consumer's HEAD |
+| `fixed_point` | The base ref or SHA from Step 1 | Prevents wrong-base stale reads |
+| `diff_range` | The three-dot range (`<fixed-point>...HEAD`) | Explicit scope binding |
+| `written_at` | UTC ISO-8601 timestamp | Audit trail; not used for verification |
+
+**Body**, in order:
+
+1. **Diff command** — the literal `git diff <fixed-point>...HEAD`
+2. **Commit list** — output of `git log <fixed-point>..HEAD --oneline`
+3. **Blast-radius table** — the scored table from Step 2
+4. **Roslyn pre-pass results** — from Step 3, when available; omit this section when the Roslyn MCP tools are unavailable
+5. **Tooling-gate status** — `dotnet format --verify-no-changes` and `dotnet build` pass/fail, with diagnostics on failure
+6. **Severity scale** — the table from `## Severity` below, so sub-agents can assign severity without a parent-relayed copy
+
+Keep these **out** of the artifact (they stay inline at Step 6): smell baseline, standards-source list from Step 5, spec path from Step 4.
+
+**Allowed roots**: `<temp>/pr-review` and `<temp>/scratch` only. Both use the platform temporary directory, not a relative path. Working-tree roots are forbidden — no gitignore fallback. Include a repo-unique path segment (for example a hash of the repo root's absolute path) so two repos sharing a temp directory cannot collide. Filename: `pre-pass-<full-40-char-sha>.md`. Short SHAs are forbidden.
+
+**Safe write**: reject symlink/reparse points on the target path before writing. Write to a temp file and rename onto the final path; never write the final path directly. If the target already exists with a different `fixed_point` or `head_sha`, abort rather than overwrite.
+
+**Write-time freshness**: immediately before writing, re-resolve `git rev-parse HEAD`. If it differs from the HEAD captured in Step 1, abort (fail closed).
+
+**Read-only during fan-out**: `code-reviewer` and `security-reviewer` have no Edit/Write tools. Integrity during fan-out relies on that profile constraint, not filesystem permissions.
+
+**Lifecycle**: session-scoped. No mandatory cleanup. The parent may delete the file after Step 7. The file holds branch names, commit messages, and pre-pass results for unmerged work — same information scope as the findings artifact.
 
 ### 4. Identify the spec source
 
@@ -94,7 +130,9 @@ profiles. If the host exposes no subagent mechanism, run each brief inline in
 sequence and say so in the final summary, so the reader knows the axes were not
 independent.
 
-Every prompt gets: the diff command, the commit list, the blast-radius table from step 2, the relevant step-3 pre-pass results, and the Severity table from this skill (`## Severity`).
+Every prompt gets the path to the pre-pass artifact written in Step 3a. The sub-agent reads that file as its first action and verifies `repository`, `head_sha`, `fixed_point`, and `diff_range` against its own environment. If the file is missing, unreadable, or any of those fields mismatch — or the sub-agent cannot verify (no shell, wrong cwd) — it fails closed. No inline relay of the diff command, commit list, blast-radius table, Roslyn results, tooling-gate status, or severity scale. "Per the scale supplied" means the scale in the artifact just read.
+
+Non-artifact inline content stays in the prompt, not the file: Standards also receives the Step 5 standards-source list and reads `./smell-baseline.md`; Spec also receives the spec path from Step 4.
 
 _Each sub-agent reads its own axis brief from the directory that contains this `SKILL.md`. Resolve `./risk-brief.md`, `./standards-brief.md`, and `./spec-brief.md` relative to that directory, not the process working directory. If any companion file cannot be read, stop and report — do not proceed without it._
 
