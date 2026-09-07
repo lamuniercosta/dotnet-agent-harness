@@ -1,7 +1,5 @@
 # Non-HTTP Resilience Pipeline
 
-### Non-HTTP Resilience Pipeline
-
 ```csharp
 // For database calls, message queues, or any non-HTTP operation
 builder.Services.AddResiliencePipeline("database", builder =>
@@ -36,7 +34,7 @@ public sealed class OrderRepository(
 
 **Why**: `AddResiliencePipeline` registers a named pipeline in DI. Inject with `[FromKeyedServices]` for clean, testable code.
 
-### Typed Resilience Pipeline
+## Typed Resilience Pipeline
 
 ```csharp
 // When the operation returns a specific type, use ResiliencePipeline<T>

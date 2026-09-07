@@ -1,6 +1,6 @@
 # Custom Metrics with IMeterFactory + Multi-Dimensional Tags
 
-### Custom Metrics with IMeterFactory
+## Custom Metrics with IMeterFactory
 
 Register a metrics class as a singleton. `IMeterFactory` handles `Meter` disposal through DI.
 
@@ -44,7 +44,7 @@ public sealed class OrderMetrics
 builder.Services.AddSingleton<OrderMetrics>();
 ```
 
-### Multi-Dimensional Metric Tags
+## Multi-Dimensional Metric Tags
 
 Three or fewer tags are allocation-free. For more, use `TagList`.
 

@@ -1,8 +1,6 @@
 # CI/CD Integration
 
-## CI/CD Integration
-
-### GitHub Actions
+## GitHub Actions
 
 ```yaml
 # .github/workflows/load-test.yml
@@ -41,7 +39,7 @@ jobs:
           exit 1
 ```
 
-### GitLab CI
+## GitLab CI
 
 ```yaml
 # .gitlab-ci.yml

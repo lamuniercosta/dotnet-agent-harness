@@ -1,8 +1,6 @@
 # k6 Basics
 
-## k6 Basics
-
-### Installation
+## Installation
 
 ```bash
 # macOS
@@ -19,7 +17,7 @@ sudo apt-get update
 sudo apt-get install k6
 ```
 
-### Quick Start
+## Quick Start
 
 ```javascript
 // simple-test.js

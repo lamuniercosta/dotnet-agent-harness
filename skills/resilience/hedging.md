@@ -1,7 +1,5 @@
 # Hedging (Parallel Requests)
 
-### Hedging (Parallel Requests)
-
 ```csharp
 builder.Services.AddHttpClient<ISearchService, SearchServiceClient>()
     .AddResilienceHandler("search-hedging", builder =>

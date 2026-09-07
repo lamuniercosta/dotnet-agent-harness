@@ -7,8 +7,10 @@ context (~59 KB combined) even though the agent typically needs only the
 overview and decision guide to route the user, then reads one or two topics.
 We restructured each into a compact index SKILL.md (~2.5–3.5 KB each, ~15 KB
 total) plus 31 companion `.md` files holding the extracted reference material,
-following the companion-file pattern already established by `domain-modeling`
+following the companion-file distribution pattern established by `domain-modeling`
 (`ADR-FORMAT.md`, `CONTEXT-FORMAT.md`) and planned for `code-review` (DEV-122).
+The index + Topics routing structure — a compact SKILL.md that lists each
+companion with a read instruction — is new to this change.
 
 ## Decision
 
@@ -129,6 +131,11 @@ catches structural drift.
 - **No size-budget enforcement.** The index sizes (~2.5–3.5 KB) are
   informational targets, not gated thresholds. Context-floor measurement
   tooling is the scope of the parent epic (DEV-119), not this ticket.
+
+- **k6 Test Types table lives only in the index.** The `k6-load-testing` index
+  retains the Test Types table for routing (it has no Decision Guide).
+  `test-config.md` does not duplicate it — the table was removed from the
+  companion during review to eliminate drift risk.
 
 ## Consequences
 

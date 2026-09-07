@@ -1,8 +1,6 @@
 # Results Analysis
 
-## Results Analysis
-
-### Built-in Reports
+## Built-in Reports
 
 ```bash
 # Text summary
@@ -21,7 +19,7 @@ k6 run --out prometheus=localhost:9090/k6 load-test.js
 k6 run --out cloud load-test.js
 ```
 
-### Interpreting Results
+## Interpreting Results
 
 | Metric | Description | Good | Warning | Bad |
 |--------|-------------|------|---------|-----|

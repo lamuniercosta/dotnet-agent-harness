@@ -32,7 +32,7 @@ Use this skill when you need to validate system performance, identify bottleneck
 
 ---
 
-### Test Types
+## Test Types
 
 | Type | Use Case | Configuration |
 |------|----------|---------------|
@@ -88,7 +88,7 @@ Use this skill when you need to validate system performance, identify bottleneck
 ## Topics
 
 - **k6 Basics** — installation and quick start. Read ./basics.md in this skill's directory
-- **Test Configuration** — common options and test types. Read ./test-config.md in this skill's directory
+- **Test Configuration** — common options. Read ./test-config.md in this skill's directory
 - **HTTP Testing** — basic requests, chaining, and parameterized testing. Read ./http-testing.md in this skill's directory
 - **Browser Testing** — k6 browser scenarios. Read ./browser-testing.md in this skill's directory
 - **WebSocket Testing** — WebSocket connect, message, and close flows. Read ./websocket-testing.md in this skill's directory
