@@ -22,6 +22,10 @@ means a consuming repo's gates may start failing on code that previously passed.
 - **/ship-review correctness lane is now scoped to the rebase delta.** It invokes `/code-review` on the delta (stage-9-cleared commit to rebased head) instead of a bare `code-reviewer` pass. Empty deltas now record a named confirmation, avoiding `/code-review` which fails closed on empty diffs. Documented in ADR 0014.
 - **/code-review is now a gated stage 9.** It now fails closed on missing loop terms (e.g., missing brief.md context or ambiguous briefs), accepts an explicit diff range, and routes above-bar findings to `/remediate`. Below-bar and out-of-scope findings are now managed as follow-up issues.
 
+### Changed
+
+- **Both grill skills now checkpoint-and-compact after a durable conclusion (DEV-126).** After each confirmed decision, `/grilling` and `/grill-with-docs` append the full decision exchange to a conclusions artifact, then treat that write as the license for the host to summarize the resolved branch. Each question carries a recommendation with implications. Pre-grill reconnaissance may read deferred format files (`CONTEXT-FORMAT.md`, `ADR-FORMAT.md`) as facts, not decisions.
+
 ## [0.5.0] — 2026-08-11
 
 ### Added

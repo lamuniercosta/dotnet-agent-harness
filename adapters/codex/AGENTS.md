@@ -53,7 +53,9 @@ not from an exception to them: a fact put to a live interrogation is material yo
 reason over to form the next question (1), and its brief cannot be complete
 without replaying the conversation so far (3). One carve-out: a single
 reconnaissance pass before the first question, where no conversation exists yet
-to replay. A mid-grill lull is not a new pre-grill pass. `gate-runner`
+to replay. That pass includes reading deferred format files (`CONTEXT-FORMAT.md`,
+`ADR-FORMAT.md`); those are facts, not decisions. A mid-grill lull is not a new
+pre-grill pass. `gate-runner`
 has one mechanical exception: it may translate a reported command and exit code
 into `Pass`, `Failure`, `Skipped`, or `Could not run`; it may not dismiss
 findings, judge equivalent mutants, or overrule tool evidence.
