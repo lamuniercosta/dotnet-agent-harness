@@ -42,150 +42,6 @@ Adapted from [codewithmukesh/dotnet-claude-kit](https://github.com/codewithmukes
 | `required` members | Enforce initialization | `public required string ConnectionString { get; init; }` |
 | `is` pattern + extraction | Null/type/property check | `if (result is { IsSuccess: true, Value: var order }) { ... }` |
 
-### The `field` Keyword (C# 14)
-
-Access the auto-generated backing field in property accessors without declaring it manually.
-
-```csharp
-// GOOD — field keyword for validation in auto-property
-public class Product
-{
-    public string Name
-    {
-        get => field;
-        set => field = value?.Trim() ?? throw new ArgumentNullException(nameof(value));
-    }
-
-    public decimal Price
-    {
-        get => field;
-        set => field = value >= 0 ? value : throw new ArgumentOutOfRangeException(nameof(value));
-    }
-}
-```
-
-#### Lazy Initialization with `field`
-
-```csharp
-public class ProductCatalog
-{
-    // Lazy-load on first access — no manual Lazy<T> or backing field
-    public IReadOnlyList<Product> Products
-    {
-        get => field ??= LoadProducts();
-    }
-
-    private static List<Product> LoadProducts() => /* expensive load */;
-}
-```
-
-#### Change Notification with `field`
-
-```csharp
-// INotifyPropertyChanged without manual backing fields
-public class OrderViewModel : INotifyPropertyChanged
-{
-    public event PropertyChangedEventHandler? PropertyChanged;
-
-    public string CustomerName
-    {
-        get => field;
-        set
-        {
-            if (field == value) return;
-            field = value;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(CustomerName)));
-        }
-    } = "";
-
-    public decimal Total
-    {
-        get => field;
-        set
-        {
-            if (field == value) return;
-            field = value;
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Total)));
-        }
-    }
-}
-```
-
-### Extension Members (C# 14)
-
-C# 14 adds `extension` blocks inside static classes. Unlike classic extension methods, they support extension **properties** and **static** extension members — the receiver is declared once for the whole block.
-
-```csharp
-// GOOD — extension block (shipped C# 14 syntax)
-public static class OrderExtensions
-{
-    extension(Order order)
-    {
-        public decimal TotalWithTax => order.Total * 1.2m;
-
-        public bool IsHighValue => order.Total > 1000m;
-
-        public string ToSummary() =>
-            $"Order #{order.Id}: {order.Total:C} ({order.Items.Count} items)";
-    }
-
-    // Static extension members use the type (no receiver instance)
-    extension(Order)
-    {
-        public static Order Empty => Order.Create("none", [], DateTimeOffset.MinValue);
-    }
-}
-
-// Callers see them as if declared on Order
-if (order.IsHighValue) { /* ... */ }
-```
-
-Classic `this`-parameter extension methods still work and coexist — use extension blocks when you need properties or several members on the same receiver.
-
-## Anti-patterns
-
-### Don't Use Obsolete Patterns When Modern Alternatives Exist
-
-```csharp
-// BAD — manual backing field when field keyword works
-private string _name;
-public string Name
-{
-    get => _name;
-    set => _name = value ?? throw new ArgumentNullException();
-}
-
-// BAD — old-style collection initialization
-var list = new List<int>() { 1, 2, 3 };
-
-// BAD — Tuple instead of record for domain types
-(string Name, decimal Price) product = ("Widget", 9.99m);
-// GOOD — record
-public record Product(string Name, decimal Price);
-```
-
-### Don't Over-pattern-match
-
-```csharp
-// BAD — deeply nested pattern that's hard to read
-if (order is { Customer: { Address: { Country: { Code: "US" } } } })
-
-// GOOD — extract to a clear method or use sequential checks
-if (order.Customer.Address.Country.Code == "US")
-```
-
-### Don't Use `var` When the Type Is Not Obvious
-
-```csharp
-// BAD — what type is this?
-var result = Process(order);
-
-// GOOD — explicit type when not obvious
-Result<Order> result = Process(order);
-// Also GOOD — var is fine when type is apparent
-var orders = new List<Order>();
-```
-
 ## Decision Guide
 
 | Scenario | Recommendation |
@@ -200,3 +56,9 @@ var orders = new List<Order>();
 | Type checking + extraction | Pattern matching with `is` / `switch` |
 | Enforced initialization | `required` modifier |
 | Adding methods to external types | Extension members |
+
+## Topics
+
+- **The field Keyword** — C# 14 field keyword, all three sub-patterns. Read ./field-keyword.md in this skill's directory
+- **Extension Members** — C# 14 extension blocks. Read ./extension-members.md in this skill's directory
+- **Anti-patterns** — obsolete patterns, over-pattern-match, var misuse. Read ./anti-patterns.md in this skill's directory
