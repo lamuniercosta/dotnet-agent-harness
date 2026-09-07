@@ -1,7 +1,5 @@
 # Source-Generated Logging with OTel
 
-### Source-Generated Logging with OTel
-
 For maximum performance, use `[LoggerMessage]` — eliminates boxing and allocations.
 
 ```csharp

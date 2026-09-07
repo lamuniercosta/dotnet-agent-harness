@@ -1,6 +1,6 @@
 # Integration Tests with WebApplicationFactory + Testcontainers
 
-### Integration Tests with WebApplicationFactory
+## Integration Tests with WebApplicationFactory
 
 The highest-value test pattern. Tests the full HTTP pipeline.
 
@@ -83,7 +83,7 @@ public class CreateOrderTests(ApiFixture fixture) : IClassFixture<ApiFixture>
 }
 ```
 
-### Testcontainers for Real Database Testing
+## Testcontainers for Real Database Testing
 
 ```csharp
 // For SQL Server

@@ -1,7 +1,5 @@
 # Extension Members (C# 14)
 
-### Extension Members (C# 14)
-
 C# 14 adds `extension` blocks inside static classes. Unlike classic extension methods, they support extension **properties** and **static** extension members — the receiver is declared once for the whole block.
 
 ```csharp

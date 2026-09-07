@@ -1,7 +1,5 @@
 # Custom ActivitySource for Distributed Tracing
 
-### Custom ActivitySource for Distributed Tracing
-
 ```csharp
 public sealed class OrderService(ILogger<OrderService> logger)
 {

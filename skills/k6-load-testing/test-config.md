@@ -38,14 +38,4 @@ export const options = {
 };
 ```
 
-### Test Types
-
-| Type | Use Case | Configuration |
-|------|----------|---------------|
-| Smoke Test | Verify basic functionality | Low VUs (1-5), short duration |
-| Load Test | Normal expected load | Target VUs based on traffic |
-| Stress Test | Find breaking point | Ramp beyond capacity |
-| Spike Test | Sudden traffic spikes | Rapid increase/decrease |
-| Soak Test | Long-term stability | Extended duration |
-
 ---

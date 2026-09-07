@@ -1,7 +1,5 @@
 # Testing Time-Dependent Code
 
-### Testing Time-Dependent Code
-
 Use `TimeProvider` (built into .NET 8+) and `FakeTimeProvider` from `Microsoft.Extensions.TimeProvider.Testing`.
 
 ```csharp

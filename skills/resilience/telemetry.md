@@ -1,7 +1,5 @@
 # Telemetry Integration
 
-### Telemetry Integration
-
 ```csharp
 builder.Services.AddResiliencePipeline("monitored", (builder, context) =>
 {

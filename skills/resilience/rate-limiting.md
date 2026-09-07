@@ -1,7 +1,5 @@
 # Rate Limiting (.NET Built-in)
 
-### Rate Limiting (.NET Built-in)
-
 .NET provides built-in rate limiting middleware via `AddRateLimiter()` — no external packages needed. Algorithms: `AddFixedWindowLimiter`, `AddSlidingWindowLimiter`, `AddTokenBucketLimiter`, `AddConcurrencyLimiter`.
 
 ```csharp

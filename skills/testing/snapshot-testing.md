@@ -1,7 +1,5 @@
 # Verify Snapshot Testing
 
-### Verify Snapshot Testing
-
 Use Verify for complex response objects where manual assertions would be fragile.
 
 ```csharp

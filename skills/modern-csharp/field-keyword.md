@@ -1,7 +1,5 @@
 # The field Keyword (C# 14)
 
-### The `field` Keyword (C# 14)
-
 Access the auto-generated backing field in property accessors without declaring it manually.
 
 ```csharp
@@ -22,7 +20,7 @@ public class Product
 }
 ```
 
-#### Lazy Initialization with `field`
+## Lazy Initialization with `field`
 
 ```csharp
 public class ProductCatalog
@@ -37,7 +35,7 @@ public class ProductCatalog
 }
 ```
 
-#### Change Notification with `field`
+## Change Notification with `field`
 
 ```csharp
 // INotifyPropertyChanged without manual backing fields
