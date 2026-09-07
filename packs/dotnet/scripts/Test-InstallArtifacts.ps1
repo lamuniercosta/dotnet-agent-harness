@@ -356,10 +356,9 @@ try {
     }
 
     $renderedClaude = Get-Content -LiteralPath (Join-Path $repo 'CLAUDE.md') -Raw
-    Assert-That 'rendered CLAUDE.md numbers /address-pr-review as list ordinal 9' `
-        (($renderedClaude -match '(?m)^9\..+/address-pr-review') -and
-         ($renderedClaude -notmatch '(?m)^11\..+/address-pr-review')) `
-        'workflow list is sequential 1..10; /address-pr-review is ordinal 9 (conditional stage 11) and must not remain numbered 11 in the Claude adapter copy'
+    Assert-That 'rendered CLAUDE.md contains the agent-pipeline stage-order pointer' `
+        ($renderedClaude -match [regex]::Escape('Stage order and gates: see the agent-pipeline rule.')) `
+        'Claude adapter must carry the exact pointer ''Stage order and gates: see the agent-pipeline rule.'''
 
     Assert-That '.codex/config.toml registers both documentation servers' `
         ((Test-Path (Join-Path $repo '.codex/config.toml')) -and

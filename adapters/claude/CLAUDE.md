@@ -111,17 +111,7 @@ configured model and effort. Only `fast` is pinned to a cheaper model by default
 
 ## Workflow
 
-1. `/task <issue>` — read the issue, create the branch in its own worktree
-   (`<repo>.worktrees/…`, beside the repo); work there, not in the main checkout
-2. `/grill-with-docs` — **mandatory**; settles vocabulary in `CONTEXT.md` + ADRs
-3. `/speckit-specify` → `/speckit-plan` → `/speckit-tasks` — **human gate 1**
-4. `/implement` — TDD, tests must pass
-5. `/refactor` — complexity ≤ 6, property tests
-6. `/architect` — mutation ≥ threshold
-7. `/code-review` *(gated, stage 9)* — above-bar findings → `/remediate` → re-review
-8. rebase → `/ship-review` → open the PR
-9. `/address-pr-review` *(conditional, stage 11)* when external feedback arrives
-10. merge — **human gate 3**
+Stage order and gates: see the agent-pipeline rule.
 
 Consult `/using-agent-skills` at the start of any non-trivial task; it routes to
 the right stage and supporting skills.
