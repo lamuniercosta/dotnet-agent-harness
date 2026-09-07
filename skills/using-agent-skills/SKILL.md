@@ -1,6 +1,6 @@
 ---
 name: using-agent-skills
-description: Use the meta-router for skill selection on any non-trivial task: which skill, pipeline stage, or supporting skills apply.
+description: Use the meta-router for skill selection on any non-trivial task, when unsure which skill fits: which skill, pipeline stage, or supporting skills apply.
 ---
 
 # Using Agent Skills (router)
