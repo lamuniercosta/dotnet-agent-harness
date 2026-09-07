@@ -1,6 +1,6 @@
 ---
 name: using-agent-skills
-description: Meta-skill that discovers which skill(s) apply to the current task and governs how they are invoked. Use at the start of any non-trivial task, when unsure which skill fits, or to see how supporting skills slot into the gated pipeline.
+description: Use the meta-router for skill selection on any non-trivial task: which skill, pipeline stage, or supporting skills apply.
 ---
 
 # Using Agent Skills (router)
@@ -9,42 +9,41 @@ Adapted from [addyosmani/agent-skills](https://github.com/addyosmani/agent-skill
 
 ## Two families of skills
 
-1. **The gated pipeline** (feature delivery) — Spec Kit stages plus this harness's stages, with human gates. Use `/pipeline` to find the current stage. Order: `/task <issue>` (intake + branch) → `/grill-with-docs` (**mandatory** alignment) → `/speckit-specify` → `/speckit-clarify` → `/speckit-checklist` → `/speckit-plan` → `/speckit-tasks` → `/speckit-analyze` → **gate 1** → *(optional: `/gherkin` → gate 2)* → `/implement` → `/refactor` → `/architect` → `/code-review` (gated, stage 9) → `/remediate` until clean → rebase → `/ship-review` → open the PR → *(conditional: `/address-pr-review` when external feedback arrives)* → merge. Acceptance tests (Gherkin/Reqnroll) are **opt-in** — skip the Gherkin stage and gate 2 unless requested.
+1. **The gated pipeline** (feature delivery) — Spec Kit stages plus this harness's stages, with human gates. Use `/pipeline` to find the current stage. Stage order and gates: see the agent-pipeline rule. Acceptance tests (Gherkin/Reqnroll) are **opt-in** — skip the Gherkin stage and gate 2 unless requested.
 2. **Supporting skills** (non-gated) — pulled in as needed during the pipeline. This router maps tasks to them.
 
-## Discovery decision tree
+## Discovery routing
 
-```
-Task arrives
- ├─ Where am I in the pipeline? ─────────────→ /pipeline
- ├─ Starting ANY task (have an issue) ───────→ /task <issue>   (fetch issue + branch)
- ├─ Branch created, before spec/code ────────→ /grill-with-docs   (MANDATORY alignment)
- ├─ Alignment done → write the spec ─────────→ /speckit-specify
- ├─ Spec has ambiguities ────────────────────→ /speckit-clarify
- ├─ Need plan / tasks / consistency check ───→ /speckit-plan · /speckit-tasks · /speckit-analyze
- ├─ Acceptance scenarios (OPTIONAL, opt-in) ─→ /gherkin   (only if requested)
- ├─ Implementing (after gate 1, or gate 2) ──→ /implement
- │   ├─ Writing new C# ──────────────────────→ /modern-csharp
- │   ├─ New feature slice / command / query ─→ /scaffold
- │   ├─ Match project conventions ───────────→ /convention-learner
- │   ├─ Traces / metrics / spans ────────────→ /opentelemetry
- │   ├─ Retry / circuit breaker / timeouts ──→ /resilience
- │   ├─ Writing tests / coverage strategy ───→ /testing · /test-engineer
- │   └─ Verify against official docs ────────→ /grill-with-docs
- ├─ Is this change ready? ───────────────────→ /verify
- ├─ Refactor gate (CC, property tests) ─────→ /refactor
- ├─ Mutation / architect gate ───────────────→ /architect
- ├─ Something broke ─────────────────────────→ /diagnosing-bugs
- ├─ Reviewing code (gated, stage 9) ─────────→ /code-review
- │   └─ Accepted findings to close ──────────→ /remediate
- ├─ Reviewing a PR you did not author ───────→ /pr-review
- ├─ After rebase, before opening the PR ─────→ /ship-review
- ├─ Open PR with external review feedback ───→ /address-pr-review
- ├─ Designing architecture / domain ─────────→ /codebase-design · /domain-modeling
- ├─ Broad architecture assessment ───────────→ /improve-codebase-architecture
- ├─ Performance / load / SLA ────────────────→ /k6-load-testing
- └─ Pausing / resuming later ────────────────→ /handoff
-```
+| Task shape | Skill(s) |
+|---|---|
+| Where am I in the pipeline? | `/pipeline` |
+| Starting ANY task (have an issue) | `/task <issue>` |
+| Branch created, before spec/code | `/grill-with-docs` |
+| Alignment done → write the spec | `/speckit-specify` |
+| Spec has ambiguities | `/speckit-clarify` |
+| Need plan / tasks / consistency check | `/speckit-plan` · `/speckit-tasks` · `/speckit-analyze` |
+| Acceptance scenarios (OPTIONAL, opt-in) | `/gherkin` |
+| Implementing (after gate 1, or gate 2) | `/implement` |
+| Writing new C# | `/modern-csharp` |
+| New feature slice / command / query | `/scaffold` |
+| Match project conventions | `/convention-learner` |
+| Traces / metrics / spans | `/opentelemetry` |
+| Retry / circuit breaker / timeouts | `/resilience` |
+| Writing tests / coverage strategy | `/testing` · `/test-engineer` |
+| Verify against official docs | `/grill-with-docs` |
+| Is this change ready? | `/verify` |
+| Refactor gate (CC, property tests) | `/refactor` |
+| Mutation / architect gate | `/architect` |
+| Something broke | `/diagnosing-bugs` |
+| Reviewing code (gated) | `/code-review` |
+| Accepted findings to close | `/remediate` |
+| Reviewing a PR you did not author | `/pr-review` |
+| After rebase, before opening the PR | `/ship-review` |
+| Open PR with external review feedback | `/address-pr-review` |
+| Designing architecture / domain | `/codebase-design` · `/domain-modeling` |
+| Broad architecture assessment | `/improve-codebase-architecture` |
+| Performance / load / SLA | `/k6-load-testing` |
+| Pausing / resuming later | `/handoff` |
 
 Every harness skill above ships on Cursor, Claude Code, and Codex. The installed
 Codex copy renders explicit invocations as `$name`; Cursor and Claude Code use
@@ -84,7 +83,7 @@ one-strike rules here.
 
 1. Check for an applicable skill **before** starting work — skills encode processes that prevent mistakes.
 2. Skills are workflows, not suggestions — follow steps in order; don't skip verification.
-3. Multiple skills compose — a feature typically chains several (see the tree).
+3. Multiple skills compose — a feature typically chains several (see the routing table).
 4. Respect the human gates — do not skip gate 1/2/3 unless the user explicitly approves.
 5. When in doubt on a non-trivial task with no spec, start with `/speckit-specify`.
 

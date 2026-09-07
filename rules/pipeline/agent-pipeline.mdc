@@ -118,7 +118,7 @@ when spawning a cheap errand actually saves context and cost.
 
 ## Supporting Skills (non-gated)
 
-Start non-trivial tasks by consulting **`/using-agent-skills`** — the router that maps the task to the right pipeline stage and supporting skills, and encodes the core operating behaviours (surface assumptions, manage confusion, push back, simplicity, scope discipline, verify).
+Start non-trivial tasks by consulting **`/using-agent-skills`**. It encodes the core operating behaviours (surface assumptions, manage confusion, push back, simplicity, scope discipline, verify).
 
 - `/using-agent-skills` — meta-router; consult first, re-consult when the task type changes
 - `/grilling`, `/domain-modeling`, `/codebase-design` — reference skills invoked by the mandatory `/grill-with-docs` alignment stage
