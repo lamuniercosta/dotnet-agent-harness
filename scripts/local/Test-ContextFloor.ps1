@@ -186,8 +186,12 @@ try {
     Copy-Item -LiteralPath $committedBaseline -Destination $tempBaseline -Force
 
     $tempObj = Get-Content -LiteralPath $tempBaseline -Raw -Encoding utf8 | ConvertFrom-Json
-    $originalClaude = [int]$tempObj.hosts.claude.bytes
-    $lowered = [Math]::Max(0, $originalClaude - 1)
+    # Derive the lowered baseline from the currently measured Claude bytes (the
+    # -Json evidence), not from the committed baseline: the committed file is
+    # legitimately stale/high after context trims, so lowering it would not
+    # create a regression.
+    $currentClaude = [int]$evidence.hosts.claude.bytes
+    $lowered = [Math]::Max(0, $currentClaude - 1)
     $tempObj.hosts.claude.bytes = $lowered
     $tempJson = $tempObj | ConvertTo-Json -Depth 6
     [System.IO.File]::WriteAllText($tempBaseline, ($tempJson.TrimEnd() + "`n"), [System.Text.UTF8Encoding]::new($false))
@@ -196,7 +200,7 @@ try {
     Assert-That '-Baseline exits 1 when a host baseline is artificially lowered' ($loweredRun.ExitCode -eq 1) "exit $($loweredRun.ExitCode)`n$($loweredRun.Output)"
     Assert-That 'regression output names the host that exceeded' ($loweredRun.Output -match 'claude') $loweredRun.Output
     Assert-That 'regression output includes current and baseline bytes' (
-        $loweredRun.Output -match [string]$originalClaude -and $loweredRun.Output -match [string]$lowered
+        $loweredRun.Output -match [string]$currentClaude -and $loweredRun.Output -match [string]$lowered
     ) $loweredRun.Output
 
     $baselineAfter = [System.IO.File]::ReadAllBytes($committedBaseline)
