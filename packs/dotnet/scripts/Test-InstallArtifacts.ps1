@@ -626,6 +626,56 @@ try {
          (Test-Path -LiteralPath $claudeStandardsBrief) -and (Test-Path -LiteralPath $codexStandardsBrief) -and
          (Test-Path -LiteralPath $claudeSpecBrief) -and (Test-Path -LiteralPath $codexSpecBrief)) `
         'Copy-Tree must land smell-baseline.md, risk-brief.md, standards-brief.md, and spec-brief.md on both host skill paths'
+
+    # DEV-123 item 47 (F3): enumerate all 31 reference-skill companions by name
+    # at both install paths. SC5 audit: existing exact-match inventories are
+    # directory counts ($sourceSkillNames -eq 28), eight pipeline rules, seven
+    # agent names, and named code-review / pr-review files — none of those
+    # treat extra files in these five skill directories as a mismatch.
+    $referenceCompanions = @(
+        'k6-load-testing/basics.md'
+        'k6-load-testing/test-config.md'
+        'k6-load-testing/http-testing.md'
+        'k6-load-testing/browser-testing.md'
+        'k6-load-testing/websocket-testing.md'
+        'k6-load-testing/data-handling.md'
+        'k6-load-testing/thresholds.md'
+        'k6-load-testing/custom-metrics.md'
+        'k6-load-testing/ci-cd.md'
+        'k6-load-testing/results.md'
+        'k6-load-testing/examples.md'
+        'resilience/http-resilience.md'
+        'resilience/non-http-pipelines.md'
+        'resilience/hedging.md'
+        'resilience/telemetry.md'
+        'resilience/rate-limiting.md'
+        'resilience/anti-patterns.md'
+        'testing/integration-tests.md'
+        'testing/xunit-basics.md'
+        'testing/snapshot-testing.md'
+        'testing/test-data-builders.md'
+        'testing/time-testing.md'
+        'testing/anti-patterns.md'
+        'opentelemetry/setup.md'
+        'opentelemetry/custom-metrics.md'
+        'opentelemetry/tracing.md'
+        'opentelemetry/logging.md'
+        'opentelemetry/anti-patterns.md'
+        'modern-csharp/field-keyword.md'
+        'modern-csharp/extension-members.md'
+        'modern-csharp/anti-patterns.md'
+    )
+    $claudeSkillsRoot = Join-Path $repo '.claude/skills'
+    $missingReferenceCompanions = @(
+        foreach ($rel in $referenceCompanions) {
+            if (-not (Test-Path -LiteralPath (Join-Path $claudeSkillsRoot $rel))) { "claude:$rel" }
+            if (-not (Test-Path -LiteralPath (Join-Path $codexSkillsPath $rel))) { "codex:$rel" }
+        }
+    )
+    Assert-That 'installed Claude and Codex trees include all 31 named reference-skill companions' `
+        (($referenceCompanions.Count -eq 31) -and ($missingReferenceCompanions.Count -eq 0)) `
+        ($(if ($referenceCompanions.Count -ne 31) { "inventory count $($referenceCompanions.Count) (expected 31)" } else { $missingReferenceCompanions -join ', ' }))
+
     $claudeSmellText = if (Test-Path -LiteralPath $claudeSmellBaseline) { Get-Content -LiteralPath $claudeSmellBaseline -Raw } else { '' }
     $codexSmellText = if (Test-Path -LiteralPath $codexSmellBaseline) { Get-Content -LiteralPath $codexSmellBaseline -Raw } else { '' }
     $claudeRiskText = if (Test-Path -LiteralPath $claudeRiskBrief) { Get-Content -LiteralPath $claudeRiskBrief -Raw } else { '' }
