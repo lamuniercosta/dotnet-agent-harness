@@ -77,14 +77,16 @@ A Security or Coverage consumer verifies `repository`, `head_sha`, `fixed_point`
 
 **Allowed roots**: `<temp>/pr-review` and `<temp>/scratch` only. Both use the platform temporary directory, not a relative path. Working-tree roots are forbidden — no gitignore fallback. The path carries a repo-unique segment (for example a hash of the repo root's absolute path) **and this skill's own segment**, e.g. `<temp>/pr-review/<repo-hash>/ship-review/pre-pass-<full-40-char-sha>.md` (same shape under `<temp>/scratch/`), so two repos sharing a temp directory cannot collide and the nested `/code-review` pre-pass of the same repo can never write the same file. Filename: `pre-pass-<full-40-char-sha>.md`. Short SHAs are forbidden.
 
-**Safe write**: reject symlink/reparse points on the target path before writing. Write to a temp file and rename onto the final path; never write the final path directly. If the target already exists with a different `fixed_point` or `head_sha`, abort rather than overwrite. On any abort: stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**.
+**Safe write**: if the target path is a symlink or reparse point, abort. Write to a temp file and rename onto the final path; never write the final path directly. If the target already exists with a different `fixed_point` or `head_sha`, abort rather than overwrite. On any abort: stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**.
 
 **Write-time freshness**: immediately before writing, re-resolve `git rev-parse HEAD`. If it differs from the HEAD captured when the rebase delta and `/verify` evidence were computed, abort (fail closed): stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**.
+
+**Read-only during fan-out**: `code-reviewer` and `security-reviewer` have no dedicated Edit or Write tools; Bash is available but not a sanctioned write path. Integrity during fan-out relies on that profile constraint, not filesystem permissions.
 
 The ship-review artifact is **not** an input to nested `/code-review`. If
 non-empty, `/code-review` receives the **explicit diff range** and computes its
 own pre-pass (Steps 1–3a) over that range, writing an independent artifact
-(different root, different fixed point, different evidence). If empty,
+under its own `code-review/` subdirectory (not the `ship-review/` path). If empty,
 `/code-review` is not invoked; Security and Coverage still consume the
 ship-review artifact.
 
