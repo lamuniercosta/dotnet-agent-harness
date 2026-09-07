@@ -47,10 +47,11 @@ verify every field below before trusting the contents:
 | `diff_range` | The three-dot range (`<fixed>...HEAD`) | Explicit scope binding |
 | `written_at` | UTC ISO-8601 timestamp | Audit trail; not used for verification |
 
-The consumer verifies `head_sha`, `fixed_point`, and `repository` against its
-own environment. If any mismatch or the file is missing, the sub-agent **fails
-closed** — no fallback to inline relay, no partial read. Inability to verify
-(no shell access, wrong cwd, file unreadable) is also fail-closed.
+The consumer verifies `head_sha`, `fixed_point`, `diff_range`, and
+`repository` against its own environment. If any mismatch or the file is
+missing, the sub-agent **fails closed** — no fallback to inline relay, no
+partial read. Inability to verify (no shell access, wrong cwd, file unreadable)
+is also fail-closed.
 
 The file body contains, in order:
 
@@ -85,8 +86,15 @@ as input evidence — a planted file silently corrupts the review. No gitignore
 fallback.
 
 **Repo-scoped path**: the path includes a repo-unique segment (e.g. a hash of
-the repo root's absolute path) so two repos sharing a user's temp directory
-never collide.
+the repo root's absolute path) **and a skill-unique subdirectory** so two
+repos sharing a user's temp directory never collide and `/code-review` and
+`/ship-review` never write the same file. Under either allowed root the
+shape is
+`<temp>/pr-review/<repo-hash>/code-review/pre-pass-<full-40-char-sha>.md`
+versus
+`<temp>/pr-review/<repo-hash>/ship-review/pre-pass-<full-40-char-sha>.md`
+(same skill segments under `<temp>/scratch/`). Shared allowed roots do not
+make the two artifacts the same path.
 
 **Filename**: `pre-pass-<full-40-char-sha>.md` — matching the findings
 artifact's full-SHA policy. Short SHAs are forbidden (collision risk across
@@ -104,11 +112,12 @@ repos).
 (fail closed) — the evidence was computed against a HEAD that no longer
 exists. This closes the race between evidence computation and artifact write.
 
-**Read-only enforcement**: the code-reviewer and security-reviewer profiles are
-read-only (no Edit/Write tools). The artifact's integrity during fan-out
-relies on this profile-level constraint, not filesystem permissions. The skill
-text does not impose filesystem-level read-only because that is outside the
-instruction surface.
+**Read-only enforcement**: the code-reviewer and security-reviewer profiles
+have no dedicated Edit or Write tools; Bash may exist but is not a sanctioned
+write path. The artifact's integrity during fan-out relies on this
+profile-level constraint, not filesystem permissions. The skill text does not
+impose filesystem-level read-only because that is outside the instruction
+surface.
 
 **Lifecycle/retention**: the artifact is session-scoped. No mandatory cleanup
 is imposed (matching the findings-artifact precedent). The parent may delete
@@ -125,7 +134,12 @@ with the **explicit diff range** per
 ship-review artifact is **not** an input to that nested `/code-review`
 invocation. `/code-review` computes its own pre-pass (Steps 1–3a) internally
 over the rebase delta and writes its own artifact. The two artifacts are
-independent — different roots, different fixed points, different evidence. The
+independent: each skill writes under its own path segment (`code-review/` vs
+`ship-review/` beneath the repo-scoped root, e.g.
+`<temp>/pr-review/<repo-hash>/code-review/pre-pass-<sha>.md` vs
+`<temp>/pr-review/<repo-hash>/ship-review/pre-pass-<sha>.md`), so they cannot
+collide even when both run at the same HEAD, and they have different fixed
+points and different evidence. The
 ship-review artifact serves only the Security and Coverage lanes.
 
 When the rebase delta is **empty**, the ship-review artifact still contains
@@ -167,9 +181,10 @@ file instead of receiving a parent-relayed copy of the computed evidence.
 Smell baseline, standards-source list, and spec path remain inline because
 they are not computed pre-pass evidence.
 
-Stale or planted input is fail-closed: consumers verify repository, HEAD, and
-fixed point; writers re-resolve HEAD immediately before the atomic write;
-working-tree roots are forbidden; filenames use a repo-scoped full SHA.
+Stale or planted input is fail-closed: consumers verify repository, HEAD,
+fixed point, and `diff_range`; writers re-resolve HEAD immediately before the
+atomic write; working-tree roots are forbidden; filenames use a repo-scoped
+full SHA under a skill-unique subdirectory.
 
 `/ship-review` keeps ADR 0014's explicit rebase-delta range for nested
 `/code-review`. A non-empty delta produces two independent artifacts. An empty

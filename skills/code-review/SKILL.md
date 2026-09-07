@@ -85,13 +85,13 @@ After Steps 1–3 complete, write one Markdown scratch file that the Step 6 axes
 
 Keep these **out** of the artifact (they stay inline at Step 6): smell baseline, standards-source list from Step 5, spec path from Step 4.
 
-**Allowed roots**: `<temp>/pr-review` and `<temp>/scratch` only. Both use the platform temporary directory, not a relative path. Working-tree roots are forbidden — no gitignore fallback. Include a repo-unique path segment (for example a hash of the repo root's absolute path) so two repos sharing a temp directory cannot collide. Filename: `pre-pass-<full-40-char-sha>.md`. Short SHAs are forbidden.
+**Allowed roots**: `<temp>/pr-review` and `<temp>/scratch` only. Both use the platform temporary directory, not a relative path. Working-tree roots are forbidden — no gitignore fallback. The path carries a repo-unique segment (for example a hash of the repo root's absolute path) **and this skill's own segment**, e.g. `<temp>/pr-review/<repo-hash>/code-review/pre-pass-<full-40-char-sha>.md` (same shape under `<temp>/scratch/`), so two repos sharing a temp directory cannot collide and the ship-review pre-pass of the same repo can never write the same file. Filename: `pre-pass-<full-40-char-sha>.md`. Short SHAs are forbidden.
 
-**Safe write**: reject symlink/reparse points on the target path before writing. Write to a temp file and rename onto the final path; never write the final path directly. If the target already exists with a different `fixed_point` or `head_sha`, abort rather than overwrite.
+**Safe write**: reject symlink/reparse points on the target path before writing. Write to a temp file and rename onto the final path; never write the final path directly. If the target already exists with a different `fixed_point` or `head_sha`, abort rather than overwrite. On any abort: stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**.
 
-**Write-time freshness**: immediately before writing, re-resolve `git rev-parse HEAD`. If it differs from the HEAD captured in Step 1, abort (fail closed).
+**Write-time freshness**: immediately before writing, re-resolve `git rev-parse HEAD`. If it differs from the HEAD captured in Step 1, abort (fail closed): stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**.
 
-**Read-only during fan-out**: `code-reviewer` and `security-reviewer` have no Edit/Write tools. Integrity during fan-out relies on that profile constraint, not filesystem permissions.
+**Read-only during fan-out**: `code-reviewer` and `security-reviewer` have no dedicated Edit or Write tools; Bash is available but not a sanctioned write path. Integrity during fan-out relies on that profile constraint, not filesystem permissions.
 
 **Lifecycle**: session-scoped. No mandatory cleanup. The parent may delete the file after Step 7. The file holds branch names, commit messages, and pre-pass results for unmerged work — same information scope as the findings artifact.
 
