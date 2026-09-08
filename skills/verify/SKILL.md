@@ -87,6 +87,11 @@ dotnet format --verify-no-changes --verbosity quiet     # Phase 8
 dotnet stryker                                          # Phase 9 (pre-PR)
 ```
 
+Phases 2–3 run `dotnet build --no-incremental` internally — the flag forces
+recompilation so analyzer diagnostics are emitted. Do not substitute a
+standalone `dotnet build` for these phases; the gate scripts are the
+authoritative invocation.
+
 When output would otherwise flood the conversation, use the named
 **`gate-runner`** profile if the host loads it; otherwise give its bounded brief
 to a general subagent. If neither is available, run inline and still summarize
@@ -97,15 +102,31 @@ If `scripts/` is absent, the repo has not had the gates installed — run `./ins
 Phase 7 also reviews changed files for hardcoded secrets/connection strings, raw SQL without parameterization, missing authorization, and permissive CORS. Phase 10 reviews `git diff` for stray `bin/`/`obj/`/secrets, debug leftovers (`Console.WriteLine`, `#if DEBUG`), unresolved TODO/HACK/FIXME, and scope mismatch.
 
 ### Fix-and-retry loop
-1. **Identify** the failing phase and error.
+1. **Identify** the failing phase and its `file:line` errors.
 2. **Fix** minimally.
 3. **Re-run** from Phase 1 if code changed, else from the failed phase.
-4. **Repeat** until all pass or an issue needs user input.
+   Use the `gate-runner` profile or a subagent for each re-run — do not
+   paste raw gate output into the conversation. Summarize each retry as
+   one line: phase name, exit code, error count.
+4. **Classify** every exit: 0 = PASS, 1 = FAIL, 2 = SKIPPED (verified
+   nothing — never PASS). Resolve a SKIPPED phase by its type:
+   - Phases 2–4 (static-analysis gates): re-run with `-All` to check the
+     whole solution, or confirm no `.cs` files are in scope.
+   - Phase 6 (property tests): add FsCheck properties, remove Skip
+     attributes, or set `gates.propertyTests.enabled: false` to opt out.
+   - Phase 7 (vulnerable packages): set `gates.vulnerablePackages.fail:
+     true` to enable, or acknowledge the opt-out is deliberate.
+   Do not offer `-All` to phases 6/7 — they reject it (exit 1, bad
+   invocation per SKILL.md scope rules). A phase that could not run
+   (missing scripts/tools) is **Could not run**, not SKIPPED or PASS.
+5. **Repeat** until all phases pass or are deliberately opted out, or an
+   issue needs user input. Best practice: cap fix-and-rerun attempts at
+   3 per phase — if still failing, stop and report.
 
 ## Final summary
 
 ```
-## Verification Results
+## Verification Results (all pass)
 | Phase | Result | Details |
 |-------|--------|---------|
 | 1. Build          | PASS | 0 errors, 0 warnings |
@@ -116,13 +137,35 @@ Phase 7 also reviews changed files for hardcoded secrets/connection strings, raw
 | 6. Property tests | PASS | 12 properties, 0 counterexamples |
 | 7. Security       | PASS | no vulnerable packages |
 | 8. Format         | PASS | clean |
-| 9. Mutation       | SKIP | run pre-PR |
+| 9. Mutation       | SKIP | not run pre-PR |
 | 10. Diff          | WARN | 1 TODO marker |
 
 Verdict: READY FOR REVIEW (1 non-blocking warning)
+
+## Verification Results (needs fixes)
+| Phase | Result | Details |
+|-------|--------|---------|
+| 1. Build          | PASS | 0 errors, 0 warnings |
+| 2. Analyzers      | SKIPPED | no .cs files changed — re-run with -All |
+| 3. Complexity     | PASS | max 8 (threshold 15) |
+| 4. InspectCode    | Could not run | jb tool not in manifest |
+| 5. Tests          | PASS | 23 passed |
+| 6. Property tests | SKIPPED | no tests tagged — add or opt out |
+| 7. Security       | PASS | no vulnerable packages |
+| 8. Format         | PASS | clean |
+| 9. Mutation       | SKIP | not run pre-PR |
+| 10. Diff          | PASS | clean |
+
+Verdict: NEEDS FIXES (2 SKIPPED, 1 Could not run — remediation above)
 ```
 
-Verdicts: **READY FOR REVIEW** (all PASS or only non-blocking WARN) or **NEEDS FIXES** (any FAIL, with remediation). For pre-PR runs, include the table in the PR description.
+Verdicts: **READY FOR REVIEW** (all PASS, deliberate SKIP, or non-blocking
+WARN) or **NEEDS FIXES** (any FAIL, SKIPPED, or Could not run — with
+remediation for each).
+
+The deliberate `SKIP` (user scoped out mutation, property tests opted out via harness.yml) does not block the verdict. Gate-returned `SKIPPED` (exit 2, verified nothing) and `Could not run` (missing tool/script) do block it. The visual distinction is explicit in the Result column — `SKIP` vs `SKIPPED` vs `Could not run`.
+
+For pre-PR runs, include the table in the PR description.
 
 Report a gate that could not run as **Could not run** with the reason, never as **Pass**. A gate reporting **Pass** must have actually executed its analyzer.
 
