@@ -93,3 +93,20 @@ the tier on an OpenRouter row became a spend decision as well as an effort one.
 the closed host set, so every row resolves unpinned and the launcher's table is
 the only place the tier-to-model mapping exists. That split is the same open
 schema question tracked in #76, now with a second consumer.
+
+## Addendum, 2026-09-08
+
+The evidence path named under **Accepted cost** no longer exists. Route deviations
+were to be recorded through `Add-RouteDeviation.ps1` and read back to confirm or
+refute the unmeasured saving on the mechanical rows; over the following month the
+log collected two entries and no deviations at all. The trial that owned it
+(DEV-106) concluded that hand-annotated logging does not survive contact with real
+work, and the orchestrator epic it was de-risking is deferred as superseded.
+
+The decision in this ADR stands — nothing found since contradicts it. What changes
+is that the saving stays a prior indefinitely rather than pending measurement, and
+a reader should not go looking for a deviation log to settle it. The row is
+revisited when someone has a reason to, not when the log fills up.
+
+`#76` in **Consequences** is DEV-107, now deferred for the same reason: it was
+gated on whether the .NET orchestrator gets built, and it does not.
