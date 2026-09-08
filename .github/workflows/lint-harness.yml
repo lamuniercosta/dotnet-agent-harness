@@ -196,7 +196,7 @@ jobs:
             printf '%s\n' "$fm" | grep -qE '^globs:' && continue
             printf '%s\n' "$fm" | grep -qE '^paths:' && continue
             stem=$(basename "$f" .mdc)
-            escaped=$(printf '%s' "$stem" | sed 's/[][\.^$*+?(){}|]/\\\&/g')
+            escaped=$(printf '%s' "$stem" | sed 's/[][\.^$*+?(){}|]/\\&/g')
             if ! grep -qiE "(^|[^[:alnum:]_-])${escaped}([^[:alnum:]_-]|$)" skills/*/SKILL.md; then
               echo "::error file=$f::$stem is a skill-load rule with no skills/*/SKILL.md reference"
               fail=1
