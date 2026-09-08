@@ -8,6 +8,7 @@ name: Lint harness
 #   - an agent tier missing, invalid, or rendered into the wrong host model
 #   - the guard hook regressing to a bypassable state
 #   - constitution placeholders shipping unsubstituted
+#   - a skill-load pipeline rule losing its last SKILL.md reference
 
 on:
   push:
@@ -160,6 +161,47 @@ jobs:
             fi
           done
           [ "$fail" -eq 0 ] && echo "All CLAUDE.md imports resolve."
+          exit $fail
+
+      # ---- skill-load pipeline rules remain reachable ---------------------
+      # alwaysApply:false pipeline rules with no globs/paths only load when
+      # a skill names them. Losing the last SKILL.md reference makes the rule
+      # unreachable with no other signal.
+      - name: Skill-load pipeline rules remain reachable
+        run: |
+          fail=0
+          n=0
+          for f in rules/pipeline/*.mdc; do
+            [ -f "$f" ] && n=$((n+1))
+          done
+          if [ "$n" -lt 1 ]; then
+            echo "::error::No rules/pipeline/*.mdc files found"
+            exit 1
+          fi
+          for f in rules/pipeline/*.mdc; do
+            [ -f "$f" ] || continue
+            normalized=$(tr -d '\r' < "$f")
+            fm=$(printf '%s\n' "$normalized" | awk '
+              NR==1 && $0=="---" { next }
+              NR==1 { exit 1 }
+              $0=="---" { closed=1; exit 0 }
+              { print }
+              END { if (!closed) exit 1 }
+            ') || {
+              echo "::error file=$f::malformed frontmatter (missing closing --- fence)"
+              fail=1
+              continue
+            }
+            printf '%s\n' "$fm" | grep -qE '^alwaysApply:[[:space:]]*true' && continue
+            printf '%s\n' "$fm" | grep -qE '^globs:' && continue
+            printf '%s\n' "$fm" | grep -qE '^paths:' && continue
+            stem=$(basename "$f" .mdc)
+            if ! grep -qiE "(^|[^[:alnum:]_-])${stem}([^[:alnum:]_-]|$)" skills/*/SKILL.md; then
+              echo "::error file=$f::$stem is a skill-load rule with no skills/*/SKILL.md reference"
+              fail=1
+            fi
+          done
+          [ "$fail" -eq 0 ] && echo "All skill-load pipeline rules are referenced by a skill."
           exit $fail
 
       # ---- vendored paths: derived from globs: ---------------------------
