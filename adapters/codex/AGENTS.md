@@ -107,13 +107,13 @@ files changed against the base branch. The rest take their own parameters
 `run-property-tests.ps1`: `-Project`, `-Category`) and **error out on `-All`**.
 Every script accepts `-Help`; ask it rather than assuming a flag.
 
-**Exit 0 = pass, 1 = fail, 2 = SKIPPED.**
-A SKIPPED gate verified nothing and is never folded into a green verdict.
+**Exit 0 = pass, 1 = fail, 2 = SKIPPED or OPT-OUT.**
+SKIPPED (empty) is never green; OPT-OUT is `SKIP`.
 
 **A gate that could not run has not passed.** The scripts enforce this themselves:
 if the analyzer they depend on is not wired, they exit 1 with remediation rather
 than reporting a pass they did not earn. Report an unrunnable gate as `Could not
-run`; reserve `Skipped` for exit 2, never fold either into a green verdict, and
+run`; reserve `SKIPPED`/`SKIP` on exit 2, never fold either into a green verdict, and
 never substitute plain `dotnet build`.
 
 ### Running the gates under `codex exec`

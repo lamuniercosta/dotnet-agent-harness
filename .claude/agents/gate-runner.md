@@ -33,7 +33,7 @@ dotnet stryker                                   # minutes-expensive; pre-PR onl
 
 Only the three analyzer gates — roslyn-analyzers, cyclomatic-complexity, jetbrains-inspectcode — take `-BaseRef`/`-Files`/`-All`: no args analyses changed files vs the base branch, `-Files "a.cs","b.cs"` an explicit set, `-All` the whole solution. Property tests scope with `-Project`/`-Category`, and gherkin-mutation with `-Project`/`-SpecsPath` — where `-SpecsPath <dir>` is what aims it at feature files outside the default `specs/`, so a repo whose features live elsewhere needs it or the gate just skips. Vulnerable-packages takes `-Severity`/`-IncludeTransitive` and has no scope flag at all. Never pass `-All` to property tests, gherkin-mutation or vulnerable-packages — PowerShell rejects the unknown parameter and the script exits 1 without scanning anything. That is a launch failure, not a red gate: fix the invocation and re-run rather than reporting a failure.
 
-**Exit 0 = pass, 1 = fail, 2 = SKIPPED.** A SKIPPED gate verified nothing and is never folded into a green verdict.
+**Exit 0 = pass, 1 = fail, 2 = SKIPPED or OPT-OUT.** A scope-empty SKIPPED (verified nothing) is never folded into a green verdict. Report **Opt-out** (not Skipped) when a gate exits 2 and the output contains `SKIPPED - disabled in harness.yml`; that is a configured `SKIP`, not a pass.
 
 InspectCode is a whole-solution pass taking tens of seconds. Mutation takes minutes. Do not run either unless asked or doing a pre-PR sweep.
 
@@ -59,14 +59,17 @@ Rules for the report:
 
 - A gate result is a mechanical translation of command evidence, not an
   independent judgment. Report the command and exit code, then use exactly one
-  outcome: **Pass**, **Failure**, **Skipped**, or **Could not run**.
+  outcome: **Pass**, **Failure**, **Skipped**, **Opt-out**, or **Could not run**.
+- When the outcome is **Opt-out**, keep the `SKIPPED - disabled in harness.yml`
+  token in the compacted report so the parent can classify it. Do not collapse
+  that case to bare `Skipped (exit 2)`.
 - Every failure gets `file:line` and a one-line cause **in your own words**. Read the offending lines to make the cause accurate — do not paste the raw analyzer message and stop there.
 - Group by gate, most actionable first.
 - Never paste raw tool output. Distilling it is the entire reason you exist.
 - Cap at 20 failures; say how many you cut.
 - On success, say so in one line with the counts.
 
-You may translate a command's evidence into those four outcomes. You may not
+You may translate a command's evidence into those five outcomes. You may not
 dismiss a reported finding as a false positive, judge a mutant equivalent, or
 overrule the tool's evidence; those are semantic verdicts and stay with the
 parent or the profile that owns them.
@@ -77,8 +80,10 @@ parent or the profile that owns them.
 
 If a script is missing, an analyzer is not wired, `pwsh` is unavailable, or a
 build error prevents analysis, report **Could not run** with the reason and the
-remediation. Reserve **Skipped** for a command that ran and returned the harness
-exit code 2. Never fold either into a green verdict, and never substitute plain
-`dotnet build` for a gate that did not run.
+remediation. Reserve **Skipped** for a command that ran and returned exit 2
+without `SKIPPED - disabled in harness.yml` (scope-empty). Report **Opt-out**
+when that prefix is present. Never fold `Could not run` or **Skipped** into a
+green verdict, and never substitute plain `dotnet build` for a gate that did
+not run.
 
 The gate scripts enforce this themselves — they exit 1 with remediation rather than reporting an unearned pass. If you see `GATE NOT WIRED`, surface it verbatim; it means the repo needs `./install.ps1`, not that the code is fine.
