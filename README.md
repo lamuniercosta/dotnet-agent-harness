@@ -49,14 +49,17 @@ Three details that carry more weight than they look:
   is what replaces the local half of a hosted static-analysis service.
 - **A gate whose analyzer is not wired fails rather than passing.** The scripts check
   their own preconditions and exit 1 with remediation.
-- **Exit `0` = pass, `1` = fail, `2` = SKIPPED.** A gate with nothing to verify — **no
-  `.cs` file changed against the base branch**, no property tests, no `.feature` files, or
-  InspectCode switched off in config — returns 2, and nothing folds a 2 into a green verdict.
-  "Skipped" and "clean" are different results, and collapsing them is exactly how a
-  quality bar quietly stops existing. On the three analyzer gates, re-run with `-All`
-  when you want verification rather than a diff check. The other gates take their own
-  scope parameters instead of `-All` — gherkin-mutation's `-SpecsPath`, for instance,
-  aims it at acceptance tests outside `specs/`, turning a skip into a run.
+- **Exit `0` = pass, `1` = fail, `2` = SKIPPED or OPT-OUT.** A gate with nothing
+  to verify — **no `.cs` file changed against the base branch**, no property tests,
+  no `.feature` files — returns 2 and is reported as blocking `SKIPPED`. InspectCode
+  switched off in config returns 2 — reported as a non-blocking `SKIP` (configured
+  opt-out), not as a pass. A scope-empty exit 2 remains blocking `SKIPPED`. Nothing
+  folds `SKIPPED` into a green verdict. "Skipped" and "clean" are different results,
+  and collapsing them is exactly how a quality bar quietly stops existing. On the
+  three analyzer gates, re-run with `-All` when you want verification rather than a
+  diff check. The other gates take their own scope parameters instead of `-All` —
+  gherkin-mutation's `-SpecsPath`, for instance, aims it at acceptance tests outside
+  `specs/`, turning a skip into a run.
 
 Every threshold lives in exactly one place: `harness.yml`. The tool configs
 (`CodeMetricsConfig.txt`, `stryker-config.json`, `.editorconfig` severities) and the

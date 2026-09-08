@@ -40,7 +40,7 @@ Phases 2–4 are the **static-analysis gates**. They are not interchangeable —
 
 These three — and only these three — share the `-BaseRef`/`-Files`/`-All` scope arguments: no args analyses changed `.cs` files vs the repo's default branch plus untracked; `-Files "a.cs","b.cs"` for an explicit set; `-All` for the whole solution. Phases 6, 7 and the gherkin-mutation gate scope differently (`-Project`/`-Category`, `-Severity`/`-IncludeTransitive`, `-Project`/`-SpecsPath`) and reject `-All` outright: PowerShell fails the parameter binding and the script exits 1 having scanned nothing. Treat that exit 1 as a bad invocation to fix, never as a failed gate.
 
-Exit 0 = pass, 1 = fail, 2 = SKIPPED (verified nothing — never report it as a pass).
+Exit 0 = pass, 1 = fail, 2 = SKIPPED or OPT-OUT (see classification in step 4).
 
 **A gate that is not wired refuses to run.** If the analyzer it depends on is not actually enabled, it exits 1 with remediation rather than reporting a pass it did not earn. Install the wiring with `./install.ps1 <repo>`. These scripts require PowerShell 7 (`pwsh`).
 
@@ -97,25 +97,30 @@ When output would otherwise flood the conversation, use the named
 to a general subagent. If neither is available, run inline and still summarize
 each failure as `file:line` plus a one-line cause rather than returning raw output.
 
-If `scripts/` is absent, the repo has not had the gates installed — run `./install.ps1 <repo>` from this harness. Do **not** silently fall back to plain `dotnet build` and call phases 2–4 passed; report them as **Could not run** with that remediation. Reserve **Skipped** for a gate command that ran and returned exit 2.
+If `scripts/` is absent, the repo has not had the gates installed — run `./install.ps1 <repo>` from this harness. Do **not** silently fall back to plain `dotnet build` and call phases 2–4 passed; report them as **Could not run** with that remediation. Reserve **Skipped** for a scope-empty exit 2; a configured opt-out (exit 2 with "disabled in harness.yml") is **Skip**, not **Skipped**.
 
 Phase 7 also reviews changed files for hardcoded secrets/connection strings, raw SQL without parameterization, missing authorization, and permissive CORS. Phase 10 reviews `git diff` for stray `bin/`/`obj/`/secrets, debug leftovers (`Console.WriteLine`, `#if DEBUG`), unresolved TODO/HACK/FIXME, and scope mismatch.
 
 ### Fix-and-retry loop
+**Do not edit `harness.yml` during a verify run to clear a gate result.** Disabling a gate mid-verify recasts a real finding as an opt-out, exactly the false-pass acceptance #2 exists to prevent. A gate configuration change is a project decision made before the run, not a fix applied during it. If the opt-out is genuinely warranted, document the reason, commit the `harness.yml` change as a separate commit, and start a fresh verify. The fresh verify's final summary must list all gates currently disabled in `harness.yml`, so the reviewer sees what is opted out and can trace each opt-out to a committed reason.
+
 1. **Identify** the failing phase and its `file:line` errors.
 2. **Fix** minimally.
 3. **Re-run** from Phase 1 if code changed, else from the failed phase.
    Use the `gate-runner` profile or a subagent for each re-run — do not
    paste raw gate output into the conversation. Summarize each retry as
    one line: phase name, exit code, error count.
-4. **Classify** every exit: 0 = PASS, 1 = FAIL, 2 = SKIPPED (verified
-   nothing — never PASS). Resolve a SKIPPED phase by its type:
-   - Phases 2–4 (static-analysis gates): re-run with `-All` to check the
-     whole solution, or confirm no `.cs` files are in scope.
-   - Phase 6 (property tests): add FsCheck properties, remove Skip
-     attributes, or set `gates.propertyTests.enabled: false` to opt out.
-   - Phase 7 (vulnerable packages): set `gates.vulnerablePackages.fail:
-     true` to enable, or acknowledge the opt-out is deliberate.
+4. **Classify** every exit:
+   - 0 = PASS
+   - 1 = FAIL
+   - 2 = check the gate's output:
+     - If the output contains `SKIPPED - disabled in harness.yml` → **OPT-OUT** (non-blocking). Report as `SKIP` in the Result column. The project has deliberately turned this gate off; no retry. Match the full prefix, not just "disabled".
+     - Otherwise → **SKIPPED** (blocking). The gate found nothing in scope to verify. Remediation below.
+   Resolve a SKIPPED phase by its type:
+   - Phases 2–4 (static-analysis gates): first check for OPT-OUT — if the gate output says `SKIPPED - disabled in harness.yml`, report as `SKIP` (non-blocking); no retry. Otherwise (scope-empty): re-run with `-All` to check the whole solution, or confirm no `.cs` files are in scope.
+   - Phase 4 note: a disabled InspectCode means ReSharper inspections and duplication detection are off — note this alongside the `SKIP` verdict.
+   - Phase 6 (property tests): add FsCheck properties or remove Skip attributes. If the project should opt out entirely, that is a `harness.yml` change subject to the mid-verify rule above — separate commit, fresh verify.
+   - Phase 7 (vulnerable packages): verify `gates.vulnerablePackages.fail: true` is set and re-run. If the gate should remain disabled, that is a `harness.yml` opt-out subject to the mid-verify rule above.
    Do not offer `-All` to phases 6/7 — they reject it (exit 1, bad
    invocation per SKILL.md scope rules). A phase that could not run
    (missing scripts/tools) is **Could not run**, not SKIPPED or PASS.
@@ -163,7 +168,7 @@ Verdicts: **READY FOR REVIEW** (all PASS, deliberate SKIP, or non-blocking
 WARN) or **NEEDS FIXES** (any FAIL, SKIPPED, or Could not run — with
 remediation for each).
 
-The deliberate `SKIP` (user scoped out mutation, property tests opted out via harness.yml) does not block the verdict. Gate-returned `SKIPPED` (exit 2, verified nothing) and `Could not run` (missing tool/script) do block it. The visual distinction is explicit in the Result column — `SKIP` vs `SKIPPED` vs `Could not run`.
+**OPT-OUT** (`SKIP` in the Result column) does not block the verdict — the project has deliberately disabled the gate in `harness.yml`. **SKIPPED** (exit 2, scope-empty — the gate found nothing in scope to verify) and **Could not run** (missing tool/script, exit 1) do block it. The visual distinction: `SKIP` vs `SKIPPED` vs `Could not run`.
 
 For pre-PR runs, include the table in the PR description.
 
