@@ -14,4 +14,3 @@ If a correct seam exists:
 4. Watch it pass.
 5. Re-run the Phase 1 feedback loop against the original (un-minimised) scenario.
 6. Optionally run mutation testing scoped to the fix (`dotnet stryker --mutate "**/TheFixedFile.cs"`) to confirm the regression test actually kills mutants in the fixed code — a surviving mutant on the fixed line means the test is tautological.
-
