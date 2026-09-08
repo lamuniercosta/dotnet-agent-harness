@@ -183,26 +183,87 @@ try {
     if (Test-Path -LiteralPath $claudePipelineDir) {
         $claudePipelineFiles = @(Get-ChildItem -LiteralPath $claudePipelineDir -File -Force)
     }
-    Assert-That '.claude/rules/pipeline contains exactly 8 scoped rules' `
-        ($claudePipelineFiles.Count -eq 8) `
-        "found $($claudePipelineFiles.Count) files"
+    $expectedScopedPipelineFiles = @(
+        'architect-gate.mdc'
+        'coding-conventions.mdc'
+        'cyclomatic-complexity.mdc'
+        'github-workflow.mdc'
+        'jetbrains-inspections.mdc'
+        'readme-maintenance.mdc'
+        'refactor-gate.mdc'
+        'roslyn-analyzers.mdc'
+    )
+    $csGlobPipelineFiles = @(
+        'coding-conventions.mdc'
+        'cyclomatic-complexity.mdc'
+        'jetbrains-inspections.mdc'
+        'refactor-gate.mdc'
+        'roslyn-analyzers.mdc'
+    )
+    $skillLoadPipelineFiles = @(
+        'architect-gate.mdc'
+        'github-workflow.mdc'
+        'readme-maintenance.mdc'
+    )
+    $actualScopedPipelineNames = @($claudePipelineFiles | ForEach-Object { $_.Name })
+    $missingPipelineFiles = @($expectedScopedPipelineFiles | Where-Object { $_ -notin $actualScopedPipelineNames })
+    $surplusPipelineFiles = @($actualScopedPipelineNames | Where-Object { $_ -notin $expectedScopedPipelineFiles })
+    $pipelineNameDiff = @()
+    if ($missingPipelineFiles.Count -gt 0) { $pipelineNameDiff += "missing: $($missingPipelineFiles -join ', ')" }
+    if ($surplusPipelineFiles.Count -gt 0) { $pipelineNameDiff += "surplus: $($surplusPipelineFiles -join ', ')" }
+    Assert-That '.claude/rules/pipeline contains the exact 8 scoped rule filenames' `
+        (($missingPipelineFiles.Count -eq 0) -and ($surplusPipelineFiles.Count -eq 0)) `
+        ($pipelineNameDiff -join '; ')
     $allAlwaysApplyFalse = $true
-    $pathsFrontmatterCount = 0
     foreach ($pipelineFile in $claudePipelineFiles) {
         $pipelineRaw = Get-Content -LiteralPath $pipelineFile.FullName -Raw
         if ($pipelineRaw -notmatch '(?m)^alwaysApply:\s*false\s*$') {
             $allAlwaysApplyFalse = $false
         }
-        if ($pipelineRaw -match '(?m)^paths:\s*$') {
-            $pathsFrontmatterCount++
-        }
     }
     Assert-That 'every .claude/rules/pipeline file is alwaysApply: false' `
         (($claudePipelineFiles.Count -eq 8) -and $allAlwaysApplyFalse) `
         'copied files must be the alwaysApply: false pipeline rules'
-    Assert-That 'five .claude/rules/pipeline files carry paths: frontmatter' `
-        ($pathsFrontmatterCount -eq 5) `
-        "found $pathsFrontmatterCount files with paths:"
+    $csGlobMismatch = @()
+    foreach ($name in $csGlobPipelineFiles) {
+        $globPath = Join-Path $claudePipelineDir $name
+        if (-not (Test-Path -LiteralPath $globPath)) {
+            $csGlobMismatch += "${name}: missing"
+            continue
+        }
+        $pipelineRaw = Get-Content -LiteralPath $globPath -Raw
+        $hasQuotedCsGlob = $pipelineRaw -match '(?m)^globs:[ \t]*"\*\*/\*\.cs"[ \t]*$'
+        $hasQuotedCsPaths = $pipelineRaw -match '(?m)^paths:[ \t]*\r?\n[ \t]*-[ \t]*"\*\*/\*\.cs"[ \t]*$'
+        if (-not $hasQuotedCsGlob -or -not $hasQuotedCsPaths) {
+            $reasons = @()
+            if (-not $hasQuotedCsGlob) { $reasons += 'missing globs: "**/*.cs"' }
+            if (-not $hasQuotedCsPaths) { $reasons += 'missing paths: - "**/*.cs"' }
+            $csGlobMismatch += "${name}: $($reasons -join ', ')"
+        }
+    }
+    Assert-That 'five .claude/rules/pipeline glob files carry globs: and paths: "**/*.cs"' `
+        ($csGlobMismatch.Count -eq 0) `
+        ($csGlobMismatch -join '; ')
+    $skillLoadMismatch = @()
+    foreach ($name in $skillLoadPipelineFiles) {
+        $skillPath = Join-Path $claudePipelineDir $name
+        if (-not (Test-Path -LiteralPath $skillPath)) {
+            $skillLoadMismatch += "${name}: missing"
+            continue
+        }
+        $pipelineRaw = Get-Content -LiteralPath $skillPath -Raw
+        $hasGlobsKey = $pipelineRaw -match '(?m)^globs:'
+        $hasPathsKey = $pipelineRaw -match '(?m)^paths:'
+        if ($hasGlobsKey -or $hasPathsKey) {
+            $unexpected = @()
+            if ($hasGlobsKey) { $unexpected += 'globs:' }
+            if ($hasPathsKey) { $unexpected += 'paths:' }
+            $skillLoadMismatch += "${name}: unexpected $($unexpected -join ', ')"
+        }
+    }
+    Assert-That 'three .claude/rules/pipeline skill-load files have neither globs: nor paths:' `
+        ($skillLoadMismatch.Count -eq 0) `
+        ($skillLoadMismatch -join '; ')
 
     Assert-That 'absent CLAUDE.md is created with every import' `
         (@([regex]::Matches($claude, '(?m)^@\.cursor/rules/')).Count -eq $expectedImports)
