@@ -79,15 +79,15 @@ to the first option you still have allowance for. **If that lands below the
 floor, the work waits**; running below it means knowingly accepting reduced
 quality, which is the one thing the map exists to make visible.
 
-Record what you actually ran, especially when it differed:
+The deviation log is retired. `Add-RouteDeviation.ps1` and its `route-log.jsonl`
+remain on disk but are no longer part of the routine. The trial they served
+concluded on 2026-09-08 (DEV-106), and its finding was that hand-annotated
+logging does not survive contact with real work: two entries and no deviations in
+a month. Routing corrections land in ADRs and in this file instead — ADR 0010 and
+the per-tier model split below are both examples. Any future spend tracking has to
+be cheaper to write than to skip, which is the constraint DEV-63 inherits.
 
-```powershell
-pwsh ./scripts/local/Add-RouteDeviation.ps1 -Command /implement -Ran junie:deep -Note 'Claude weekly limit hit'
-```
-
-Those deviations are the point, not an admission of failure — they are the
-evidence for whether the authored judgments in `route-map.json` hold up. See
-`docs/adr/0008-route-map-records-work-demands.md` for why the map records what
+See `docs/adr/0008-route-map-records-work-demands.md` for why the map records what
 work demands rather than what models provide,
 `docs/adr/0010-cheap-metered-lane-precedes-the-flat-rate-floor.md` for the one
 row that spends metered capacity ahead of flat-rate, and
