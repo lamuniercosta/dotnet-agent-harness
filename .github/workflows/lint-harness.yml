@@ -9,6 +9,7 @@ name: Lint harness
 #   - the guard hook regressing to a bypassable state
 #   - constitution placeholders shipping unsubstituted
 #   - a skill-load pipeline rule losing its last SKILL.md reference
+#   - a skill index Read target resolving to a missing companion file
 
 on:
   push:
@@ -58,6 +59,38 @@ jobs:
             [ "$dir" = "$declared" ] || { echo "::error file=$f::name '$declared' != directory '$dir'"; fail=1; }
           done
           [ "$fail" -eq 0 ] && echo "All $(ls -d skills/*/ | wc -l) skills valid."
+          exit $fail
+
+      # ---- skill index Read targets resolve --------------------------------
+      # An index (SKILL.md) that says "Read ./X.md in this skill's directory"
+      # must have X.md as a sibling. A missing companion ships silently via
+      # install.ps1 Copy-Tree and the agent improvises or stalls at the Read.
+      - name: Skill index Read targets resolve
+        run: |
+          fail=0
+          for f in skills/*/SKILL.md; do
+            dir=$(dirname "$f")
+            targets=$(grep -oE 'Read \./[a-z0-9][a-z0-9_-]*\.md' "$f" \
+                      | sed 's/Read \.\///' | sort -u) || true
+            [ -z "$targets" ] && continue
+            # Forward: every Read target must exist as a sibling file
+            for t in $targets; do
+              if [ ! -f "$dir/$t" ]; then
+                echo "::error file=$f::Read target missing: $dir/$t"
+                fail=1
+              fi
+            done
+            # Reverse: every .md sibling (except SKILL.md) must be a Read target
+            for md in "$dir"/*.md; do
+              [ "$(basename "$md")" = "SKILL.md" ] && continue
+              base=$(basename "$md")
+              echo "$targets" | grep -qxF "$base" || {
+                echo "::error file=$md::companion not referenced by $f"
+                fail=1
+              }
+            done
+          done
+          [ "$fail" -eq 0 ] && echo "All skill index Read targets resolve."
           exit $fail
 
       # ---- code-review Step 8 findings-artifact sink --------------------
