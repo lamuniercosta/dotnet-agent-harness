@@ -36,7 +36,7 @@ Acceptance tests (Gherkin + Reqnroll) are **opt-in**. Skip Stage 4, Human gate 2
 - After `/implement`, run the refactor gates before marking a feature complete
 - A surviving mutant is a missing test. Route it back to `/implement` — **never lower the threshold to go green**
 - Rebase onto the latest default branch before `/ship-review`
-- **A gate that could not run has not passed.** Report `Could not run` with remediation; exit 2: empty=`SKIPPED` / opt-out=`SKIP`; never fold SKIPPED into green
+- **A gate that could not run has not passed.** Report `Could not run` with remediation. Exit 2: SKIPPED (scope-empty, blocking) vs SKIP (configured opt-out in harness.yml, non-blocking); never fold SKIPPED or Could not run into a green verdict
 
 ## Failure Routing
 

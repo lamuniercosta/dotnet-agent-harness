@@ -30,7 +30,7 @@ inline.** There is no numeric threshold for this judgment.
   not make that verdict. It cannot decide whether a finding is real, a mutant is
   equivalent, a design is sound, or tool evidence should be overruled.
 - `gate-runner` has one narrow mechanical exception: it may translate a reported
-  command and exit code into `Pass`, `Failure`, `Skipped`, or `Could not run`.
+  command and exit code into `Pass`, `Failure`, `Skipped`, `Opt-out`, or `Could not run`.
 - Cheap errands do not feed human gates or a **grilling session in progress**.
   This follows from the four conditions rather than overriding them: a fact put
   to a live interrogation is material the parent reasons over to form its next
