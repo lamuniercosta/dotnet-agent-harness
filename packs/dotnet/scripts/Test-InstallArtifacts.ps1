@@ -410,10 +410,10 @@ try {
         Assert-That 'AGENTS.md uses unqualified Critical/High readiness wording' `
             (($agents -match '(?is)A Critical or High finding') -and
              ($agents -notmatch '(?is)A confirmed Critical or High finding'))
-        Assert-That 'rendered AGENTS.md numbers /address-pr-review as list ordinal 9' `
-            (($agents -match '(?m)^9\..+/address-pr-review') -and
-             ($agents -notmatch '(?m)^11\..+/address-pr-review')) `
-            'workflow list is sequential 1..10; /address-pr-review is ordinal 9 (conditional stage 11) and must not remain numbered 11 in the Codex adapter copy'
+        Assert-That 'rendered AGENTS.md numbers /address-pr-review as list ordinal 11' `
+            (($agents -match '(?m)^11\..+/address-pr-review') -and
+             ($agents -notmatch '(?m)^9\..+/address-pr-review')) `
+            'workflow list is sequential 0..12; /address-pr-review is ordinal 11 (conditional) and must not remain numbered 9 in the Codex adapter copy'
     }
 
     $renderedClaude = Get-Content -LiteralPath (Join-Path $repo 'CLAUDE.md') -Raw
