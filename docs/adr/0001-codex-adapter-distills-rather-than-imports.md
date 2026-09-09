@@ -8,7 +8,7 @@ adapter still distils, but only the three always-on rules; the remaining eight
 load through skill invocation. The project-local configuration decisions remain
 current.
 
-Codex reads `AGENTS.md` from the repo root but has no `@import`, so the ten
+Codex reads `AGENTS.md` from the repo root but has no `@import`, so the three
 always-on rules cannot be referenced the way `CLAUDE.md` references
 `.cursor/rules/*.mdc`. `adapters/codex/AGENTS.md` therefore restates them in
 full. This knowingly creates a second hand-maintained copy of rules that live

@@ -60,14 +60,20 @@ has one mechanical exception: it may translate a reported command and exit code
 into `Pass`, `Failure`, `Skipped`, or `Could not run`; it may not dismiss
 findings, judge equivalent mutants, or overrule tool evidence.
 
+- **No unspecified writes.** If any part of an edit still needs deciding, keep it
+  with the parent.
+
 Delegate a writable errand to `edit-applier` only when the brief gives one exact
 transformation, an explicit file set, and an objective check. Those files belong
 exclusively to the errand until it returns. Do not edit them concurrently, and
 parallel writable errands must have disjoint file sets. Review the diff afterward.
+If partial edits already exist, review the current diff and continue from it; do
+not roll back automatically.
 
-If an errand is ambiguous, partial, or untrustworthy, finish it inline and do not
-re-brief the cheap agent. If partial edits already exist, review the current diff
-and continue from it; do not roll back automatically.
+### One strike
+
+If an errand returns ambiguity, a partial answer, or a result you cannot trust,
+finish it inline and do not re-brief the cheap agent.
 
 ## Documentation sources
 
@@ -170,17 +176,20 @@ The harness pipeline runs in fixed order. In Codex, use the matching harness ski
 available (`$name`, or implicit activation from a matching request); otherwise carry out
 the phase directly — see [Limitations](#limitations-under-codex).
 
-1. **Task intake** — read the issue, create the branch
-2. **Grill** — settle vocabulary and assumptions in `CONTEXT.md` + ADRs before any
+0. **Task intake** — read the issue, create the branch
+1. **Alignment (MANDATORY)** (`/grill-with-docs`) — settle vocabulary and assumptions in `CONTEXT.md` + ADRs before any
    spec. Non-negotiable; a spec written before the grill encodes the wrong nouns
-3. **Spec → plan → tasks** — *human gate 1*
-4. **Implement** — TDD; tests must pass
-5. **Refactor** — `/refactor`
-6. **Architect** — `/architect`
-7. **Code review** *(gated, stage 9)* — `/code-review`; above-bar findings → `/remediate` → re-review
-8. **Ship** — rebase → `/ship-review` → open the PR
-9. **Address PR review** *(conditional, stage 11)* — `/address-pr-review` when external feedback arrives
-10. **Merge** — *human gate 3*
+2. **Formal spec** — `/speckit-specify` through `/speckit-analyze`
+3. **Human gate 1** — approve spec, plan, tasks
+4. **Gherkin** *(OPTIONAL — opt-in)* — `/gherkin` → `acceptance/*.feature`
+5. **Human gate 2** *(only if Gherkin ran)* — spot-check Gherkin before implementation
+6. **Implement** — TDD optional; unit + integration tests must pass
+7. **Refactor** — `/refactor`
+8. **Architect** — `/architect`
+9. **Code review** *(gated)* — `/code-review`; above-bar findings → `/remediate` → re-review
+10. **Ship** — rebase → `/ship-review` → open the PR
+11. **Address PR review** *(conditional)* — `/address-pr-review` when external feedback arrives
+12. **Merge** — *human gate 3*
 
 Never skip the grill, and never route a failing gate to lowering its threshold.
 
