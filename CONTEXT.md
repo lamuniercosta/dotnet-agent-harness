@@ -13,8 +13,12 @@ A gate found a blocking issue or could not establish a trustworthy verdict.
 _Avoid_: Error as the general verdict
 
 **Skipped**:
-A gate intentionally performed no verification because it was disabled or its requested scope matched no inputs.
-_Avoid_: Pass, clean
+A gate found nothing in scope to verify (scope-empty exit 2). Blocking — never green.
+_Avoid_: Pass, clean, opt-out
+
+**Opt-out**:
+A gate was deliberately disabled in harness.yml (configured opt-out exit 2). Non-blocking — reported as SKIP, not PASS.
+_Avoid_: Skipped, pass
 
 **Could not run**:
 A gate attempted verification but could not produce the evidence required for a trustworthy verdict.

@@ -73,12 +73,12 @@ rest take their own scope instead: `run-property-tests.ps1 -Project -Category`,
 -IncludeTransitive`. Passing `-All` to one of those exits 1 on a parameter-binding
 error — a failure to launch, not a failed scan; do not report it as a red gate.
 
-**Exit 0 = pass, 1 = fail, 2 = SKIPPED or OPT-OUT.** SKIPPED (empty) is never green; OPT-OUT is `SKIP`.
+**Exit 0 = pass, 1 = fail, 2 = SKIPPED or OPT-OUT.** SKIPPED (scope-empty) is blocking and never green; OPT-OUT (gate disabled in harness.yml) is non-blocking `SKIP`, reported as `SKIP` not PASS.
 
 **A gate that could not run has not passed.** The scripts enforce this themselves:
 if the analyzer they depend on is not wired, they exit 1 with remediation rather
 than reporting a pass they did not earn. Report an unrunnable gate as `Could not
-run`; reserve `SKIPPED`/`SKIP` on exit 2, never fold either into a green verdict, and
+run`; reserve `SKIPPED`/`SKIP` on exit 2 — `SKIPPED` is blocking and never green; `SKIP` is a non-blocking opt-out. Never fold `SKIPPED`, `SKIP`, or `Could not run` into a green verdict, and
 never substitute plain `dotnet build`.
 
 ## Agents

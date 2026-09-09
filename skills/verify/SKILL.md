@@ -97,7 +97,7 @@ When output would otherwise flood the conversation, use the named
 to a general subagent. If neither is available, run inline and still summarize
 each failure as `file:line` plus a one-line cause rather than returning raw output.
 
-If `scripts/` is absent, the repo has not had the gates installed — run `./install.ps1 <repo>` from this harness. Do **not** silently fall back to plain `dotnet build` and call phases 2–4 passed; report them as **Could not run** with that remediation. Reserve **Skipped** for a scope-empty exit 2; a configured opt-out (exit 2 with "disabled in harness.yml") is **Skip**, not **Skipped**.
+If `scripts/` is absent, the repo has not had the gates installed — run `./install.ps1 <repo>` from this harness. Do **not** silently fall back to plain `dotnet build` and call phases 2–4 passed; report them as **Could not run** with that remediation. Reserve **Skipped** for a scope-empty exit 2; a configured opt-out (exit 2 whose output contains SKIPPED - disabled in harness.yml) is **Skip**, not **Skipped**.
 
 Phase 7 also reviews changed files for hardcoded secrets/connection strings, raw SQL without parameterization, missing authorization, and permissive CORS. Phase 10 reviews `git diff` for stray `bin/`/`obj/`/secrets, debug leftovers (`Console.WriteLine`, `#if DEBUG`), unresolved TODO/HACK/FIXME, and scope mismatch.
 

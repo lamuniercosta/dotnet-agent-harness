@@ -57,7 +57,7 @@ to replay. That pass includes reading deferred format files (`CONTEXT-FORMAT.md`
 `ADR-FORMAT.md`); those are facts, not decisions. A mid-grill lull is not a new
 pre-grill pass. `gate-runner`
 has one mechanical exception: it may translate a reported command and exit code
-into `Pass`, `Failure`, `Skipped`, or `Could not run`; it may not dismiss
+into `Pass`, `Failure`, `Skipped`, `Opt-out`, or `Could not run`; it may not dismiss
 findings, judge equivalent mutants, or overrule tool evidence.
 
 - **No unspecified writes.** If any part of an edit still needs deciding, keep it
@@ -114,12 +114,12 @@ files changed against the base branch. The rest take their own parameters
 Every script accepts `-Help`; ask it rather than assuming a flag.
 
 **Exit 0 = pass, 1 = fail, 2 = SKIPPED or OPT-OUT.**
-SKIPPED (empty) is never green; OPT-OUT is `SKIP`.
+SKIPPED (scope-empty) is blocking and never green; OPT-OUT (gate disabled in harness.yml) is non-blocking `SKIP`, reported as `SKIP` not PASS.
 
 **A gate that could not run has not passed.** The scripts enforce this themselves:
 if the analyzer they depend on is not wired, they exit 1 with remediation rather
 than reporting a pass they did not earn. Report an unrunnable gate as `Could not
-run`; reserve `SKIPPED`/`SKIP` on exit 2, never fold either into a green verdict, and
+run`; reserve `SKIPPED`/`SKIP` on exit 2 — `SKIPPED` is blocking and never green; `SKIP` is a non-blocking opt-out. Never fold `SKIPPED`, `SKIP`, or `Could not run` into a green verdict, and
 never substitute plain `dotnet build`.
 
 ### Running the gates under `codex exec`

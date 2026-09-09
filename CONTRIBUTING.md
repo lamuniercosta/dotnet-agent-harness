@@ -23,10 +23,12 @@ fixtures/BadCode/     one deliberate violation per gate — the proof
 ### The three rules that shape everything
 
 **1. A gate that could not run has not passed.**
-Exit `0` = pass, `1` = fail, `2` = **SKIPPED**. Every gate checks its own
+Exit `0` = pass, `1` = fail, `2` = **SKIPPED** or **OPT-OUT**. SKIPPED
+(scope-empty) is blocking and never green; OPT-OUT (gate disabled in
+harness.yml) is non-blocking SKIP. Every gate checks its own
 preconditions and exits 1 with remediation rather than reporting an unearned
-pass. Nothing folds a 2 into a green verdict. If you add a gate, it must be able
-to say "I verified nothing."
+pass. Never fold SKIPPED, SKIP, or Could not run into a green verdict. If you
+add a gate, it must be able to say "I verified nothing."
 
 **2. A threshold lives in exactly one place.**
 `harness.yml`. `install.ps1` renders it into `CodeMetricsConfig.txt`,
