@@ -71,6 +71,10 @@ Resolve any conflicts (`git rebase --continue` / `--abort`), then re-run. The sc
 
 Never open or push a PR automatically — that is a human decision at gate 3.
 
+## Context-floor baseline
+
+If this repository maintains a context-floor baseline, running the ratchet regenerates the whole baseline (all hosts), so host counts unrelated to the edited files may shift from corrected staleness. When the commit includes a baseline refresh, the PR body must state which hosts moved, which were expected, and why any unrelated host also moved. If this repository has a porcelain guard for the baseline file, run it before committing to catch accidental modifications.
+
 ## What is deliberately not here
 
 No hosted code-review service, no issue-tracker integration beyond `gh`, and no metered PR bot. The review that gates a PR is `/ship-review`, which runs this harness's own agents locally. CodeQL is the only CI-side analysis, and it is free for public repositories and optional everywhere else.
