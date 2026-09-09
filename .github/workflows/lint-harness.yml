@@ -401,6 +401,10 @@ jobs:
         shell: pwsh
         run: ./scripts/local/Report-ContextFloor.ps1 -Baseline
 
+      - name: Baseline guard and self-tests
+        shell: pwsh
+        run: ./scripts/local/Test-BaselineGuard.ps1
+
   secrets:
     name: gitleaks
     runs-on: ubuntu-latest
