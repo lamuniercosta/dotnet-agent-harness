@@ -181,7 +181,7 @@ the phase directly — see [Limitations](#limitations-under-codex).
    spec. Non-negotiable; a spec written before the grill encodes the wrong nouns
 2. **Formal spec** — `/speckit-specify` through `/speckit-analyze`
 3. **Human gate 1** — approve spec, plan, tasks
-4. **Gherkin** *(OPTIONAL — opt-in)* — `/gherkin` → `acceptance/*.feature`
+4. **Gherkin** *(OPTIONAL — opt-in)* — `/gherkin` → `acceptance/*.feature`. Skip Gherkin and Human gate 2 unless the user asks for them or `specs/<feature>/acceptance/*.feature` already exists; unit and integration tests remain required regardless
 5. **Human gate 2** *(only if Gherkin ran)* — spot-check Gherkin before implementation
 6. **Implement** — TDD optional; unit + integration tests must pass
 7. **Refactor** — `/refactor`
