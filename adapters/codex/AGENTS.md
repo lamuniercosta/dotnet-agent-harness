@@ -193,7 +193,13 @@ the phase directly — see [Limitations](#limitations-under-codex).
 
 Never skip the grill, and never route a failing gate to lowering its threshold.
 
-`/code-review` and `/ship-review` have no numeric gate, unlike Implement/Refactor/Architect — they must be given a stop condition explicitly, in `brief.md`, before Stage 6 (Implement): a closing bar (which severities block), a frozen scope ("anything else is a follow-up issue, not a finding in this round."), and a round cap of two rounds (initial pass + one fix-and-re-run). The closing bar and frozen scope decide which findings get a fix commit on the open loop; below-bar or out-of-scope items become follow-up issues, never a fix commit on this loop. Past the cap, unresolved findings become follow-up issues instead of more fix commits. A Critical or High finding deferred to a follow-up still keeps the stage at **NEEDS FIXES** and prevents READY or a PR suggestion — deferral stops further fix commits, it does not make the diff READY. Amendments to the closing bar or scope after a loop starts are a new issue, not a widening of the current one.
+`/code-review` and `/ship-review` have no numeric gate, unlike Implement/Refactor/Architect — they must be given a stop condition explicitly, in `brief.md`, before Stage 6 (Implement):
+
+1. **A closing bar.** Which severities block — e.g. Critical/High *with a concrete failure scenario*.
+2. **A frozen, countable scope**, ending with "anything else is a follow-up issue, not a finding in this round."
+3. **A round cap** (two, by default) — two rounds (initial pass + one fix-and-re-run).
+
+The closing bar and frozen scope decide which findings get a fix commit on the open loop; below-bar or out-of-scope items become follow-up issues, never a fix commit on this loop. Past the cap, unresolved findings become follow-up issues instead of more fix commits. A Critical or High finding deferred to a follow-up still keeps the stage at **NEEDS FIXES** and prevents READY or a PR suggestion — deferral stops further fix commits, it does not make the diff READY. Amendments to the closing bar or scope after a loop starts are a new issue, not a widening of the current one — the loop closes against what it opened with.
 
 ## Configuration
 
