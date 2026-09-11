@@ -58,10 +58,14 @@ finding field could embed a spoofed `<!-- pr-review:fp=... sfp=... -->` that
 the read-back parser would match, allowing a forged fingerprint to enter the
 prior set and suppress a genuine finding.
 
-Mitigation: `Format-InlineCommentBody` strips HTML comments (`<!-- ... -->`)
-from every verbatim field before rendering, extending the existing fence-marker
-trust-boundary pattern. The test suite includes a spoofed-marker injection test:
-a finding whose `summary` contains a spoofed marker must not suppress a
+Mitigation: `Format-InlineCommentBody` strips exact PR-review fingerprint
+markers (`<!-- pr-review:fp=<64-hex> sfp=<64-hex> -->`) from every verbatim
+field and from a caller-supplied raw body before rendering. Other HTML
+comments are preserved. `-Post` / `-Preflight` run the same exact-marker
+strip on payload comment bodies via `Protect-ReviewCommentBody`, keeping a
+valid anchored last-line helper marker so a hand-assembled payload cannot
+smuggle a spoofed stamp. The test suite includes a spoofed-marker injection
+test: a finding whose `summary` contains a spoofed marker must not suppress a
 different finding on read-back.
 
 ### Bot-author filter
@@ -72,10 +76,28 @@ could post a comment containing a forged fingerprint marker into an existing
 thread. Without filtering, `Get-PriorFingerprints` would mine that forged
 marker and add it to the prior set.
 
-Mitigation: the GraphQL query in `Get-ReviewThreads` (pr-review.ps1:486-514)
+Mitigation: the GraphQL query in `Get-ReviewThreads` (pr-review.ps1)
 adds `author { login }` to the `comments` node. `Get-PriorFingerprints` mines
 only comments whose `author.login` matches the bot account that posted the
 review. All other comments in the thread are ignored for fingerprint extraction.
+
+Identity is resolved in order, and the source is recorded on the dedupe
+result: script binding (`explicit-binding`), `PR_REVIEW_BOT_LOGIN`,
+`gh api user`, or `failure`. A process-level cache retains a `gh-api-user` or
+`failure` result with that source attached, so a first resolution cannot later
+look like an explicit binding. Precedence is re-evaluated every call: a live
+binding or env var still wins over the cache.
+
+When prior threads exist and identity cannot be resolved, or when identity
+resolves but matches no thread authors while marker-bearing `[bot]` comments
+(or an app-slug identity against other authors' markers) are present, mining
+must not silently skip every thread under `complete: true`. `-Dedupe` warns
+and refuses that coverage unless `-AllowIncompletePrior` is passed. Empty
+thread lists and markerless human threads still skip normally — that is the
+safe direction and is not fail-closed.
+
+Last-line parsing trims trailing whitespace (newline, CR, tab, spaces) before
+the anchored marker regex. The anchor stays; unanchored matching is rejected.
 
 ### Exclusive threads dispatch
 
@@ -84,11 +106,16 @@ When `Get-PriorFingerprints` receives a prior document with a `threads` array
 other fingerprint/findings extraction paths. `review-threads.json` is not a
 findings file; it has no `findings` array, no `fingerprints` map, no
 `semanticFingerprints` map, and no `priorFindings` array. Attempting the
-findings-array path on it would hit the `Get-FindingsArray` try/catch
-(common:582-596), which swallows exceptions from documents that lack a
+findings-array path on it would hit the `Get-FindingsArray` try/catch,
+which swallows exceptions from documents that lack a
 `findings`/`severity` property. The threads path runs as a separate conditional
 block, independent of the findings-array dispatch, so a future refactor that
 modifies the swallowing catch cannot silently drop thread mining.
+
+A document that carries `threads` **and** `fingerprints` / `semanticFingerprints`
+is hybrid and invalid/ambiguous. Exclusive dispatch must not silently drop
+one shape: `Get-PriorFingerprints` rejects the hybrid rather than giving
+threads precedence.
 
 ### Resolved and outdated threads
 
@@ -132,11 +159,18 @@ make ABA collisions require matching on all of category, file, range, side, and
 substance simultaneously. If pinned binding is needed later, a `h=` field can
 be added without breaking existing markers.
 
-**Last-match parser.** Instead of stripping HTML comments from verbatim fields,
-take the last match of the marker pattern (since the appended marker is always
-last). Weaker — a sufficiently creative injection could place a spoofed marker
-after the body by exploiting multi-line fields or future format changes.
-Stripping is simpler and parallels the existing fence-gate pattern.
+**Last-match parser.** Instead of stripping fingerprint markers from verbatim
+fields, take the last match of the marker pattern (since the appended marker is
+always last). Weaker — a sufficiently creative injection could place a spoofed
+marker after the body by exploiting multi-line fields or future format changes.
+Stripping the exact marker is simpler and parallels the existing fence-gate
+pattern. Trailing-whitespace normalisation is `TrimEnd` before the *anchored*
+last-line regex, not an unanchored search.
+
+**Broad HTML-comment strip.** Removing every `<!-- ... -->` from raw bodies is
+lossy for nested comments and for legitimate non-marker HTML. DEV-190 narrows
+stripping to the exact fingerprint-marker form; the anti-spoof guard does not
+need a general HTML comment parser.
 
 **Delimiter sentinel.** Use a unique, non-spoofable delimiter (e.g. a
 NUL-prefixed marker or a sentinel line the formatter controls) to separate the
@@ -156,14 +190,16 @@ are sufficient for dedupe; full reconstruction is unnecessary.
   future duplicates via the threads path. The first post-migration run may
   re-raise findings that are already on the PR. Subsequent runs will suppress
   correctly.
-- The bot-author filter requires knowing the bot's login at mine time. If the
-  bot account changes between runs, markers from the old account are invisible
-  to the new one. This is the same trust boundary as the run marker.
-- Stripping HTML comments from verbatim fields is a one-way transform on the
-  rendered body. If a model legitimately produces an HTML comment in a finding
-  summary, it will be removed from the posted comment. This is acceptable —
-  HTML comments are invisible to the reader and carry no information in a
-  finding body.
+- The bot-author filter requires knowing the bot's login at mine time, and
+  that resolution is now a recorded source rather than a hidden first-result
+  cache. If the bot account changes between runs, markers from the old account
+  are invisible to the new one unless `PR_REVIEW_BOT_LOGIN` (or the script
+  binding) names the login that actually posted. Unresolved identity and
+  app-slug `[bot]` mismatch are coverage gaps, not silent no-ops.
+- Stripping exact fingerprint-marker comments from verbatim fields is a
+  one-way transform on the rendered body. Non-marker HTML comments are
+  preserved. A model that puts a fingerprint marker in a finding summary
+  still loses that spoofed stamp, which is the point of the guard.
 
 ## Consequences
 
@@ -171,8 +207,13 @@ are sufficient for dedupe; full reconstruction is unnecessary.
   `SKILL.md` and the `NOTE` block in `Get-PriorCoverageGap` (common:634-642)
   that thread files are not usable priors must be removed.
 - The trust-boundary pattern (`VerbatimFindingFields` +
-  `Test-CarriesFenceMarker`) gains an HTML-comment check, strengthening it
-  against a class of injection that was previously uncovered.
+  `Test-CarriesFenceMarker`) gains an exact fingerprint-marker strip, not a
+  general HTML-comment parser, and `-Post` applies the same strip to payload
+  comment bodies.
+- Dedupe results expose `identitySource` / `identityLogin` / `identityGap` so
+  an unresolved or mismatched bot login cannot hide behind `complete: true`.
+- Hybrid priors (`threads` plus `fingerprints` / `semanticFingerprints`) are
+  rejected as invalid/ambiguous.
 - The GraphQL query in `Get-ReviewThreads` gains `author { login }`, a
   non-breaking addition that requires no schema change on GitHub's side.
 - Test-PrReviewHelper baselines (`expectedHelperFunctionCount`,

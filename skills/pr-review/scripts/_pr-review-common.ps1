@@ -14,9 +14,10 @@ $script:PlacementEnum = @('inline', 'file', 'summary')
 # the comment body. A Markdown code fence in any of them can close an enclosing
 # suggestion block early and continue with arbitrary Markdown — including a
 # second, unverified suggestion fence that no gate inspected — so both -Validate
-# and -BuildPayload refuse a finding that carries one. HTML comments are
-# stripped from the same fields before render so a spoofed fingerprint marker
-# cannot land in the posted body ahead of the helper's last-line marker.
+# and -BuildPayload refuse a finding that carries one. Exact PR-review
+# fingerprint-marker HTML comments are stripped from the same fields before
+# render so a spoofed marker cannot land in the posted body ahead of the
+# helper's last-line marker. Other HTML comments are left in place.
 $script:VerbatimFindingFields = @('summary', 'failure_scenario', 'evidence', 'fix')
 
 # Axis statuses that count as coverage. Everything else — failed, timeout,
@@ -546,6 +547,204 @@ function Invoke-Fingerprint {
     Write-Output ($clean | ConvertTo-Json -Depth 10)
 }
 
+function Get-PrReviewBotIdentity {
+    <#
+      Resolve the login used to mine bot-authored review threads.
+
+      Source is always one of: explicit-binding, PR_REVIEW_BOT_LOGIN,
+      gh-api-user, failure. A cached gh-api-user or failure result keeps that
+      source, so a first resolution cannot later look like an explicit binding
+      across repeated PR processing in one process.
+
+      Precedence is re-evaluated every call: script binding, then
+      PR_REVIEW_BOT_LOGIN, then the cache, then gh api user. Tests inject
+      lookup failure through $script:PrReviewGhApiUserLookup (a scriptblock
+      that throws or returns an Invoke-Gh-shaped object with ExitCode/Text).
+    #>
+    $boundBot = Get-Variable -Name PrReviewBotLogin -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $boundBot -and -not [string]::IsNullOrWhiteSpace([string]$boundBot.Value)) {
+        return [pscustomobject]@{
+            Login  = [string]$boundBot.Value
+            Source = 'explicit-binding'
+            Reason = $null
+        }
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($env:PR_REVIEW_BOT_LOGIN)) {
+        return [pscustomobject]@{
+            Login  = $env:PR_REVIEW_BOT_LOGIN.Trim()
+            Source = 'PR_REVIEW_BOT_LOGIN'
+            Reason = $null
+        }
+    }
+
+    $cache = Get-Variable -Name PrReviewBotIdentityCache -Scope Script -ErrorAction SilentlyContinue
+    if ($null -ne $cache -and $null -ne $cache.Value) {
+        return $cache.Value
+    }
+
+    $failureReason = $null
+    try {
+        $rawUser = $null
+        $lookup = Get-Variable -Name PrReviewGhApiUserLookup -Scope Script -ErrorAction SilentlyContinue
+        if ($null -ne $lookup -and $null -ne $lookup.Value) {
+            if ($lookup.Value -is [scriptblock]) {
+                $invoked = $lookup.Value.Invoke()
+                if ($null -ne $invoked -and @($invoked).Count -eq 1) {
+                    $rawUser = @($invoked)[0]
+                }
+                else {
+                    $rawUser = $invoked
+                }
+            }
+            else {
+                $rawUser = $lookup.Value
+            }
+        }
+        elseif ((Get-Command -Name Invoke-Gh -ErrorAction SilentlyContinue) -and
+            (Get-Command -Name ConvertFrom-GhJson -ErrorAction SilentlyContinue)) {
+            $rawUser = Invoke-Gh -Action 'resolving review bot login' -GhArgs @('api', 'user') -AllowFailure
+        }
+        else {
+            $failureReason = 'gh api user lookup is unavailable'
+        }
+
+        if ([string]::IsNullOrWhiteSpace($failureReason) -and $null -eq $rawUser) {
+            $failureReason = 'gh api user lookup returned nothing'
+        }
+
+        $exitCode = 0
+        $text = $null
+        if ([string]::IsNullOrWhiteSpace($failureReason) -and $rawUser -is [string]) {
+            $text = $rawUser
+        }
+        elseif ([string]::IsNullOrWhiteSpace($failureReason)) {
+            if (Test-HasProperty -Object $rawUser -Name 'ExitCode') {
+                $exitCode = [int](Get-PropertyValue -Object $rawUser -Name 'ExitCode')
+            }
+            if (Test-HasProperty -Object $rawUser -Name 'Text') {
+                $text = [string](Get-PropertyValue -Object $rawUser -Name 'Text')
+            }
+            elseif ($exitCode -eq 0 -and [string]::IsNullOrWhiteSpace($text)) {
+                $failureReason = 'gh api user lookup returned no Text'
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($failureReason) -and $exitCode -ne 0) {
+            $failureReason = "gh api user exited $exitCode"
+        }
+
+        if ([string]::IsNullOrWhiteSpace($failureReason) -and [string]::IsNullOrWhiteSpace($text)) {
+            $failureReason = 'gh api user returned no login payload'
+        }
+
+        if ([string]::IsNullOrWhiteSpace($failureReason)) {
+            $user = ConvertFrom-GhJson -Text $text -Action 'parsing authenticated user'
+            $botLogin = [string](Get-PropertyValue -Object $user -Name 'login')
+            if ([string]::IsNullOrWhiteSpace($botLogin)) {
+                $failureReason = 'gh api user returned no login'
+            }
+            else {
+                $resolved = [pscustomobject]@{
+                    Login  = $botLogin
+                    Source = 'gh-api-user'
+                    Reason = $null
+                }
+                $script:PrReviewBotIdentityCache = $resolved
+                return $resolved
+            }
+        }
+    }
+    catch {
+        $failureReason = $_.Exception.Message
+    }
+
+    $failed = [pscustomobject]@{
+        Login  = $null
+        Source = 'failure'
+        Reason = $failureReason
+    }
+    $script:PrReviewBotIdentityCache = $failed
+    return $failed
+}
+
+function Get-AnchoredFingerprintMarker {
+    <#
+      Parse a last-line PR-review fingerprint marker after trimming trailing
+      whitespace (newline, CR, tab, spaces). The regex stays anchored; a
+      quoted mid-body marker is ignored.
+    #>
+    param([string]$Body)
+    if ([string]::IsNullOrWhiteSpace($Body)) { return $null }
+    $lastLine = (($Body.TrimEnd() -split '\r?\n') | Select-Object -Last 1)
+    if ($lastLine -notmatch '^<!-- pr-review:fp=([0-9a-f]{64}) sfp=([0-9a-f]{64}) -->$') {
+        return $null
+    }
+    return [pscustomobject]@{
+        Fingerprint         = $Matches[1]
+        SemanticFingerprint = $Matches[2]
+        Line                = $lastLine
+    }
+}
+
+function Remove-PrReviewFingerprintMarkers {
+    <#
+      Strip PR-review fingerprint-marker HTML comments: the posted
+      `<!-- pr-review:fp=<64 hex> sfp=<64 hex> -->` form and the
+      `<!-- PR-review fingerprint: ... -->` prose form. Other HTML comments
+      are preserved. -KeepAnchoredLastLine leaves a valid last-line helper
+      marker in place so -Post cannot drop the real stamp.
+    #>
+    param(
+        [string]$Text,
+        [switch]$KeepAnchoredLastLine
+    )
+    if ([string]::IsNullOrEmpty($Text)) { return $Text }
+    $stripExact = '<!-- pr-review:fp=[0-9a-f]{64} sfp=[0-9a-f]{64} -->'
+    $stripNamed = '(?i)<!--\s*pr-review\s+fingerprint:[^>]*-->'
+    if (-not $KeepAnchoredLastLine) {
+        $Text = [regex]::Replace($Text, $stripExact, '')
+        return [regex]::Replace($Text, $stripNamed, '')
+    }
+
+    $trimmed = $Text.TrimEnd()
+    $lastLine = (($trimmed -split '\r?\n') | Select-Object -Last 1)
+    $prefix = ''
+    if ($trimmed.Length -gt $lastLine.Length) {
+        $prefix = $trimmed.Substring(0, $trimmed.Length - $lastLine.Length).TrimEnd("`r", "`n")
+    }
+    $prefix = [regex]::Replace($prefix, $stripExact, '')
+    $prefix = [regex]::Replace($prefix, $stripNamed, '')
+    $prefix = $prefix.TrimEnd()
+    if ($lastLine -match '^<!-- pr-review:fp=([0-9a-f]{64}) sfp=([0-9a-f]{64}) -->$') {
+        if ([string]::IsNullOrEmpty($prefix)) { return $lastLine }
+        return ($prefix + "`n" + $lastLine)
+    }
+    $cleanedLast = [regex]::Replace($lastLine, $stripExact, '')
+    $cleanedLast = [regex]::Replace($cleanedLast, $stripNamed, '').TrimEnd()
+    if ([string]::IsNullOrEmpty($prefix)) { return $cleanedLast }
+    if ([string]::IsNullOrEmpty($cleanedLast)) { return $prefix }
+    return ($prefix + "`n" + $cleanedLast)
+}
+
+function Protect-ReviewCommentBody {
+    <#
+      -Post/-Preflight anti-spoof: strip spoofed fingerprint markers from a
+      payload comment while keeping a valid anchored last-line helper marker.
+    #>
+    param($Comment)
+    if ($null -eq $Comment) { return $Comment }
+    $body = [string](Get-PropertyValue -Object $Comment -Name 'body')
+    $clean = Remove-PrReviewFingerprintMarkers -Text $body -KeepAnchoredLastLine
+    if ($clean -ceq $body) { return $Comment }
+    $hash = [ordered]@{}
+    foreach ($p in $Comment.PSObject.Properties) {
+        $hash[$p.Name] = $p.Value
+    }
+    $hash['body'] = $clean
+    return [pscustomobject]$hash
+}
+
 function Get-PriorFingerprints {
     param($PriorDocument)
 
@@ -556,7 +755,15 @@ function Get-PriorFingerprints {
     $semanticCounts = [System.Collections.Generic.Dictionary[string, int]]::new(
         [System.StringComparer]::OrdinalIgnoreCase)
 
-    if ($null -eq $PriorDocument) { return [pscustomobject]@{ exact = $exactSet; semantic = $semanticCounts } }
+    if ($null -eq $PriorDocument) {
+        return [pscustomobject]@{
+            exact          = $exactSet
+            semantic       = $semanticCounts
+            identityLogin  = $null
+            identitySource = $null
+            identityGap    = $null
+        }
+    }
 
     # Each shape below is an independent *view* of the same prior review, so the
     # counts are merged by maximum, not by sum. A document carrying both a
@@ -565,40 +772,56 @@ function Get-PriorFingerprints {
     # silence a genuinely distinct second site all over again.
     $views = [System.Collections.Generic.List[System.Collections.Generic.Dictionary[string, int]]]::new()
 
-    # review-threads.json from -Resolve. Exclusive: thread nodes are not
-    # findings, and sweeping them into a findings view yields null keys that
-    # corrupt the view max-merge. This block is independent of the
-    # Get-FindingsArray try/catch below so a future lift of that swallow cannot
-    # drop thread mining.
-    if (Test-HasProperty -Object $PriorDocument -Name 'threads') {
+    # review-threads.json from -Resolve. Exclusive unless the document also
+    # carries legacy fingerprint keys, which is rejected as hybrid/ambiguous
+    # rather than silently dropping one shape. Thread nodes are not findings,
+    # and sweeping them into a findings view yields null keys that corrupt the
+    # view max-merge. This block is independent of the Get-FindingsArray
+    # try/catch below so a future lift of that swallow cannot drop thread mining.
+    $hasThreads = Test-HasProperty -Object $PriorDocument -Name 'threads'
+    $hasLegacyFingerprints = (Test-HasProperty -Object $PriorDocument -Name 'fingerprints') -or
+        (Test-HasProperty -Object $PriorDocument -Name 'semanticFingerprints')
+    if ($hasThreads -and $hasLegacyFingerprints) {
+        throw ("Refusing to mine a hybrid prior document: 'threads' is present together with " +
+            "'fingerprints' and/or 'semanticFingerprints'. That combination is invalid/ambiguous — " +
+            'supply a threads-only review-threads.json or a findings/fingerprints prior, not both.')
+    }
+
+    if ($hasThreads) {
         $view = [System.Collections.Generic.Dictionary[string, int]]::new(
             [System.StringComparer]::OrdinalIgnoreCase)
-        $botLogin = $null
-        $boundBot = Get-Variable -Name PrReviewBotLogin -Scope Script -ErrorAction SilentlyContinue
-        if ($null -ne $boundBot -and -not [string]::IsNullOrWhiteSpace([string]$boundBot.Value)) {
-            $botLogin = [string]$boundBot.Value
-        }
-        elseif (-not [string]::IsNullOrWhiteSpace($env:PR_REVIEW_BOT_LOGIN)) {
-            $botLogin = $env:PR_REVIEW_BOT_LOGIN.Trim()
-        }
-        elseif ((Get-Command -Name Invoke-Gh -ErrorAction SilentlyContinue) -and
-            (Get-Command -Name ConvertFrom-GhJson -ErrorAction SilentlyContinue)) {
-            try {
-                $rawUser = Invoke-Gh -Action 'resolving review bot login' -GhArgs @('api', 'user') -AllowFailure
-                if ($rawUser.ExitCode -eq 0) {
-                    $user = ConvertFrom-GhJson -Text $rawUser.Text -Action 'parsing authenticated user'
-                    $botLogin = [string](Get-PropertyValue -Object $user -Name 'login')
-                    if (-not [string]::IsNullOrWhiteSpace($botLogin)) {
-                        $script:PrReviewBotLogin = $botLogin
-                    }
-                }
+        $recordedLogin = [string](Get-PropertyValue -Object $PriorDocument -Name 'identityLogin')
+        $recordedSource = [string](Get-PropertyValue -Object $PriorDocument -Name 'identitySource')
+        if (-not [string]::IsNullOrWhiteSpace($recordedLogin)) {
+            $identity = [pscustomobject]@{
+                Login  = $recordedLogin
+                Source = $(if ([string]::IsNullOrWhiteSpace($recordedSource)) { 'prior-document' } else { $recordedSource })
+                Reason = $null
             }
-            catch {
-                # Unresolved login: every thread comment is skipped (safe).
-            }
+        }
+        else {
+            $identity = Get-PrReviewBotIdentity
+        }
+        $botLogin = $identity.Login
+        $identityGap = $null
+        $threadList = @((Get-PropertyValue -Object $PriorDocument -Name 'threads'))
+        $threadCount = 0
+        foreach ($thread in $threadList) {
+            if ($null -ne $thread) { $threadCount++ }
         }
 
-        foreach ($thread in @((Get-PropertyValue -Object $PriorDocument -Name 'threads'))) {
+        if ($identity.Source -eq 'failure') {
+            $reason = [string]$identity.Reason
+            if ([string]::IsNullOrWhiteSpace($reason)) { $reason = 'bot login could not be resolved' }
+            $identityGap = "unresolved bot identity (source=failure): $reason"
+            Write-Warning $identityGap
+        }
+
+        $matchedBotAuthorCount = 0
+        $unmatchedBotMarkerCount = 0
+        $canMine = ($identity.Source -ne 'failure' -and -not [string]::IsNullOrWhiteSpace($botLogin))
+
+        foreach ($thread in $threadList) {
             if ($null -eq $thread) { continue }
             $comments = Get-PropertyValue -Object $thread -Name 'comments'
             if ($null -eq $comments) { continue }
@@ -612,17 +835,37 @@ function Get-PriorFingerprints {
             $body = [string](Get-PropertyValue -Object $first -Name 'body')
             if ([string]::IsNullOrWhiteSpace($body)) { continue }
 
-            if ([string]::IsNullOrWhiteSpace($botLogin)) { continue }
+            $marker = Get-AnchoredFingerprintMarker -Body $body
             $author = Get-PropertyValue -Object $first -Name 'author'
             $login = [string](Get-PropertyValue -Object $author -Name 'login')
-            if ([string]::IsNullOrWhiteSpace($login)) { continue }
-            if (-not $login.Equals($botLogin, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+            $authorMatches = $canMine -and -not [string]::IsNullOrWhiteSpace($login) -and
+                $login.Equals($botLogin, [System.StringComparison]::OrdinalIgnoreCase)
+            if ($authorMatches) { $matchedBotAuthorCount++ }
 
-            $lastLine = (($body -split '\r?\n') | Select-Object -Last 1)
-            if ($lastLine -notmatch '^<!-- pr-review:fp=([0-9a-f]{64}) sfp=([0-9a-f]{64}) -->$') { continue }
-            [void]$exactSet.Add($Matches[1])
-            Add-SemanticOccurrence -Counts $view -Key $Matches[2]
+            if ($null -eq $marker) { continue }
+            if (-not $authorMatches) {
+                if (-not [string]::IsNullOrWhiteSpace($login) -and
+                    $login.EndsWith('[bot]', [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $unmatchedBotMarkerCount++
+                }
+                continue
+            }
+
+            [void]$exactSet.Add($marker.Fingerprint)
+            Add-SemanticOccurrence -Counts $view -Key $marker.SemanticFingerprint
         }
+
+        $resolvedLooksLikeApp = -not [string]::IsNullOrWhiteSpace($botLogin) -and
+            $botLogin.EndsWith('[bot]', [System.StringComparison]::OrdinalIgnoreCase)
+        $recordedResolvedLogin = -not [string]::IsNullOrWhiteSpace($recordedLogin) -and
+            $identity.Source -ne 'failure'
+        if ([string]::IsNullOrWhiteSpace($identityGap) -and $canMine -and $matchedBotAuthorCount -eq 0 -and
+            ($resolvedLooksLikeApp -or $unmatchedBotMarkerCount -gt 0 -or $recordedResolvedLogin)) {
+            $identityGap = ("resolved bot identity '$botLogin' (source=$($identity.Source)) matched no " +
+                "prior thread authors (app-slug[bot] mismatch)")
+            Write-Warning $identityGap
+        }
+
         $views.Add($view)
 
         foreach ($view in $views) {
@@ -632,7 +875,13 @@ function Get-PriorFingerprints {
                 }
             }
         }
-        return [pscustomobject]@{ exact = $exactSet; semantic = $semanticCounts }
+        return [pscustomobject]@{
+            exact          = $exactSet
+            semantic       = $semanticCounts
+            identityLogin  = $botLogin
+            identitySource = $identity.Source
+            identityGap    = $identityGap
+        }
     }
 
     # Accept: findings array/object, { fingerprints: [...] }, { findings: [...] },
@@ -687,7 +936,13 @@ function Get-PriorFingerprints {
         }
     }
 
-    return [pscustomobject]@{ exact = $exactSet; semantic = $semanticCounts }
+    return [pscustomobject]@{
+        exact          = $exactSet
+        semantic       = $semanticCounts
+        identityLogin  = $null
+        identitySource = $null
+        identityGap    = $null
+    }
 }
 
 function Get-PriorCoverageGap {
@@ -709,7 +964,9 @@ function Get-PriorCoverageGap {
       (`<!-- pr-review:fp=... sfp=... -->`). Markerless pre-feature threads,
       human comments, and summary-only entries are skipped — the finding comes
       back as new, which is the safe direction. `complete: false` still refuses
-      suppression unless the caller passes -AllowIncompletePrior.
+      suppression unless the caller passes -AllowIncompletePrior. Unresolved
+      bot identity, or a resolved login that matches no marker-bearing [bot]
+      thread, is a separate coverage gap recorded by Get-PriorFingerprints.
 
       Silence is treated as complete on purpose. Hand-written prior files and
       plain findings arrays carry no completeness flag, and demanding one would
@@ -748,6 +1005,11 @@ function Invoke-Dedupe {
     }
     $items = Get-FindingsArray -Document $doc
     $priorSets = Get-PriorFingerprints -PriorDocument $prior
+    $identityGap = $null
+    if (Test-HasProperty -Object $priorSets -Name 'identityGap') {
+        $identityGap = [string](Get-PropertyValue -Object $priorSets -Name 'identityGap')
+        if ([string]::IsNullOrWhiteSpace($identityGap)) { $identityGap = $null }
+    }
 
     $kept = [System.Collections.Generic.List[object]]::new()
     $dropped = [System.Collections.Generic.List[object]]::new()
@@ -758,7 +1020,12 @@ function Invoke-Dedupe {
         # Attach fingerprint onto a shallow copy dictionary for output.
         $hash = [ordered]@{}
         foreach ($p in $f.PSObject.Properties) {
-            $hash[$p.Name] = $p.Value
+            if ($p.Value -is [string]) {
+                $hash[$p.Name] = Remove-PrReviewFingerprintMarkers -Text ([string]$p.Value)
+            }
+            else {
+                $hash[$p.Name] = $p.Value
+            }
         }
         $hash['fingerprint'] = $fp
         $hash['semanticFingerprint'] = $sfp
@@ -789,8 +1056,11 @@ function Invoke-Dedupe {
         droppedCount = $dropped.Count
         # Recorded rather than merely warned about: a run that suppressed
         # against partial prior state has to be able to say so afterwards.
-        priorCoverage = if ($coverageGap) { 'INCOMPLETE' } else { 'COMPLETE' }
-        priorCoverageNote = $coverageGap
+        priorCoverage = if ($coverageGap -or $identityGap) { 'INCOMPLETE' } else { 'COMPLETE' }
+        priorCoverageNote = if ($coverageGap) { $coverageGap } else { $identityGap }
+        identitySource = Get-PropertyValue -Object $priorSets -Name 'identitySource'
+        identityLogin = Get-PropertyValue -Object $priorSets -Name 'identityLogin'
+        identityGap = $identityGap
     }
     Write-Output ($result | ConvertTo-Json -Depth 100)
 }
@@ -992,10 +1262,11 @@ function Format-InlineCommentBody {
       second suggestion fence whose contents no gate here ever saw. Unverified
       text still gets shown, just as an inert code block rather than a button.
 
-      HTML comments in verbatim fields (and in a caller-supplied raw body) are
-      stripped rather than refused: a spoofed `<!-- pr-review:fp=... -->` in
-      summary or failure_scenario would otherwise sit in the posted body where
-      a first-match parser could harvest it. The helper's real marker is
+      Exact PR-review fingerprint-marker comments in verbatim fields (and in a
+      caller-supplied raw body) are stripped rather than refused: a spoofed
+      `<!-- pr-review:fp=... sfp=... -->` in summary or failure_scenario would
+      otherwise sit in the posted body where a first-match parser could harvest
+      it. Other HTML comments are preserved. The helper's real marker is
       appended after this function returns, as the last line.
     #>
     param($Finding)
@@ -1008,7 +1279,7 @@ function Format-InlineCommentBody {
                 'inside it could post a committable suggestion that was never verified. Drop the fence, or move ' +
                 "the replacement into 'suggestion' with 'suggestion_verified': true.")
         }
-        return [regex]::Replace([string]$explicit, '<!--.*?-->', '', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+        return (Remove-PrReviewFingerprintMarkers -Text ([string]$explicit))
     }
 
     $severity = [string](Get-PropertyValue -Object $Finding -Name 'severity')
@@ -1022,8 +1293,7 @@ function Format-InlineCommentBody {
             throw ("Finding for '$([string](Get-PropertyValue -Object $Finding -Name 'file'))' has a " +
                 "'$verbatim' containing a Markdown code fence. " + (Get-FenceRejectionDetail))
         }
-        $stripped[$verbatim] = [regex]::Replace(
-            $verbatimText, '<!--.*?-->', '', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+        $stripped[$verbatim] = Remove-PrReviewFingerprintMarkers -Text $verbatimText
     }
 
     $summary = $stripped['summary']
