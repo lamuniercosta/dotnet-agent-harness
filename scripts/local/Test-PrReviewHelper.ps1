@@ -354,42 +354,45 @@ catch {
 Assert-True 'a PrReviewIdentity with a malformed SHA is refused at construction' $identityBadShaThrew
 
 # regression: gh api user failure, identity, marker parsing, and hybrid prior rejection
-$testDir = Join-Path ([System.IO.Path]::GetTempPath()) 'pr-review-dedupe-tests'
-Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue
-New-Item -ItemType Directory -Path $testDir -Force | Out-Null
+$testDir = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())
+try {
+    New-Item -ItemType Directory -Path $testDir -Force | Out-Null
 
-# 1. GH API user failure / Identity resolved but zero matching bot threads
-$findings = @{ findings = @(@{ category = 'risk'; file = 'a.cs'; range = '1-2'; substance = 'bad' }) }
-$findings | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $testDir 'findings.json')
-$prior = @{
-    complete = $true
-    identitySource = 'resolved'
-    identityLogin = 'bot[bot]'
-    threads = @() # Zero matching bot threads
+    # 1. GH API user failure / Identity resolved but zero matching bot threads
+    $findings = @{ findings = @(@{ category = 'risk'; file = 'a.cs'; range = '1-2'; substance = 'bad' }) }
+    $findings | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $testDir 'findings.json')
+    $prior = @{
+        complete = $true
+        identitySource = 'resolved'
+        identityLogin = 'bot[bot]'
+        threads = @() # Zero matching bot threads
+    }
+    $prior | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $testDir 'prior.json')
+    $dedupeResult = Invoke-Dedupe -FindingsPath (Join-Path $testDir 'findings.json') -PriorPath (Join-Path $testDir 'prior.json') | ConvertFrom-Json
+    Assert-Equal 'zero-match identity results in incomplete status' 'INCOMPLETE' $dedupeResult.priorCoverage
+
+    # 2. Hybrid prior rejection reporting / Exact marker stripping
+    # (Hybrid prior is missing a fingerprint, or has mixed/legacy fingerprints which should be rejected)
+    $priorHybrid = @{
+        complete = $false
+        incompleteReason = 'hybrid-prior-rejection'
+        threads = @()
+    }
+    $priorHybrid | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $testDir 'prior-hybrid.json')
+    # Verify hybrid prior throws/is rejected unless AllowIncompletePrior is set
+    $threw = $false
+    try { Invoke-Dedupe -FindingsPath (Join-Path $testDir 'findings.json') -PriorPath (Join-Path $testDir 'prior-hybrid.json') | Out-Null } catch { $threw = $true }
+    Assert-True 'hybrid prior is rejected by default' $threw
+
+    # 3. Marker parsing (trailing newline/space) and marker stripping
+    # (Verification: ensures markers are stripped even with trailing whitespace)
+    $findingsMarker = @{ findings = @(@{ category = 'risk'; file = 'a.cs'; range = '1-2'; substance = 'bad<!-- pr-review:fp=605e7144e548231a54b3234d7072cc335439a3f2513f564f26b5275e019f3900 sfp=605e7144e548231a54b3234d7072cc335439a3f2513f564f26b5275e019f3900 --> ' }) }
+    $findingsMarker | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $testDir 'findings-marker.json')
+    $dedupeResult2 = Invoke-Dedupe -FindingsPath (Join-Path $testDir 'findings-marker.json') -PriorPath (Join-Path $testDir 'prior.json') -AllowIncompletePrior | ConvertFrom-Json
+    Assert-True 'marker is stripped from substance' ($dedupeResult2.kept[0].substance -notmatch '<!--')
+} finally {
+    Remove-Item -LiteralPath $testDir -Recurse -Force -ErrorAction SilentlyContinue
 }
-$prior | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $testDir 'prior.json')
-$dedupeResult = Invoke-Dedupe -FindingsPath (Join-Path $testDir 'findings.json') -PriorPath (Join-Path $testDir 'prior.json') | ConvertFrom-Json
-Assert-Equal 'zero-match identity results in incomplete status' 'INCOMPLETE' $dedupeResult.priorCoverage
-
-# 2. Hybrid prior rejection reporting / Exact marker stripping
-# (Hybrid prior is missing a fingerprint, or has mixed/legacy fingerprints which should be rejected)
-$priorHybrid = @{
-    complete = $false
-    incompleteReason = 'hybrid-prior-rejection'
-    threads = @()
-}
-$priorHybrid | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $testDir 'prior-hybrid.json')
-# Verify hybrid prior throws/is rejected unless AllowIncompletePrior is set
-$threw = $false
-try { Invoke-Dedupe -FindingsPath (Join-Path $testDir 'findings.json') -PriorPath (Join-Path $testDir 'prior-hybrid.json') | Out-Null } catch { $threw = $true }
-Assert-True 'hybrid prior is rejected by default' $threw
-
-# 3. Marker parsing (trailing newline/space) and marker stripping
-# (Verification: ensures markers are stripped even with trailing whitespace)
-$findingsMarker = @{ findings = @(@{ category = 'risk'; file = 'a.cs'; range = '1-2'; substance = 'bad<!-- PR-review fingerprint: abc --> ' }) }
-$findingsMarker | ConvertTo-Json -Depth 10 | Set-Content (Join-Path $testDir 'findings-marker.json')
-$dedupeResult2 = Invoke-Dedupe -FindingsPath (Join-Path $testDir 'findings-marker.json') -PriorPath (Join-Path $testDir 'prior.json') -AllowIncompletePrior | ConvertFrom-Json
-Assert-True 'marker is stripped from substance' ($dedupeResult2.kept[0].substance -notmatch '<!--')
 
 Write-Host ''
 Write-Host 'pr-review helper: pagination, receipts, and workspace safety'
