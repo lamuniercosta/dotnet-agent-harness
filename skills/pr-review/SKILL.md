@@ -24,6 +24,27 @@ for marker-bearing bot-authored inline comments only. Markerless
 pre-feature threads, human comments, and summary-only findings (no
 marker) are skipped — the finding comes back as new. `complete: false`
 still refuses unless `-AllowIncompletePrior`.
+
+Bot identity for thread mining is resolved in this order and recorded on
+the dedupe JSON as `identitySource` / `identityLogin`: script binding
+(`explicit-binding`, `$script:PrReviewBotLogin`), `PR_REVIEW_BOT_LOGIN`,
+`gh api user`, or `failure`. A process cache keeps a `gh-api-user` or
+`failure` result *as that source* so a first lookup cannot later look
+like an explicit binding. Binding and env still win over the cache.
+
+If prior threads exist and identity is unresolved, or identity resolves
+but matches no thread authors — including an empty `threads` list with a
+recorded app-slug `[bot]` login — `-Dedupe` warns and records
+`priorCoverage: INCOMPLETE` without suppressing. That is the A1 no-op
+guard. `complete: false` still refuses unless `-AllowIncompletePrior`.
+Tests inject `gh api user` failure through
+`$script:PrReviewGhApiUserLookup`; clear `$script:PrReviewBotIdentityCache`
+between cases.
+
+A prior that carries both `threads` and `fingerprints` /
+`semanticFingerprints` is rejected as hybrid/ambiguous. Fingerprint
+markers in verbatim/raw bodies are stripped by exact form only; `-Post`
+keeps the anchored last-line helper marker.
 `-BuildPayload` one batched `COMMENT`. `-Preflight` read-only pre-publication
 checks. `-Post` reconcile, lock, re-read pin, submit once. `-MarkdownFallback`
 when publication cannot complete. `-Ledger` coverage from supplied state; does
@@ -56,6 +77,8 @@ Concurrent posts serialize reconcile, submit, receipt write.
    findings/fingerprints file or a `review-threads.json` in the workspace
    (`{ "findings": [] }` if none). Marker-bearing bot inline comments
    suppress; markerless and human threads pass through.
+   Unresolved bot identity or an app-slug `[bot]` mismatch on a
+   thread prior refuses complete coverage (see Contract).
    Write `-Dedupe` stdout to a workspace file; pass that path to
    `-BuildPayload` (no findings JSON rebuild).
    `-BodyText` is verbatim summary; empty is empty, not composed. No review draft.

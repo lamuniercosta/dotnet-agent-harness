@@ -1376,7 +1376,15 @@ function Get-SubmissionPlan {
     $working = $payload
     $comments = @()
     if (Test-HasProperty -Object $working -Name 'comments') {
-        $comments = @((Get-PropertyValue -Object $working -Name 'comments'))
+        $comments = @(foreach ($c in @((Get-PropertyValue -Object $working -Name 'comments'))) {
+            Protect-ReviewCommentBody -Comment $c
+        })
+    }
+    $working = [pscustomobject]@{
+        commit_id = [string]$payload.commit_id
+        event     = 'COMMENT'
+        body      = [string]$payload.body
+        comments  = @($comments)
     }
 
     $unmappable = [System.Collections.Generic.List[object]]::new()
