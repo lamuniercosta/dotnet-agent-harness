@@ -28,23 +28,24 @@ still refuses unless `-AllowIncompletePrior`.
 Bot identity for thread mining is resolved in this order and recorded on
 the dedupe JSON as `identitySource` / `identityLogin`: script binding
 (`explicit-binding`, `$script:PrReviewBotLogin`), `PR_REVIEW_BOT_LOGIN`,
-`gh api user`, or `failure`. A process cache keeps a `gh-api-user` or
-`failure` result *as that source* so a first lookup cannot later look
-like an explicit binding. Binding and env still win over the cache.
+`gh-api-user`, or `failure`. A process cache keeps a successful
+`gh-api-user` result *as that source* so a first lookup cannot later look
+like an explicit binding. Failures are not cached. Binding and env still
+win over the cache.
 
-If prior threads exist and identity is unresolved, or identity resolves
-but matches no thread authors — including an empty `threads` list with a
-recorded app-slug `[bot]` login — `-Dedupe` warns and records
-`priorCoverage: INCOMPLETE` without suppressing. That is the A1 no-op
-guard. `complete: false` still refuses unless `-AllowIncompletePrior`.
-Tests inject `gh api user` failure through
-`$script:PrReviewGhApiUserLookup`; clear `$script:PrReviewBotIdentityCache`
-between cases.
+If mineable prior threads exist and identity is unresolved, or identity
+resolves but matches no thread authors while marker-bearing `[bot]`
+comments are present, `-Dedupe` warns and refuses `complete: true`
+coverage unless `-AllowIncompletePrior`. Empty thread lists and
+markerless human-only threads skip normally. Tests inject `gh api user`
+failure through `$script:PrReviewGhApiUserLookup`; clear
+`$script:PrReviewBotIdentityCache` between success-cache cases.
 
 A prior that carries both `threads` and `fingerprints` /
 `semanticFingerprints` is rejected as hybrid/ambiguous. Fingerprint
-markers in verbatim/raw bodies are stripped by exact form only; `-Post`
-keeps the anchored last-line helper marker.
+markers in verbatim/raw bodies are stripped by exact form only at render.
+`-Post` strips exact markers from payload comments, including a last-line
+stamp, unless the payload digest is BUILD-PAYLOAD.
 `-BuildPayload` one batched `COMMENT`. `-Preflight` read-only pre-publication
 checks. `-Post` reconcile, lock, re-read pin, submit once. `-MarkdownFallback`
 when publication cannot complete. `-Ledger` coverage from supplied state; does
@@ -77,8 +78,9 @@ Concurrent posts serialize reconcile, submit, receipt write.
    findings/fingerprints file or a `review-threads.json` in the workspace
    (`{ "findings": [] }` if none). Marker-bearing bot inline comments
    suppress; markerless and human threads pass through.
-   Unresolved bot identity or an app-slug `[bot]` mismatch on a
-   thread prior refuses complete coverage (see Contract).
+   Unresolved bot identity or an app-slug `[bot]` mismatch on mineable
+   thread priors refuses complete coverage (see Contract). Empty and
+   markerless-human thread lists skip normally.
    Write `-Dedupe` stdout to a workspace file; pass that path to
    `-BuildPayload` (no findings JSON rebuild).
    `-BodyText` is verbatim summary; empty is empty, not composed. No review draft.

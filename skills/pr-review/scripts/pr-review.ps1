@@ -1373,11 +1373,13 @@ function Get-SubmissionPlan {
     }
     $diffMap = Get-DiffLineMap -Files $files
 
+    $payloadSource = Get-PayloadSource -PayloadPath $PayloadPath
+    $keepBuiltMarker = ($payloadSource -eq 'BUILD-PAYLOAD')
     $working = $payload
     $comments = @()
     if (Test-HasProperty -Object $working -Name 'comments') {
         $comments = @(foreach ($c in @((Get-PropertyValue -Object $working -Name 'comments'))) {
-            Protect-ReviewCommentBody -Comment $c
+            Protect-ReviewCommentBody -Comment $c -KeepAnchoredLastLine:$keepBuiltMarker
         })
     }
     $working = [pscustomobject]@{
@@ -1423,7 +1425,7 @@ function Get-SubmissionPlan {
         Prior           = $null
         Lock            = $lock
         SourcePayload   = $payload
-        PayloadSource   = Get-PayloadSource -PayloadPath $PayloadPath
+        PayloadSource   = $payloadSource
         Payload         = $working
         Workspace       = $workspace
         Identity        = $identity

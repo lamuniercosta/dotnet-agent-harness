@@ -552,14 +552,16 @@ function Get-PrReviewBotIdentity {
       Resolve the login used to mine bot-authored review threads.
 
       Source is always one of: explicit-binding, PR_REVIEW_BOT_LOGIN,
-      gh-api-user, failure. A cached gh-api-user or failure result keeps that
-      source, so a first resolution cannot later look like an explicit binding
-      across repeated PR processing in one process.
+      gh-api-user, failure. A successful gh-api-user result is cached with
+      that source so a first lookup cannot later look like an explicit
+      binding. Failures are not cached: a transient gh api user error must
+      not poison later PRs in the same process.
 
       Precedence is re-evaluated every call: script binding, then
-      PR_REVIEW_BOT_LOGIN, then the cache, then gh api user. Tests inject
-      lookup failure through $script:PrReviewGhApiUserLookup (a scriptblock
-      that throws or returns an Invoke-Gh-shaped object with ExitCode/Text).
+      PR_REVIEW_BOT_LOGIN, then the success cache, then gh api user. Tests
+      inject lookup failure through $script:PrReviewGhApiUserLookup (a
+      scriptblock that throws or returns an Invoke-Gh-shaped object with
+      ExitCode/Text).
     #>
     $boundBot = Get-Variable -Name PrReviewBotLogin -Scope Script -ErrorAction SilentlyContinue
     if ($null -ne $boundBot -and -not [string]::IsNullOrWhiteSpace([string]$boundBot.Value)) {
@@ -579,7 +581,9 @@ function Get-PrReviewBotIdentity {
     }
 
     $cache = Get-Variable -Name PrReviewBotIdentityCache -Scope Script -ErrorAction SilentlyContinue
-    if ($null -ne $cache -and $null -ne $cache.Value) {
+    if ($null -ne $cache -and $null -ne $cache.Value -and
+        [string]$cache.Value.Source -eq 'gh-api-user' -and
+        -not [string]::IsNullOrWhiteSpace([string]$cache.Value.Login)) {
         return $cache.Value
     }
 
@@ -664,7 +668,6 @@ function Get-PrReviewBotIdentity {
         Source = 'failure'
         Reason = $failureReason
     }
-    $script:PrReviewBotIdentityCache = $failed
     return $failed
 }
 
@@ -692,8 +695,9 @@ function Remove-PrReviewFingerprintMarkers {
       Strip PR-review fingerprint-marker HTML comments: the posted
       `<!-- pr-review:fp=<64 hex> sfp=<64 hex> -->` form and the
       `<!-- PR-review fingerprint: ... -->` prose form. Other HTML comments
-      are preserved. -KeepAnchoredLastLine leaves a valid last-line helper
-      marker in place so -Post cannot drop the real stamp.
+      are preserved. -KeepAnchoredLastLine keeps a last-line helper marker
+      that -BuildPayload appended; without it, last-line valid marker shapes
+      are stripped too so a hand-built -Post payload cannot smuggle a stamp.
     #>
     param(
         [string]$Text,
@@ -729,13 +733,18 @@ function Remove-PrReviewFingerprintMarkers {
 
 function Protect-ReviewCommentBody {
     <#
-      -Post/-Preflight anti-spoof: strip spoofed fingerprint markers from a
-      payload comment while keeping a valid anchored last-line helper marker.
+      -Post/-Preflight anti-spoof: strip exact fingerprint markers from a
+      payload comment, including a valid-looking last line. Pass
+      -KeepAnchoredLastLine only for a BUILD-PAYLOAD digest match, where the
+      helper itself appended the last-line stamp after verbatim stripping.
     #>
-    param($Comment)
+    param(
+        $Comment,
+        [switch]$KeepAnchoredLastLine
+    )
     if ($null -eq $Comment) { return $Comment }
     $body = [string](Get-PropertyValue -Object $Comment -Name 'body')
-    $clean = Remove-PrReviewFingerprintMarkers -Text $body -KeepAnchoredLastLine
+    $clean = Remove-PrReviewFingerprintMarkers -Text $body -KeepAnchoredLastLine:$KeepAnchoredLastLine
     if ($clean -ceq $body) { return $Comment }
     $hash = [ordered]@{}
     foreach ($p in $Comment.PSObject.Properties) {
@@ -790,36 +799,43 @@ function Get-PriorFingerprints {
     if ($hasThreads) {
         $view = [System.Collections.Generic.Dictionary[string, int]]::new(
             [System.StringComparer]::OrdinalIgnoreCase)
-        $recordedLogin = [string](Get-PropertyValue -Object $PriorDocument -Name 'identityLogin')
-        $recordedSource = [string](Get-PropertyValue -Object $PriorDocument -Name 'identitySource')
-        if (-not [string]::IsNullOrWhiteSpace($recordedLogin)) {
-            $identity = [pscustomobject]@{
-                Login  = $recordedLogin
-                Source = $(if ([string]::IsNullOrWhiteSpace($recordedSource)) { 'prior-document' } else { $recordedSource })
-                Reason = $null
-            }
+        $threadList = @((Get-PropertyValue -Object $PriorDocument -Name 'threads'))
+        $mineableBodies = 0
+        foreach ($thread in $threadList) {
+            if ($null -eq $thread) { continue }
+            $comments = Get-PropertyValue -Object $thread -Name 'comments'
+            if ($null -eq $comments) { continue }
+            $nodes = Get-PropertyValue -Object $comments -Name 'nodes'
+            if ($null -eq $nodes) { continue }
+            $nodeList = @($nodes)
+            if ($nodeList.Count -eq 0) { continue }
+            $first = $nodeList[0]
+            if ($null -eq $first) { continue }
+            $probe = [string](Get-PropertyValue -Object $first -Name 'body')
+            if (-not [string]::IsNullOrWhiteSpace($probe)) { $mineableBodies++ }
+        }
+
+        $identity = $null
+        $identityGap = $null
+        $botLogin = $null
+        if ($mineableBodies -eq 0) {
+            # Empty thread lists and empty/whitespace-only nodes skip normally.
         }
         else {
             $identity = Get-PrReviewBotIdentity
-        }
-        $botLogin = $identity.Login
-        $identityGap = $null
-        $threadList = @((Get-PropertyValue -Object $PriorDocument -Name 'threads'))
-        $threadCount = 0
-        foreach ($thread in $threadList) {
-            if ($null -ne $thread) { $threadCount++ }
-        }
-
-        if ($identity.Source -eq 'failure') {
-            $reason = [string]$identity.Reason
-            if ([string]::IsNullOrWhiteSpace($reason)) { $reason = 'bot login could not be resolved' }
-            $identityGap = "unresolved bot identity (source=failure): $reason"
-            Write-Warning $identityGap
+            $botLogin = $identity.Login
+            if ($identity.Source -eq 'failure') {
+                $reason = [string]$identity.Reason
+                if ([string]::IsNullOrWhiteSpace($reason)) { $reason = 'bot login could not be resolved' }
+                $identityGap = "unresolved bot identity (source=failure): $reason"
+                Write-Warning $identityGap
+            }
         }
 
         $matchedBotAuthorCount = 0
         $unmatchedBotMarkerCount = 0
-        $canMine = ($identity.Source -ne 'failure' -and -not [string]::IsNullOrWhiteSpace($botLogin))
+        $canMine = ($null -ne $identity -and $identity.Source -ne 'failure' -and
+            -not [string]::IsNullOrWhiteSpace($botLogin))
 
         foreach ($thread in $threadList) {
             if ($null -eq $thread) { continue }
@@ -855,14 +871,11 @@ function Get-PriorFingerprints {
             Add-SemanticOccurrence -Counts $view -Key $marker.SemanticFingerprint
         }
 
-        $resolvedLooksLikeApp = -not [string]::IsNullOrWhiteSpace($botLogin) -and
-            $botLogin.EndsWith('[bot]', [System.StringComparison]::OrdinalIgnoreCase)
-        $recordedResolvedLogin = -not [string]::IsNullOrWhiteSpace($recordedLogin) -and
-            $identity.Source -ne 'failure'
-        if ([string]::IsNullOrWhiteSpace($identityGap) -and $canMine -and $matchedBotAuthorCount -eq 0 -and
-            ($resolvedLooksLikeApp -or $unmatchedBotMarkerCount -gt 0 -or $recordedResolvedLogin)) {
+        if ([string]::IsNullOrWhiteSpace($identityGap) -and $canMine -and
+            $exactSet.Count -eq 0 -and $matchedBotAuthorCount -eq 0 -and $unmatchedBotMarkerCount -gt 0) {
             $identityGap = ("resolved bot identity '$botLogin' (source=$($identity.Source)) matched no " +
-                "prior thread authors (app-slug[bot] mismatch)")
+                "prior thread authors; marker-bearing [bot] threads belong to other logins " +
+                "(app-slug[bot] mismatch)")
             Write-Warning $identityGap
         }
 
@@ -879,7 +892,7 @@ function Get-PriorFingerprints {
             exact          = $exactSet
             semantic       = $semanticCounts
             identityLogin  = $botLogin
-            identitySource = $identity.Source
+            identitySource = $(if ($null -ne $identity) { $identity.Source } else { $null })
             identityGap    = $identityGap
         }
     }
@@ -1011,6 +1024,14 @@ function Invoke-Dedupe {
         if ([string]::IsNullOrWhiteSpace($identityGap)) { $identityGap = $null }
     }
 
+    if ($identityGap -and -not $AllowIncompletePrior) {
+        throw ("Refusing to dedupe against '$PriorPath': bot identity for thread mining is not usable " +
+            "($identityGap). Available prior threads plus unresolved identity, or a resolved login that " +
+            'matches no bot-authored marker thread, cannot claim complete coverage. Set PR_REVIEW_BOT_LOGIN ' +
+            'or the script binding to the login that posted the markers, or pass -AllowIncompletePrior to ' +
+            'proceed without suppressing against those threads.')
+    }
+
     $kept = [System.Collections.Generic.List[object]]::new()
     $dropped = [System.Collections.Generic.List[object]]::new()
 
@@ -1020,12 +1041,7 @@ function Invoke-Dedupe {
         # Attach fingerprint onto a shallow copy dictionary for output.
         $hash = [ordered]@{}
         foreach ($p in $f.PSObject.Properties) {
-            if ($p.Value -is [string]) {
-                $hash[$p.Name] = Remove-PrReviewFingerprintMarkers -Text ([string]$p.Value)
-            }
-            else {
-                $hash[$p.Name] = $p.Value
-            }
+            $hash[$p.Name] = $p.Value
         }
         $hash['fingerprint'] = $fp
         $hash['semanticFingerprint'] = $sfp

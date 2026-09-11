@@ -28,10 +28,10 @@ produced by `Get-FindingFingerprint`). `sfp` is the semantic fingerprint
 (`<!-- pr-review:run=<hex> -->`) on the review body, but lives on the
 **comment** body instead.
 
-The marker is appended by `New-ReviewCommentFromFinding` (common:1045), after
+The marker is appended by `New-ReviewCommentFromFinding` after
 `Format-InlineCommentBody` returns the rendered body. This pin point is chosen
 because `Format-InlineCommentBody` has an early-return path for findings that
-supply an explicit `body` field (common:927-936); appending inside that function
+supply an explicit `body` field; appending inside that function
 would require guarding every exit. Pinning to `New-ReviewCommentFromFinding`
 guarantees the marker is present on every inline comment regardless of how the
 body was composed.
@@ -62,11 +62,13 @@ Mitigation: `Format-InlineCommentBody` strips exact PR-review fingerprint
 markers (`<!-- pr-review:fp=<64-hex> sfp=<64-hex> -->`) from every verbatim
 field and from a caller-supplied raw body before rendering. Other HTML
 comments are preserved. `-Post` / `-Preflight` run the same exact-marker
-strip on payload comment bodies via `Protect-ReviewCommentBody`, keeping a
-valid anchored last-line helper marker so a hand-assembled payload cannot
-smuggle a spoofed stamp. The test suite includes a spoofed-marker injection
-test: a finding whose `summary` contains a spoofed marker must not suppress a
-different finding on read-back.
+strip on payload comment bodies via `Protect-ReviewCommentBody`. A
+BUILD-PAYLOAD digest match keeps the helper's last-line stamp; an unverified
+or hand-built payload has every exact fingerprint marker stripped, including
+a valid-looking last line, so later mining cannot treat a smuggled stamp as
+genuine. Ordinary non-marker HTML comments are preserved. The test suite
+includes a spoofed-marker injection test: a finding whose `summary` contains a
+spoofed marker must not suppress a different finding on read-back.
 
 ### Bot-author filter
 
@@ -82,19 +84,18 @@ only comments whose `author.login` matches the bot account that posted the
 review. All other comments in the thread are ignored for fingerprint extraction.
 
 Identity is resolved in order, and the source is recorded on the dedupe
-result: script binding (`explicit-binding`), `PR_REVIEW_BOT_LOGIN`,
-`gh api user`, or `failure`. A process-level cache retains a `gh-api-user` or
-`failure` result with that source attached, so a first resolution cannot later
-look like an explicit binding. Precedence is re-evaluated every call: a live
-binding or env var still wins over the cache.
+result as one of: `explicit-binding`, `PR_REVIEW_BOT_LOGIN`, `gh-api-user`,
+or `failure`. A successful `gh-api-user` lookup is cached with that source.
+Failures are not cached, so a transient lookup error cannot poison later PRs.
+Precedence is re-evaluated every call: a live binding or env var still wins
+over the success cache.
 
-When prior threads exist and identity cannot be resolved, or when identity
-resolves but matches no thread authors while marker-bearing `[bot]` comments
-(or an app-slug identity against other authors' markers) are present, mining
-must not silently skip every thread under `complete: true`. `-Dedupe` warns
-and refuses that coverage unless `-AllowIncompletePrior` is passed. Empty
-thread lists and markerless human threads still skip normally — that is the
-safe direction and is not fail-closed.
+When mineable prior threads exist and identity cannot be resolved, or when
+identity resolves but matches no thread authors while marker-bearing `[bot]`
+comments are present, `-Dedupe` warns and refuses `complete: true` coverage
+unless `-AllowIncompletePrior` is passed. Empty thread lists and markerless
+human-only threads skip normally — that is the safe direction and is not
+fail-closed.
 
 Last-line parsing trims trailing whitespace (newline, CR, tab, spaces) before
 the anchored marker regex. The anchor stays; unanchored matching is rejected.
@@ -195,7 +196,8 @@ are sufficient for dedupe; full reconstruction is unnecessary.
   cache. If the bot account changes between runs, markers from the old account
   are invisible to the new one unless `PR_REVIEW_BOT_LOGIN` (or the script
   binding) names the login that actually posted. Unresolved identity and
-  app-slug `[bot]` mismatch are coverage gaps, not silent no-ops.
+  app-slug `[bot]` mismatch on mineable threads are coverage refusals, not
+  silent no-ops. Empty or markerless-human priors stay skip-normally.
 - Stripping exact fingerprint-marker comments from verbatim fields is a
   one-way transform on the rendered body. Non-marker HTML comments are
   preserved. A model that puts a fingerprint marker in a finding summary
@@ -204,12 +206,13 @@ are sufficient for dedupe; full reconstruction is unnecessary.
 ## Consequences
 
 - `review-threads.json` becomes a first-class `-Dedupe` prior. The caveat in
-  `SKILL.md` and the `NOTE` block in `Get-PriorCoverageGap` (common:634-642)
+  `SKILL.md` and the `NOTE` block in `Get-PriorCoverageGap`
   that thread files are not usable priors must be removed.
 - The trust-boundary pattern (`VerbatimFindingFields` +
   `Test-CarriesFenceMarker`) gains an exact fingerprint-marker strip, not a
-  general HTML-comment parser, and `-Post` applies the same strip to payload
-  comment bodies.
+  general HTML-comment parser. `-Post` strips exact markers from payload
+  comment bodies; a BUILD-PAYLOAD digest match keeps the helper last-line
+  stamp, and an unverified payload loses last-line stamps too.
 - Dedupe results expose `identitySource` / `identityLogin` / `identityGap` so
   an unresolved or mismatched bot login cannot hide behind `complete: true`.
 - Hybrid priors (`threads` plus `fingerprints` / `semanticFingerprints`) are
