@@ -28,6 +28,14 @@ for C#, and this repository contains none outside `fixtures/BadCode/`, which is
 deliberately broken and must never be edited. Running them here costs tokens and
 returns nothing. Do the work directly.
 
+After DEV-113, `code-review` is C#-evidence only
+([ADR 0022](docs/adr/0022-harness-targets-csharp-only.md)). This repository has
+no production C#, so it cannot self-review with `$code-review` — the skill would
+refuse the diff as **out of scope for this skill**. Review harness changes with
+the PowerShell tests under `scripts/local/` and the grep gates in
+`.github/workflows/lint-harness.yml`, plus human reading. There is no generic
+fallback reviewer.
+
 There is no `dotnet-tools.json` and no solution to restore or build. The gates
 that matter are the PowerShell tests under `scripts/local/` and the grep gates
 in `.github/workflows/lint-harness.yml`.

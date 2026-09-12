@@ -116,6 +116,10 @@ Stage order and gates: see the agent-pipeline rule.
 Consult `/using-agent-skills` at the start of any non-trivial task; it routes to
 the right stage and supporting skills.
 
+## Code review
+
+`/code-review` is C#-evidence only. A diff with no `.cs` files is **out of scope for this skill** — a normal outcome, not a failed review — and does not fall back to a generic reviewer. Prose, markdown, scripts, and config use this repo's deterministic gates (`./scripts/run-*.ps1`) plus human reading. Axis reviewers **Report findings meeting the evidence threshold, up to 15** and say so if any evidence-backed findings were cut.
+
 ## Vocabulary
 
 Domain terms live in `CONTEXT.md` — use its canonical terms in code, specs, and

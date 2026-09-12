@@ -58,6 +58,13 @@ correctness **confirmation** in the consolidated report and **do not invoke**
 skip the lane and do not treat emptiness as a missing reviewer. If non-empty,
 invoke `/code-review` with that **explicit diff range**.
 
+When that nested `/code-review` returns `declined: true` with a non-null
+`decline_reason` and `findings: []`, or reports **out of scope for this skill**,
+the correctness lane is **out of scope**, not a clean pass. Record it as
+out-of-scope in the consolidated report. That is distinct from an empty rebase
+delta's named confirmation, and it is not a missing reviewer — the lane ran.
+Do not fold a declined nested review into a silently clean correctness result.
+
 Before dispatching, write a pre-pass scratch artifact for Security and Coverage.
 
 **Header** — the artifact starts with a Markdown header block containing these fields:
@@ -94,7 +101,7 @@ Dispatch security, coverage, and (when the rebase delta is non-empty) `/code-rev
 
 | Reviewer | Agent | Brief |
 |---|---|---|
-| Correctness & design | `/code-review` | First determine whether the rebase delta is empty. If empty: named confirmation, do not invoke `/code-review`, not a skipped lane. If non-empty: explicit diff range from stage-9-cleared commit to rebased head. |
+| Correctness & design | `/code-review` | First determine whether the rebase delta is empty. If empty: named confirmation, do not invoke `/code-review`, not a skipped lane. If non-empty: explicit diff range from stage-9-cleared commit to rebased head. If nested `/code-review` declines (no `.cs`): report the lane as **out of scope for this skill**, not a clean pass. |
 | Security | `security-reviewer` | `run-vulnerable-packages.ps1`, plus review for secrets/connection strings, injection, missing authorization, permissive CORS, PII in logs or telemetry attributes |
 | Coverage | `mutation-analyst` | Coverage gaps and Stryker survivors against the change set |
 
@@ -132,7 +139,7 @@ fix-and-re-run is round two. After the cap, unresolved review items move to
 `Follow-ups` with source and severity retained; make no further fix commits.
 - Blocking findings → fix, re-run from step 1, on that counter. After the cap they move to `Follow-ups`, not another fix commit.
 - Coverage gaps and surviving mutants → add tests, re-run mutation, on that counter. After the cap they move to `Follow-ups` with source and severity retained. A survivor means the test is inadequate — fix the test, not the threshold.
-- READY requires `/verify` passed, all three reviewers ran, `Blocking` empty, and no unresolved Critical/High finding anywhere in the consolidated report, regardless of bucket. Missing loop terms or a missing reviewer remain **NEEDS FIXES**. A Critical or High finding deferred to `Follow-ups` does not cause another post-cap fix commit, but it still prevents READY and any PR suggestion.
+- READY requires `/verify` passed, all three reviewers ran, `Blocking` empty, and no unresolved Critical/High finding anywhere in the consolidated report, regardless of bucket. Missing loop terms or a missing reviewer remain **NEEDS FIXES**. A Critical or High finding deferred to `Follow-ups` does not cause another post-cap fix commit, but it still prevents READY and any PR suggestion. A declined / out-of-scope nested `/code-review` still counts as the correctness reviewer having run, but the report must name the lane as out of scope rather than clean.
 - All clear (that readiness floor met) → summarise readiness and suggest opening the PR. Human gate 3 is merge at stage 12, after the PR exists.
 
 ## Rules

@@ -1,17 +1,39 @@
 ---
 name: code-review
-description: Review the changes since a fixed point (commit, branch, tag, or merge-base) along three axes — Risk (bugs, security, concurrency, coverage gaps), Standards (does the code follow this repo's documented standards?), and Spec (does it match what the issue/spec asked for?). Scores blast radius, runs a Roslyn pre-pass, fans out to parallel sub-agents, verifies findings, and reports them severity-ranked. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
+description: Review C# changes since a fixed point (commit, branch, tag, or merge-base) along three axes — Risk (bugs, security, concurrency, coverage gaps), Standards (does the code follow this repo's documented standards?), and Spec (does it match what the issue/spec asked for?). Classifies the diff first: no `.cs` files is out of scope for this skill. Scores blast radius, runs a Roslyn pre-pass, fans out to parallel sub-agents, verifies findings, and reports them severity-ranked. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
 ---
 
-Three-axis review of the diff between `HEAD` and a fixed point the user supplies:
+Three-axis review of the **C#** diff between `HEAD` and a fixed point the user supplies:
 
 - **Risk** — is the code correct, safe, and adequately tested?
 - **Standards** — does the code conform to this repo's documented coding standards?
 - **Spec** — does the code faithfully implement the originating issue / spec?
 
+This skill reviews compiled C# evidence only. A diff with no `.cs` files is **out of scope for this skill** — a normal outcome, not a failed review. There is no generic language fallback.
+
 Each axis runs in an isolated sub-agent when the host supports delegation, with parallel execution when available; otherwise the briefs run inline. Findings are then verified, ranked by severity, and published through the host's native review mechanism, with a Markdown fallback.
 
 ## Process
+
+### Classify the diff (before Step 0)
+
+Before resolving loop terms (Step 0) and before blast-radius scoring (Step 2), classify changed file extensions.
+
+Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it. If the caller supplies an explicit diff range, classify and later review only that range.
+
+Resolve the range only far enough to list extensions: `git rev-parse` the fixed point (or the explicit range) and `git diff --name-only <fixed-point>...HEAD` (three-dot, or the caller-supplied range). If the range itself cannot be resolved — bad ref, unreadable, or empty diff — stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**. That is not an out-of-scope refusal.
+
+If the non-empty file list contains **zero** `.cs` files:
+
+- Stop before Step 0 loop-term fail-closed, before Step 2 blast-radius scoring, before Step 3 Roslyn/tooling, before Step 3a pre-pass artifact creation, and before Steps 4–7 fan-out.
+- Report a normal **out of scope for this skill** outcome — not a failed review, not **Could not run**, not **NEEDS FIXES**. Do not route to `/remediate`.
+- Name what was skipped and why: no compiled C# in the diff, so Roslyn, `dotnet format --verify-no-changes`, `dotnet build`, blast-radius scoring, and axis fan-out do not run.
+- Name the applicable deterministic repo gates instead (consumer `./scripts/run-*.ps1`, or this harness's PowerShell tests and lint grep gates). There is no generic language fallback and no prose blast-radius row.
+- Skip Steps 0–7. Go to Step 8 and emit the declined findings artifact: `declined: true`, non-null `decline_reason`, `findings: []`.
+
+`.cs` presence is the proxy. A mixed diff with any `.cs` file — including incidental, generated, or fixture C# — takes the C# path below. That cost is accepted.
+
+If any changed file has a `.cs` extension, continue at Step 0.
 
 ### 0. Resolve loop terms
 
@@ -19,9 +41,7 @@ Resolve `FEATURE_DIR` as `/pipeline`: task value, or `.specify/scripts/powershel
 
 ### 1. Pin the fixed point
 
-Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it.
-
-Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+Reuse the fixed point and range already resolved during classification. Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
 
 Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here — not inside three parallel sub-agents.
 
@@ -144,6 +164,9 @@ False positives are the main failure mode. Before reporting, check each finding 
 
 - **Read the actual code** at the cited `file:line` — sub-agents work from a diff and miss surrounding context that can invalidate a finding (a null check three lines up, an `[Authorize]` on the parent group, an existing test elsewhere).
 - **Drop** anything contradicted by the code, already enforced by tooling, or pre-existing rather than introduced by this change.
+- **Evidence threshold.** Keep a finding only when it has a concrete failure scenario, a cited documented rule, or a quoted spec line. Otherwise ask a question or drop it — unproven concerns become questions/context, not findings.
+- **Minimality.** Challenge unnecessary scope and abstraction in any proposed correction before it reaches the report.
+- **Cap.** Report findings meeting the evidence threshold, up to 15. The 15 is a cap, not silent truncation: say so if any evidence-backed findings were cut.
 - **Mark** each survivor `CONFIRMED` (you verified the failing path) or `PLAUSIBLE` (reasoned but not proven).
 
 Cheap and worth it — a review that cries wolf gets ignored.
@@ -156,7 +179,15 @@ If the host has no structured review mechanism, emit the findings under a `## Fi
 
 Additionally write a findings artifact as JSON via a native JSON serializer only (no concatenation or interpolation). Envelope: `schema` pr-review/findings@1; `head_sha` repository-resolved full 40-char; required `fixed_point` (base ref/SHA); `generated_at` UTC Z; `declined`; `decline_reason`; `findings` matching `skills/pr-review/scripts/review-schema.json` `$defs/finding`. Verified only. Clean: declined false, findings []. Decline only from evidenced DEV-113 no-compiled-C#: declined true, non-null decline_reason, findings []. Finding requires severity, category, file, verdict; add line, start_line, side when pinned, plus summary, failure_scenario, short_summary; rule if Standards cites one; emit `fix` only when the schema carries it, otherwise omit. Absolute caller path else host temp/scratch. Allowed roots: `<temp>/pr-review` and temp/scratch — not working tree unless gitignored. Symlink/reparse check; no unsafe overwrite; atomic temp+rename. Report the path.
 
-Then add a short text summary only — not a restatement of the findings:
+Then add a short text summary only — not a restatement of the findings. On a declined no-C# classification, skip the axis/tooling block and say:
+
+```
+Reviewed <n> files since <fixed-point> — out of scope for this skill (no .cs in the diff).
+Skipped: loop terms, blast-radius scoring, Roslyn, tooling, pre-pass artifact, fan-out.
+Applicable gates: this repo's deterministic scripts / lint, plus human reading.
+```
+
+Otherwise:
 
 ```
 Reviewed <n> files (<n> Critical, <n> High blast radius) since <fixed-point>.
@@ -168,7 +199,7 @@ Tooling: dotnet build / format — pass | fail
 
 Report the worst issue **within each axis**. Don't declare a single cross-axis winner.
 
-Sort verified findings against `brief.md`'s closing bar and frozen scope. Above the bar go to `/remediate`. Below the bar or outside the frozen scope go to Follow-ups; never silently relabelled `Non-blocking`. Keep the original source and severity. The stage clears only when no finding above the closing bar remains. A Critical or High finding deferred to Follow-ups does not cause another post-cap fix commit, but it still prevents the review stage from clearing.
+A declined no-C# outcome (`declined: true`, non-null `decline_reason`, `findings: []`) is **out of scope for this skill**, not a failed review: it does not go to `/remediate`. Sort verified findings against `brief.md`'s closing bar and frozen scope. Above the bar go to `/remediate`. Below the bar or outside the frozen scope go to Follow-ups; never silently relabelled `Non-blocking`. Keep the original source and severity. The stage clears only when no finding above the closing bar remains. A Critical or High finding deferred to Follow-ups does not cause another post-cap fix commit, but it still prevents the review stage from clearing.
 
 ## Severity
 
