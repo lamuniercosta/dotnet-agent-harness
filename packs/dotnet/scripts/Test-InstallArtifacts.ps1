@@ -89,6 +89,12 @@ try {
     $repos += $repo
     Invoke-Install -Repo $repo | Out-Null
     $claude = Get-Content -LiteralPath (Join-Path $repo 'CLAUDE.md') -Raw
+    $agents = Get-Content -LiteralPath (Join-Path $repo 'AGENTS.md') -Raw
+
+    Assert-That 'CLAUDE.md includes C#-only review refusal' ($claude -match 'out of scope for this skill')
+    Assert-That 'CLAUDE.md includes evidence threshold' ($claude -match 'Report findings meeting the evidence threshold, up to 15')
+    Assert-That 'AGENTS.md includes C#-only review refusal' ($agents -match 'out of scope for this skill')
+    Assert-That 'AGENTS.md includes evidence threshold' ($agents -match 'Report findings meeting the evidence threshold, up to 15')
 
     # ── Generated named agents: all hosts, native syntax ────────────────────
     $expectedAgentNames = @(Get-ChildItem -LiteralPath (Join-Path $harnessRoot '.claude/agents') `

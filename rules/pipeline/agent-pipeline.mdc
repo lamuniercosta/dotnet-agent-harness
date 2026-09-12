@@ -16,7 +16,7 @@ alwaysApply: true
 6. **Implement** — `/implement` (TDD optional; unit + integration tests must pass)
 7. **Refactor** — `/refactor` (complexity ≤ `gates.complexity.refactor`, property tests)
 8. **Architect** — `/architect` (Stryker mutation ≥ `gates.mutation.threshold`; Gherkin mutation only if acceptance tests exist)
-9. **Code review** *(gated)* — `/code-review`; above-bar findings → `/remediate` → re-review until clean
+9. **Code review** *(gated)* — `/code-review`; above-bar findings → `/remediate` → re-review until clean. A no-C# refusal is **out of scope for this skill**, not a failed review, and does not route to `/remediate`
 10. **Ship** — `./scripts/rebase-task-branch.ps1 -Push`, then `/ship-review`, then open the PR
 11. **Address PR review** *(conditional)* — `/address-pr-review` when external feedback arrives
 12. **Merge** *(human gate 3)* — the human reads the PR on GitHub and merges
@@ -57,6 +57,7 @@ leaves the cause in place; the table says where to go back to.
 | Gherkin mutation survivor *(opt-in only)* | A mutated `Then` step still passes | `/implement` — strengthen the binding |
 | Coverage gap | Uncovered branch in changed files | `/implement` |
 | Review finding above the closing bar | `/code-review` or `/address-pr-review` reports a finding meeting `brief.md`'s bar | `/remediate` |
+| `/code-review` out of scope (no `.cs`) | Skill reports **out of scope for this skill** with a declined zero-finding artifact | Do not route to `/remediate`; not a failed review |
 
 Never route a failure to the threshold. Lowering `gates.*` to clear a gate converts a
 finding into a silence, and the next run reports green having verified less.
@@ -78,7 +79,9 @@ do not converge:
 3. **A round cap** (two, by default). Past the cap, unresolved findings become
    follow-up issues and the stage exits.
 
-Stage 9 loops to `/remediate` until it finds nothing. Round one reviews the whole
+Stage 9 loops to `/remediate` until it finds nothing above the bar. A normal
+no-C# refusal (`out of scope for this skill`) is not a finding, does not look
+like a failed review, and does not enter `/remediate`. Round one reviews the whole
 change and freezes its findings. Every later round reviews **only the diff that
 fixed the previous round's findings**. Each round's input is strictly smaller
 than the last, so the loop converges. The round cap is a backstop: a fix diff

@@ -106,6 +106,26 @@ jobs:
           fi
           echo "code-review Step 8 includes the findings-artifact sink."
 
+      # ---- code-review enforcement (DEV-113) ----------------------------
+      - name: Code-review enforcement checks
+        run: |
+          # 1. No-C# refusal wording
+          if ! grep -qr "out of scope for this skill" skills/code-review/; then
+            echo "::error::Missing C# refusal wording."
+            exit 1
+          fi
+          # 2. Evidence threshold wording
+          if ! grep -qr "Report findings meeting the evidence threshold, up to 15" skills/code-review/; then
+            echo "::error::Missing evidence threshold wording."
+            exit 1
+          fi
+          # 3. Negative check for old quota wording
+          if grep -qr "spec gaps are rarely numerous" skills/code-review/; then
+            echo "::error::Old quota wording found."
+            exit 1
+          fi
+          echo "code-review enforcement checks passed."
+
       # ---- pr-review user-facing workflow (DEV-114) ---------------------
       # Supporting skill, not a pipeline stage. Multiple distinct phrases so
       # leftover helper-verb docs or the one-line publish-chain summary cannot

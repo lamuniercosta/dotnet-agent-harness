@@ -186,12 +186,14 @@ the phase directly — see [Limitations](#limitations-under-codex).
 6. **Implement** — TDD optional; unit + integration tests must pass
 7. **Refactor** — `/refactor`
 8. **Architect** — `/architect`
-9. **Code review** *(gated)* — `/code-review`; above-bar findings → `/remediate` → re-review
+9. **Code review** *(gated)* — `/code-review`; above-bar findings → `/remediate` → re-review. A no-C# refusal is **out of scope for this skill**, not a failed review, and does not route to `/remediate`
 10. **Ship** — rebase → `/ship-review` → open the PR
 11. **Address PR review** *(conditional)* — `/address-pr-review` when external feedback arrives
 12. **Merge** — *human gate 3*
 
 Never skip the grill, and never route a failing gate to lowering its threshold.
+
+`/code-review` is C#-evidence only. A diff with no `.cs` files is **out of scope for this skill** — a normal outcome, not a failed review — and does not fall back to a generic reviewer. Prose, markdown, scripts, and config use this repo's deterministic gates (`./scripts/run-*.ps1`) plus human reading. Axis reviewers **Report findings meeting the evidence threshold, up to 15** and say so if any evidence-backed findings were cut.
 
 `/code-review` and `/ship-review` have no numeric gate, unlike Implement/Refactor/Architect — they must be given a stop condition explicitly, in `brief.md`, before Stage 6 (Implement):
 

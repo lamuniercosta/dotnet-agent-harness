@@ -1,10 +1,10 @@
 {
   "schemaVersion": 1,
-  "measuredAt": "2026-09-09T08:36:11.9076850Z",
+  "measuredAt": "2026-09-11T11:19:54.3276083Z",
   "hosts": {
     "claude": {
-      "bytes": 20182,
-      "estTokens": 5046,
+      "bytes": 21081,
+      "estTokens": 5271,
       "files": [
         "rules/pipeline/agent-pipeline.mdc",
         "rules/pipeline/delegation.mdc",
@@ -13,15 +13,15 @@
       ]
     },
     "codex": {
-      "bytes": 15010,
-      "estTokens": 3753,
+      "bytes": 15556,
+      "estTokens": 3889,
       "files": [
         "adapters/codex/AGENTS.md"
       ]
     },
     "cursor": {
-      "bytes": 14149,
-      "estTokens": 3538,
+      "bytes": 14595,
+      "estTokens": 3649,
       "files": [
         "rules/pipeline/agent-pipeline.mdc",
         "rules/pipeline/delegation.mdc",
