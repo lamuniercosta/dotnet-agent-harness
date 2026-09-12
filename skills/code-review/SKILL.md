@@ -9,7 +9,7 @@ Three-axis review of the **C#** diff between `HEAD` and a fixed point the user s
 - **Standards** — does the code conform to this repo's documented coding standards?
 - **Spec** — does the code faithfully implement the originating issue / spec?
 
-This skill reviews compiled C# evidence only. A diff with no `.cs` files is **out of scope for this skill** — a normal outcome, not a failed review. There is no generic language fallback.
+This skill reviews compiled C# evidence only. A diff with no `.cs` files is **out of scope for this skill** — a normal outcome, not a failed review. There is no generic language fallback. This C#-only boundary is the ADR 0022 contract (docs/adr/0022-harness-targets-csharp-only.md): no compiled C# means the review is declined as out of scope, with a zero-finding declined artifact, not rerouted to a generic reviewer.
 
 Each axis runs in an isolated sub-agent when the host supports delegation, with parallel execution when available; otherwise the briefs run inline. Findings are then verified, ranked by severity, and published through the host's native review mechanism, with a Markdown fallback.
 
