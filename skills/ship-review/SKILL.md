@@ -63,7 +63,7 @@ When that nested `/code-review` returns `declined: true` with a non-null
 the correctness lane is **out of scope**, not a clean pass. Record it as
 out-of-scope in the consolidated report. That is distinct from an empty rebase
 delta's named confirmation, and it is not a missing reviewer — the lane ran.
-Do not fold a declined nested review into a silently clean correctness result.
+Do not fold a declined nested review into a silently clean correctness result. This nested correctness-lane behavior follows ADR 0022 (docs/adr/0022-harness-targets-csharp-only.md): a declined no-C# /code-review is out of scope, not a clean correctness pass.
 
 Before dispatching, write a pre-pass scratch artifact for Security and Coverage.
 
