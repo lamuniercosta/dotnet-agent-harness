@@ -476,6 +476,8 @@ try {
 
     # (d) Drop GET_TASK_MOCK_TRACKER and Scope property
     Set-Content -LiteralPath (Join-Path $wtWork 'harness.yml') -Encoding UTF8 -Value 'tracker: youtrack'
+    $env:YOUTRACK_URL = 'https://example.invalid'
+    $env:YOUTRACK_TOKEN = 'perm:test-token'
     $tempEnv = Join-Path $tempRoot 'env.txt'
     $reader = {
         param($Name, $Target)
