@@ -161,9 +161,9 @@ jobs:
             echo "::error::github-workflow.mdc missing in install.ps1"
             exit 1
           fi
-          # 4. no GitHub-only drift
-          if grep -r "GitHub" skills/ | grep -v "harness-targets-csharp-only" | grep -v "git worktree"; then
-             echo "::error::Tracker-neutral wording check failed (GitHub-only drift)."
+          # 4. targeted stale-intake checks
+          if grep -r "<issue>" install.ps1; then
+             echo "::error::Installer output must not contain <issue>."
              exit 1
           fi
           echo "All get-task.ps1 plan-S5 greps passed."

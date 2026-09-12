@@ -78,8 +78,7 @@ function Get-TrackerEnvironmentVariable {
     }
 
     $process = & $reader $Name 'Process'
-    if ($null -ne $process) {
-        if ([string]::IsNullOrWhiteSpace([string]$process)) { return $null }
+    if (-not [string]::IsNullOrWhiteSpace([string]$process)) {
         return ([string]$process).Trim()
     }
 
@@ -174,7 +173,7 @@ function Get-GitHubTask {
 function Get-YouTrackTask {
     param([string]$Id)
 
-    if ($Id -notmatch '^[A-Za-z][A-Za-z0-9._]*-\d+$') {
+    if ($Id -notmatch '^[A-Za-z][A-Za-z0-9]*-\d+$') {
         throw "YouTrack task ids must be a readable id such as DAH-123 (got '$Id')."
     }
 

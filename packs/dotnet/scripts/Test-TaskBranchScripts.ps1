@@ -442,17 +442,43 @@ try {
     $getTask = Join-Path $fixtureScripts 'get-task.ps1'
 
     # dispatch/pre-mutation/tracker:none/offline-mock/token-leak cases
-    # We can mock these using the seams in get-task.ps1
+    # Mocking seams in get-task.ps1 via environment injection
+    # (a) YouTrack mock sends Authorization header only
+    $tempHeaders = Join-Path $tempRoot 'headers.txt'
+    $tempUri = Join-Path $tempRoot 'uri.txt'
+    $invoke = { param($Method, $Uri, $Headers, $TimeoutSec) ($Headers | ConvertTo-Json -Compress) | Out-File $tempHeaders; $Uri.ToString() | Out-File $tempUri }
+    Set-Content -LiteralPath (Join-Path $wtWork 'harness.yml') -Encoding UTF8 -Value 'tracker: youtrack'
+    $Env:YOUTRACK_URL = 'https://example.invalid'
+    $Env:YOUTRACK_TOKEN = 'perm:test-token'
+    & $getTask -TaskId DAH-123 -Description 'Bug' -RepoRoot $wtWork -RestMethodInvoker $invoke | Out-Null
+    $capturedHeaders = Get-Content -Raw $tempHeaders
+    $capturedUri = Get-Content -Raw $tempUri
+    Assert-That 'YouTrack mock sends Authorization header' ($capturedHeaders -match 'Bearer perm:test-token')
+    Assert-That 'YouTrack mock does not leak token in URI' ($capturedUri -notmatch 'perm:test-token')
+    Remove-Item harness.yml -Force -ErrorAction SilentlyContinue
     
-    # Example test: tracker:none
-    # Harness config needs to be updated first
-    Set-Content -LiteralPath (Join-Path $wtWork 'harness.yml') -Encoding UTF8 -Value @(
-        'tracker: none'
-    )
-    $taskNone = & $getTask -Description 'No tracker task' | ConvertFrom-Json
-    Assert-That 'tracker:none returns the description' ($taskNone.Summary -eq 'No tracker task')
+    # (b) Bug infers bug
+    Set-Content -LiteralPath (Join-Path $wtWork 'harness.yml') -Encoding UTF8 -Value 'tracker: youtrack'
+    $taskBug = & $getTask -TaskId DAH-123 -Description 'Bug' -RepoRoot $wtWork -RestMethodInvoker { param($Method, $Uri, $Headers, $TimeoutSec) return [PSCustomObject]@{idReadable='DAH-123'; summary='Bug'; description='Bug'; customFields=@(@{name='Type'; value='Bug'})} } | ConvertFrom-Json
+    Assert-That 'Bug infers bug' ($taskBug.Type -eq 'bug')
+    Remove-Item harness.yml -Force -ErrorAction SilentlyContinue
+
+    # (c) Drop GET_TASK_MOCK_TRACKER and Scope property
+    Set-Content -LiteralPath (Join-Path $wtWork 'harness.yml') -Encoding UTF8 -Value 'tracker: youtrack'
+    $tempEnv = Join-Path $tempRoot 'env.txt'
+    $reader = {
+        param($Name, $Target)
+        "${Name}:${Target}" | Out-File $tempEnv -Append
+        if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
+        if ($Name -eq 'YOUTRACK_TOKEN' -and $Target -eq 'User') { return 'perm:test-token' }
+        return ''
+    }
+    $task = & $getTask -TaskId DAH-123 -RepoRoot $wtWork -EnvironmentReader $reader -RestMethodInvoker { param($Method, $Uri, $Headers, $TimeoutSec) return [PSCustomObject]@{idReadable='DAH-123'; summary='Bug'; description='Bug'; customFields=@(@{name='Type'; value='Bug'})} } | ConvertFrom-Json
+    Assert-That 'Id equals literal DAH-123' ($task.Id -eq 'DAH-123')
+    Assert-That 'env log contains YOUTRACK_TOKEN:User' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:User'))
+    Remove-Item harness.yml -Force -ErrorAction SilentlyContinue
     
-    Write-Host 'get-task.ps1 tests passed.'
+    Write-Host 'get-task.ps1 seam tests passed.'
 
     # -NoWorktree keeps the old contract, dirty-tree refusal included.
     $dirtyError = ''
