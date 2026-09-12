@@ -120,7 +120,7 @@ the right stage and supporting skills.
 
 `/code-review` is C#-evidence only. A diff with no `.cs` files is **out of scope for this skill** — a normal outcome, not a failed review — and does not fall back to a generic reviewer. Prose, markdown, scripts, and config use this repo's deterministic gates (`./scripts/run-*.ps1`) plus human reading. Axis reviewers **Report findings meeting the evidence threshold, up to 15** and say so if any evidence-backed findings were cut.
 
-Callers transport a scoped review as the single-line field `Explicit diff range: <fixed-point>...HEAD`. The right side is always `HEAD`. A malformed range fails closed (**Could not run** / **NEEDS FIXES**) before fan-out.
+Callers transport a scoped review as the single-line field `Explicit diff range: <fixed-point>...HEAD`. The right side is always `HEAD`. Malformed, unresolved, empty, or head-mismatched ranges fail closed (**Could not run** / **NEEDS FIXES**) before fan-out.
 
 ## Vocabulary
 

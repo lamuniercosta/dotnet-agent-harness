@@ -647,6 +647,9 @@ try {
         'missing closing bar, frozen scope, or round cap must stop before fan-out'
     Assert-That 'Codex code-review accepts an explicit diff range' `
         (($codexCodeReview -match '(?is)Explicit diff range: <fixed-point>\.\.\.HEAD') -and
+         ($codexCodeReview -match '(?is)Explicit diff range: <[A-Za-z0-9_-]+>\.\.\.HEAD') -and
+         ($codexCodeReview -match '(?is)Right endpoint is the literal HEAD') -and
+         ($codexCodeReview -match '(?is)No endpoint beginning with dash') -and
          ($codexCodeReview -match '(?is)Could not run') -and
          ($codexCodeReview -match '(?is)NEEDS FIXES') -and
          ($codexCodeReview -match '(?is)review only that range')) `
@@ -672,6 +675,9 @@ try {
         'a Claude/Cursor skills-path copy must keep the fail-closed loop terms'
     Assert-That 'Claude code-review accepts an explicit diff range' `
         (($claudeCodeReview -match '(?is)Explicit diff range: <fixed-point>\.\.\.HEAD') -and
+         ($claudeCodeReview -match '(?is)Explicit diff range: <[A-Za-z0-9_-]+>\.\.\.HEAD') -and
+         ($claudeCodeReview -match '(?is)Right endpoint is the literal HEAD') -and
+         ($claudeCodeReview -match '(?is)No endpoint beginning with dash') -and
          ($claudeCodeReview -match '(?is)Could not run') -and
          ($claudeCodeReview -match '(?is)NEEDS FIXES') -and
          ($claudeCodeReview -match '(?is)review only that range')) `

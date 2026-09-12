@@ -19,9 +19,9 @@ Each axis runs in an isolated sub-agent when the host supports delegation, with 
 
 Before resolving loop terms (Step 0) and before blast-radius scoring (Step 2), classify changed file extensions.
 
-Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it. If the invocation prompt carries `Explicit diff range: <fixed-point>...HEAD`, classify and later review only that range after Step 1's validation.
+Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it. If the invocation prompt carries `Explicit diff range: <fixed-point>...HEAD`, classify and later review only that range. Validate that field first, before any `git rev-parse` or `git diff`: single line; exactly one three-dot separator (reject two-dot ranges and ranges with more than three dots); non-empty endpoints; no whitespace; no endpoint beginning with dash; right endpoint is the literal HEAD. On any malformation: stop, report **Could not run** with the failed range check, verdict **NEEDS FIXES**.
 
-Resolve the range only far enough to list extensions: `git rev-parse` the fixed point (or the left side of the accepted explicit range) and `git diff --name-only` of the accepted `diff_range` (`<fixed-point>...HEAD`, three-dot). If the range itself cannot be resolved — bad ref, unreadable, empty diff, or a failed Step 1 range check — stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**. That is not an out-of-scope refusal.
+Then resolve the accepted range only far enough to list extensions: `git rev-parse` the fixed point (or the left side of the accepted explicit range) and `git diff --name-only` of the accepted `diff_range` (`<fixed-point>...HEAD`, three-dot). If the range itself cannot be resolved — bad ref, unreadable, or empty diff — stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**. That is not an out-of-scope refusal.
 
 If the non-empty file list contains **zero** `.cs` files:
 
@@ -52,11 +52,11 @@ Explicit diff range: <fixed-point>...HEAD
 When the field is present, review only that range. Validate the transported value before fan-out:
 
 - Single line
-- Contains exactly one `...` (three-dot; reject `..`)
+- Contains exactly one three-dot separator; reject two-dot ranges and ranges with more than three dots.
 - Non-empty endpoints
 - No whitespace
-- No endpoint beginning with `-`
-- Right endpoint is the literal `HEAD`
+- No endpoint beginning with dash
+- Right endpoint is the literal HEAD
 - Left endpoint resolves with `git rev-parse`
 - `HEAD` resolves to the current review head (`git rev-parse HEAD`)
 

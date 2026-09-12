@@ -109,10 +109,14 @@ jobs:
       # ---- code-review Step 1 explicit-range transport ------------------
       - name: Code-review skill uses the explicit-range transport
         run: |
-          if ! grep -qF 'Explicit diff range: <fixed-point>...HEAD' skills/code-review/SKILL.md || \
-             ! grep -qF 'Could not run' skills/code-review/SKILL.md || \
-             ! grep -qF 'NEEDS FIXES' skills/code-review/SKILL.md; then
-            echo "::error file=skills/code-review/SKILL.md::missing explicit-range transport or fail-closed wording"
+          if ! grep -qF 'Explicit diff range: <fixed-point>...HEAD' skills/code-review/SKILL.md; then
+            echo "::error file=skills/code-review/SKILL.md::missing explicit-range transport"
+            exit 1
+          fi
+          # Anchor Could-not-run/NEEDS-FIXES to the explicit-range validation paragraph
+          if ! sed -n '42,70p' skills/code-review/SKILL.md | grep -qF 'Could not run' || \
+             ! sed -n '42,70p' skills/code-review/SKILL.md | grep -qF 'NEEDS FIXES'; then
+            echo "::error file=skills/code-review/SKILL.md::missing Could-not-run or NEEDS-FIXES in Step 1 validation"
             exit 1
           fi
           echo "code-review Step 1 includes explicit-range transport."

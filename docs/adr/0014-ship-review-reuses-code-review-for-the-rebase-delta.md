@@ -11,7 +11,7 @@ cleared tree and the pre-PR tree is the rebase delta.
 `/ship-review` keeps its full blocking `/verify` run and its security and
 coverage lanes. When the rebase delta from the commit stage 9 cleared to the
 rebased head is non-empty, the correctness lane invokes `/code-review` with
-that explicit diff range. When the rebase delta is empty, ship-review records
+`Explicit diff range: <stage-9-cleared-commit>...HEAD`. When the rebase delta is empty, ship-review records
 a named correctness confirmation and does not invoke `/code-review`, so the
 lane still appears in the three-lane readiness report without hitting
 `/code-review`'s empty-diff fail-closed.
