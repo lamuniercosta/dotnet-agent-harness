@@ -34,7 +34,10 @@
 #  10. Skip reporting (DEV-116): four junction/symlink skip sites record a
 #      distinct stable reason via Skip-Test; the summary prints the skip count
 #      next to the failure count; when $env:CI -eq 'true', any skip exits
-#      non-zero. Local runs with skips still exit 0.
+#      non-zero. Local runs with skips still exit 0. DEV-189 covers that policy
+#      through a hidden per-invocation -ForceSkipProbe switch (default off;
+#      never an ambient env var) that calls Skip-Test and still uses this
+#      file's common summary/exit tail.
 #
 # DEV-176 review-render acceptance (quoted labels are exact assertions below):
 #
@@ -79,6 +82,20 @@
 #   (h) 'a quoted marker inside a bot body is ignored by the anchored parser'
 #   (i) 'null or empty thread comment nodes are skipped without throwing'
 #
+# DEV-189 skip-count CI policy (quoted labels are exact assertions below):
+#
+#   (a) 'with child CI=true a forced skip exits nonzero' and 'with child
+#       CI=true the same run reports 1 skipped'
+#   (b) 'with child CI=TRUE a forced skip exits nonzero' (PowerShell -eq)
+#   (c) 'with child CI unset a forced skip exits 0' and 'with child CI unset
+#       the same run reports 1 skipped'
+#   (d) 'with child CI=false a forced skip exits 0' and 'with child CI=false
+#       the same run reports 1 skipped'
+#   (e) 'with child CI=1 a forced skip exits 0' and 'with child CI=1 the
+#       same run reports 1 skipped'
+#   Nonzero skip is distinguished from a clean '0 skipped' baseline on the
+#   same captured run; matching the word skipped alone is insufficient.
+#
 # Guards the defects found in review of #86 that no test caught:
 #
 #   1. `gh api --paginate` emits one JSON document per page, so any PR crossing a
@@ -116,7 +133,11 @@
 #   pwsh ./scripts/local/Test-PrReviewHelper.ps1
 
 [CmdletBinding()]
-param()
+param(
+    # Per-invocation DEV-189 probe hook. Default off; never an ambient env var.
+    [Parameter(DontShow)]
+    [switch]$ForceSkipProbe
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -161,6 +182,97 @@ function Skip-Test {
     $script:skipped++
     Write-Host "  SKIP     $Reason" -ForegroundColor Yellow
 }
+
+function Invoke-SkipCountProbeChild {
+    # Hardened capture: ProcessStartInfo records stdout/stderr/exit without
+    # NativeCommandError, and CI is injected only into the child environment.
+    param(
+        [Parameter()]
+        [AllowNull()]
+        [string]$CiValue,
+        [switch]$CiUnset
+    )
+
+    $pwshExe = (Get-Process -Id $PID).Path
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $pwshExe
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    foreach ($a in @('-NoProfile', '-File', $PSCommandPath, '-ForceSkipProbe')) {
+        [void]$psi.ArgumentList.Add($a)
+    }
+    if ($CiUnset) {
+        [void]$psi.Environment.Remove('CI')
+    }
+    else {
+        $psi.Environment['CI'] = $CiValue
+    }
+
+    $proc = $null
+    $exitCode = -1
+    $stdoutText = ''
+    $stderrText = ''
+    try {
+        $proc = [System.Diagnostics.Process]::Start($psi)
+        try { $proc.StandardInput.Close() } catch { }
+        $outTask = $proc.StandardOutput.ReadToEndAsync()
+        $errTask = $proc.StandardError.ReadToEndAsync()
+        if (-not $proc.WaitForExit(60000)) {
+            try { $proc.Kill($true) } catch { }
+            [void]$proc.WaitForExit(5000)
+            $ciLabel = if ($CiUnset) { '<unset>' } else { $CiValue }
+            throw "skip-count probe child timed out after 60s (CI=$ciLabel)"
+        }
+        $exitCode = $proc.ExitCode
+        $stdoutText = $outTask.GetAwaiter().GetResult()
+        $stderrText = $errTask.GetAwaiter().GetResult()
+    }
+    finally {
+        if ($null -ne $proc) { $proc.Dispose() }
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Text     = "$stdoutText$stderrText"
+    }
+}
+
+function Assert-SkipCountProbeRun {
+    param(
+        [string]$Label,
+        $Captured,
+        [int]$ExpectedExit
+    )
+    Assert-Equal "$Label a forced skip exits $(if ($ExpectedExit -eq 0) { '0' } else { 'nonzero' })" `
+        $ExpectedExit $Captured.ExitCode
+    Assert-True "$Label the same run reports 1 skipped" `
+        ($Captured.Text -match '(?m)\b1 skipped\b')
+    Assert-True "$Label the same run is distinguished from 0 skipped" `
+        ($Captured.Text -notmatch '(?m)\b0 skipped\b')
+    Assert-True "$Label the same run used Skip-Test" `
+        ($Captured.Text -match 'forced-skip-probe')
+}
+
+# Fast isolated probe: one Skip-Test, then the common summary/exit tail.
+# Must not write $script:skipped directly, exit before that tail, or run the
+# production junction/symlink skip sites.
+if ($ForceSkipProbe) {
+    Skip-Test 'forced-skip-probe'
+}
+else {
+    $probeCiTrue = Invoke-SkipCountProbeChild -CiValue 'true'
+    Assert-SkipCountProbeRun -Label 'with child CI=true' -Captured $probeCiTrue -ExpectedExit 1
+    $probeCiTRUE = Invoke-SkipCountProbeChild -CiValue 'TRUE'
+    Assert-SkipCountProbeRun -Label 'with child CI=TRUE' -Captured $probeCiTRUE -ExpectedExit 1
+    $probeCiUnset = Invoke-SkipCountProbeChild -CiUnset
+    Assert-SkipCountProbeRun -Label 'with child CI unset' -Captured $probeCiUnset -ExpectedExit 0
+    $probeCiFalse = Invoke-SkipCountProbeChild -CiValue 'false'
+    Assert-SkipCountProbeRun -Label 'with child CI=false' -Captured $probeCiFalse -ExpectedExit 0
+    $probeCiOne = Invoke-SkipCountProbeChild -CiValue '1'
+    Assert-SkipCountProbeRun -Label 'with child CI=1' -Captured $probeCiOne -ExpectedExit 0
 
 # ---------------------------------------------------------------------------
 # Load the helper's top-level functions and constants without running its
@@ -3264,6 +3376,8 @@ finally {
     }
     Remove-Item -LiteralPath $sandbox -Recurse -Force -ErrorAction SilentlyContinue
 }
+
+} # -not $ForceSkipProbe: full suite. Probe still falls through to the common tail.
 
 Write-Host ''
 Write-Host 'Scenario coverage map'
