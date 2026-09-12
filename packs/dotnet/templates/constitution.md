@@ -52,7 +52,7 @@ Ground rules for every feature. The agent reads this before planning; violations
 2. Structured logging only (`ILogger` with message templates). No `Console.WriteLine` outside entry points and throwaway debug (tagged `[DEBUG-...]`, removed before merge).
 3. No secrets or PII in logs, telemetry attributes, exception messages, or API responses. Telemetry attributes are exported more widely than logs and are the most commonly missed.
 4. Public API surface changes are breaking-change-reviewed: the contract diff is attached to the task.
-5. Commits reference the issue so the tracker links the work, as a suffix — `Add dark mode toggle (#142)`.
+5. Commits reference the task so the tracker links the work, as a suffix — GitHub `Add dark mode toggle (#142)`; YouTrack `Add retry handling (DAH-123)`. Description-only intake has no tracker suffix.
 6. Match the repo's existing architecture, assertion library, and mocking library. Introducing a second one is a defect, not a preference.
 
 ## Governance

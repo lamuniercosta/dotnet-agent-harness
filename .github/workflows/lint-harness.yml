@@ -141,6 +141,33 @@ jobs:
           fi
           echo "code-review enforcement checks passed."
 
+      # ---- get-task.ps1 plan-S5 greps ------------------------------------
+      - name: get-task.ps1 plan-S5 greps
+        run: |
+          # 1. get-task ships
+          if ! grep -q 'get-task.ps1' install.ps1; then
+            echo "::error::get-task.ps1 missing in install.ps1"
+            exit 1
+          fi
+          # 2. tracker-neutral wording
+          for f in skills/task/SKILL.md rules/pipeline/agent-pipeline.mdc adapters/codex/AGENTS.md adapters/claude/CLAUDE.md README.md; do
+            if ! grep -q 'tracker-neutral' "$f"; then
+              echo "::error file=$f::missing tracker-neutral wording"
+              exit 1
+            fi
+          done
+          # 3. github-workflow.mdc filename kept
+          if ! grep -q 'github-workflow.mdc' install.ps1; then
+            echo "::error::github-workflow.mdc missing in install.ps1"
+            exit 1
+          fi
+          # 4. no GitHub-only drift
+          if grep -r "GitHub" skills/ | grep -v "harness-targets-csharp-only" | grep -v "git worktree"; then
+             echo "::error::Tracker-neutral wording check failed (GitHub-only drift)."
+             exit 1
+          fi
+          echo "All get-task.ps1 plan-S5 greps passed."
+
       # ---- pr-review user-facing workflow (DEV-114) ---------------------
       # Supporting skill, not a pipeline stage. Multiple distinct phrases so
       # leftover helper-verb docs or the one-line publish-chain summary cannot

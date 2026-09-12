@@ -51,6 +51,13 @@ Assert-Throws 'duplicate key'    "tracker: github`ntracker: none"
 Assert-Throws 'tab indent'       "gates:`n`tmutation: x"
 Assert-Throws 'garbage line'     "this is not yaml"
 Assert-Throws 'legacy scalar agent tier' "agents:`n  tiers:`n    fast:`n      claude: inherit"
+try {
+    Assert-HarnessTracker -Tracker 'jira'
+    Write-Host "  FAIL  unsupported tracker - expected an error, got none" -ForegroundColor Red
+    $script:failures++
+} catch {
+    Write-Host "  ok    unsupported tracker -> $_"
+}
 
 Write-Host ''
 Write-Host 'Accepts valid input:'

@@ -471,6 +471,7 @@ if ($Platform -in @('codex', 'all')) {
 }
 
 Copy-Tree (Join-Path $harnessRoot 'rules/pipeline') (Join-Path $TargetRepo '.cursor/rules') 'rules -> .cursor/rules (Claude @imports these)'
+Add-Result 'github-workflow.mdc' 'SYNCED' 'pipeline rules'
 
 # Scoped pipeline rules (alwaysApply: false) also reach Claude Code through
 # .claude/rules/pipeline/, the same dual-directory model as vendor rules.
@@ -651,6 +652,7 @@ if ($PSCmdlet.ShouldProcess($TargetRepo, 'install harness config reader')) {
     Copy-Item (Join-Path $packScripts '_harness-config.ps1') (Join-Path $TargetRepo 'scripts/_harness-config.ps1') -Force
     Copy-Item (Join-Path $packScripts 'run-vulnerable-packages.ps1') (Join-Path $TargetRepo 'scripts/') -Force -ErrorAction SilentlyContinue
     Copy-Item (Join-Path $packScripts 'new-task-branch.ps1') (Join-Path $TargetRepo 'scripts/') -Force
+    Copy-Item (Join-Path $packScripts 'get-task.ps1') (Join-Path $TargetRepo 'scripts/') -Force
     Copy-Item (Join-Path $packScripts 'rebase-task-branch.ps1') (Join-Path $TargetRepo 'scripts/') -Force
 }
 

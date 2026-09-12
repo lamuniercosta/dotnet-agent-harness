@@ -27,8 +27,14 @@ pack: dotnet
 # Omit to use the remote's default branch (origin/HEAD).
 baseBranch: main
 
-# Issue tracker for `/task` intake. `github` uses the gh CLI; `none` means
-# branches are named from a description you pass directly.
+# Issue tracker for `/task` intake. One of:
+#   github   — GitHub Issues via the gh CLI (default, backward-compatible)
+#   youtrack — YouTrack REST via YOUTRACK_URL / YOUTRACK_TOKEN (header-only auth)
+#   none     — description-only; no tracker contact
+# There is no task.tracker setting and no CLI tracker override.
+# Alternatives:
+# tracker: youtrack
+# tracker: none
 tracker: github
 
 # Path to the solution. Omit to auto-resolve: the sole candidate wins; with
