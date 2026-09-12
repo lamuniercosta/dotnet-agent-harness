@@ -94,6 +94,16 @@ function Get-HarnessDefaults {
     }
 }
 
+$script:AllowedTrackers = @('github', 'youtrack', 'none')
+
+function Assert-HarnessTracker {
+    param([AllowNull()][string]$Tracker)
+
+    if ($script:AllowedTrackers -contains $Tracker) { return }
+    $shown = if ([string]::IsNullOrWhiteSpace($Tracker)) { '<empty>' } else { $Tracker }
+    throw "harness.yml tracker '$shown' is unsupported. Expected github, youtrack, or none."
+}
+
 function ConvertFrom-HarnessYaml {
     <#
       Parses the harness.yml subset into a flat hashtable keyed by dotted path.
@@ -209,6 +219,8 @@ function Get-HarnessConfig {
             if ($null -ne $parsed[$key]) { $config[$key] = $parsed[$key] }
         }
     }
+
+    Assert-HarnessTracker -Tracker $config['tracker']
 
     if (-not $config['baseBranch']) {
         $config['baseBranch'] = (Resolve-BaseRef -RepoRoot $RepoRoot -Explicit '') -replace '^origin/', ''

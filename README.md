@@ -94,7 +94,7 @@ which scaffolds a solution and then calls the same installer — one code path.
 
 - **PowerShell 7** (`pwsh`) — the gate scripts
 - **.NET SDK**, plus `dotnet tool restore` (provisions `jb` and `dotnet-stryker`)
-- **`gh` CLI** — issue intake. Optional: pass a description instead
+- **`gh` CLI** — required only for `tracker: github` intake. Optional under `youtrack` or `none`, or when you pass a description instead
 - [**Spec Kit**](https://github.com/github/spec-kit) `0.8.14` — a pinned runtime
   dependency, not vendored
 
@@ -131,7 +131,7 @@ is generated from `globs:`, because the two have different semantics (`*.cs` mea
 ## The pipeline
 
 ```
-0  task              read the issue, branch off the default branch in a worktree
+0  task              tracker-neutral read of the configured task, branch in a worktree
 1  grill-with-docs   MANDATORY alignment — settle vocabulary before any spec
 2  spec              specify → clarify → checklist → plan → tasks → analyze
 3  ── human gate 1 ──
@@ -206,13 +206,49 @@ solution by glob, the base branch from git.
 ```yaml
 pack: dotnet
 baseBranch: main
-tracker: github
+tracker: github   # or youtrack, or none
 gates:
   complexity:
     implement: 15
     refactor: 6
   mutation:
     threshold: 80
+```
+
+Intake is **tracker-neutral**. `tracker: github` (the default) keeps GitHub Issues via `gh`. `tracker: youtrack` reads tasks through YouTrack REST using `YOUTRACK_URL` and `YOUTRACK_TOKEN` only — the token is sent as `Authorization: Bearer`, never in a URL, error, or log, and must begin with `perm:`. `tracker: none` is description-only and does not contact a tracker. There is no `task.tracker` setting and no CLI override.
+
+Existing consumer `AGENTS.md`, `CLAUDE.md`, and constitutions are skip-if-exists / rendered only when absent — reinstalling this harness does not rewrite them. Fresh installs get the updated constitution wording; already-installed docs keep their current text until the repo edits them.
+
+YouTrack on Windows (one-time). Environment variables are plaintext process/user configuration, not a secret vault — document that tradeoff, and never print the token:
+
+```powershell
+$youTrackUrl = 'https://lamuniercosta.youtrack.cloud'
+$secureToken = Read-Host 'Paste the YouTrack permanent token' -AsSecureString
+$tokenHandle = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+
+try {
+    $plainToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenHandle)
+
+    if ([string]::IsNullOrWhiteSpace($plainToken) -or
+        -not $plainToken.StartsWith('perm:', [StringComparison]::Ordinal)) {
+        throw "Expected a YouTrack permanent token beginning with 'perm:'."
+    }
+
+    [Environment]::SetEnvironmentVariable('YOUTRACK_URL', $youTrackUrl, 'User')
+    [Environment]::SetEnvironmentVariable('YOUTRACK_TOKEN', $plainToken, 'User')
+
+    $env:YOUTRACK_URL = $youTrackUrl
+    $env:YOUTRACK_TOKEN = $plainToken
+
+    Write-Host 'YouTrack environment variables were set for this shell and the current Windows user.'
+}
+finally {
+    if ($tokenHandle -ne [IntPtr]::Zero) {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenHandle)
+    }
+
+    Remove-Variable plainToken, secureToken, tokenHandle -ErrorAction SilentlyContinue
+}
 ```
 
 It is parsed by a strict subset reader: 2-space indent, `key: value`, nested maps,
@@ -326,7 +362,7 @@ See [`fixtures/BadCode/README.md`](fixtures/BadCode/README.md).
   The pre-PR review is `/ship-review`, running this harness's own agents
   locally; `/address-pr-review` consumes an external review at stage 11 if one
   arrives.
-- **No issue-tracker integration** beyond the `gh` CLI.
+- **No hosted issue tracker as a universal assumption.** Intake is tracker-neutral (`github`, `youtrack`, or `none`). Git hosting stays GitHub.
 - **No MCP server of its own.** The two configured (`microsoft-learn`, `context7`) are
   documentation lookups; both work without a paid key.
 - **CodeQL is a template, not this repo's CI** — see

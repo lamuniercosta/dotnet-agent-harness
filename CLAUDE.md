@@ -26,7 +26,9 @@ There is no `dotnet-tools.json` and no solution to restore or build. The gates
 that matter are the PowerShell tests under `scripts/local/` and the grep gates
 in `.github/workflows/lint-harness.yml`.
 
-Issue intake here is manual — two commands, no skill:
+Issue intake here is manual — two commands, no skill. This repository's
+Maestri/self-development workflow stays on GitHub Issues; consumer `/task`
+intake is tracker-neutral and is not used here.
 
 ```powershell
 ./packs/dotnet/scripts/new-task-branch.ps1 -Issue <n> [-Type feature|bug|hotfix]
