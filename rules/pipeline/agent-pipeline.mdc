@@ -16,7 +16,7 @@ alwaysApply: true
 6. **Implement** — `/implement` (TDD optional; unit + integration tests must pass)
 7. **Refactor** — `/refactor` (complexity ≤ `gates.complexity.refactor`, property tests)
 8. **Architect** — `/architect` (Stryker mutation ≥ `gates.mutation.threshold`; Gherkin mutation only if acceptance tests exist)
-9. **Code review** *(gated)* — `/code-review`; above-bar findings → `/remediate` → re-review until clean. A no-C# refusal is **out of scope for this skill**, not a failed review, and does not route to `/remediate`
+9. **Code review** *(gated)* — `/code-review`; above-bar findings → `/remediate` → re-review until clean (later rounds pass `Explicit diff range: ROUND_BASE...HEAD`). A no-C# refusal is **out of scope for this skill**, not a failed review, and does not route to `/remediate`
 10. **Ship** — `./scripts/rebase-task-branch.ps1 -Push`, then `/ship-review`, then open the PR
 11. **Address PR review** *(conditional)* — `/address-pr-review` when external feedback arrives
 12. **Merge** *(human gate 3)* — the human reads the PR on GitHub and merges
@@ -83,7 +83,7 @@ Stage 9 loops to `/remediate` until it finds nothing above the bar. A normal
 no-C# refusal (`out of scope for this skill`) is not a finding, does not look
 like a failed review, and does not enter `/remediate`. Round one reviews the whole
 change and freezes its findings. Every later round reviews **only the diff that
-fixed the previous round's findings**. Each round's input is strictly smaller
+fixed the previous round's findings**, passed as `Explicit diff range: ROUND_BASE...HEAD`. Each round's input is strictly smaller
 than the last, so the loop converges. The round cap is a backstop: a fix diff
 that keeps generating new findings is evidence the change is wrong, not that
 the review is. `/architect` is **not** re-run per round. It runs once when the

@@ -34,7 +34,7 @@ with `gh pr view` on the current branch.
 | Acceptance `.feature` exist, no bindings | 4 → 5 | *(only if opted in)* Human gate 2 → `/implement` |
 | Code exists, CA1502 above `gates.complexity.refactor` on changed files | 7 | `/refactor` |
 | Refactor done, mutation not run | 8 | `/architect` |
-| Architect done, review not clean | 9 | `/code-review` → `/remediate` until clean (later rounds: fix-diff only) |
+| Architect done, review not clean | 9 | `/code-review` → `/remediate` until clean (later rounds: `Explicit diff range: ROUND_BASE...HEAD`) |
 | Review clean | 10 | rebase → `/ship-review` → open the PR (`/architect` once on loop close first, if remediations accumulated) |
 | `gh pr view`: open PR with unaddressed external feedback | 11 | `/address-pr-review` |
 | `gh pr view`: open PR with no blocking external feedback | 12 | human gate 3 — merge |

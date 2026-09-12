@@ -43,8 +43,8 @@ verify every field below before trusting the contents:
 | `repository` | Absolute path to the repo root | Prevents cross-repo collision |
 | `branch` | Current branch name | Context for the reader |
 | `head_sha` | Full 40-char `git rev-parse HEAD` | Freshness — must match consumer's HEAD |
-| `fixed_point` | The base ref or SHA from Step 1 | Prevents wrong-base stale reads |
-| `diff_range` | The three-dot range (`<fixed>...HEAD`) | Explicit scope binding |
+| `fixed_point` | The left side of the accepted `Explicit diff range: <fixed-point>...HEAD` when present; otherwise the base ref or SHA from Step 1 | Prevents wrong-base stale reads |
+| `diff_range` | The accepted explicit range when present; otherwise `<fixed-point>...HEAD` | Explicit scope binding |
 | `written_at` | UTC ISO-8601 timestamp | Audit trail; not used for verification |
 
 The consumer verifies `head_sha`, `fixed_point`, `diff_range`, and
@@ -55,8 +55,8 @@ is also fail-closed.
 
 The file body contains, in order:
 
-1. **Diff command** — the literal `git diff <fixed-point>...HEAD`
-2. **Commit list** — output of `git log <fixed-point>..HEAD --oneline`
+1. **Diff command** — `git diff` of the accepted `diff_range` (explicit range when present; otherwise `git diff <fixed-point>...HEAD`)
+2. **Commit list** — `git log <fixed-point>..HEAD --oneline` (`fixed_point` is the left side of the accepted range when present)
 3. **Blast-radius table** — the scored table from Step 2 (code-review) or the
    rebase-delta summary (ship-review)
 4. **Roslyn pre-pass results** — from Step 3, when available; section omitted
@@ -129,11 +129,13 @@ information scope.
 ## Deterministic ship-review to nested code-review handoff
 
 When the rebase delta is **non-empty**, `/ship-review` invokes `/code-review`
-with the **explicit diff range** per
+with `Explicit diff range: <stage-9-cleared-commit>...HEAD` per
 [ADR 0014](./0014-ship-review-reuses-code-review-for-the-rebase-delta.md). The
 ship-review artifact is **not** an input to that nested `/code-review`
 invocation. `/code-review` computes its own pre-pass (Steps 1–3a) internally
-over the rebase delta and writes its own artifact. The two artifacts are
+over the accepted explicit range and writes its own artifact. Step 3a records
+that range in `diff_range`, sets `fixed_point` to the left side, and derives
+the diff command and commit list from it. The two artifacts are
 independent: each skill writes under its own path segment (`code-review/` vs
 `ship-review/` beneath the repo-scoped root, e.g.
 `<temp>/pr-review/<repo-hash>/code-review/pre-pass-<sha>.md` vs
@@ -146,8 +148,9 @@ When the rebase delta is **empty**, the ship-review artifact still contains
 the `/verify` table and the named correctness confirmation. The Security and
 Coverage lanes consume it; `/code-review` is not invoked.
 
-The artifact must not replace the explicit range argument. Nested
-`/code-review` creating its own pre-pass over the rebase delta preserves
+The artifact must not replace the invocation-prompt field. Nested
+`/code-review` creating its own pre-pass over the accepted
+`Explicit diff range: <fixed-point>...HEAD` preserves
 ADR 0014's correctness-lane scope.
 
 ## Rejected alternatives
@@ -186,8 +189,8 @@ fixed point, and `diff_range`; writers re-resolve HEAD immediately before the
 atomic write; working-tree roots are forbidden; filenames use a repo-scoped
 full SHA under a skill-unique subdirectory.
 
-`/ship-review` keeps ADR 0014's explicit rebase-delta range for nested
-`/code-review`. A non-empty delta produces two independent artifacts. An empty
+`/ship-review` keeps ADR 0014's `Explicit diff range: <stage-9-cleared-commit>...HEAD`
+for nested `/code-review`. A non-empty delta produces two independent artifacts. An empty
 delta does not invoke `/code-review`.
 
 This is a runtime contract. It does not change adapters, `install.ps1`,

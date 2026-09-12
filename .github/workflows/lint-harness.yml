@@ -106,6 +106,17 @@ jobs:
           fi
           echo "code-review Step 8 includes the findings-artifact sink."
 
+      # ---- code-review Step 1 explicit-range transport ------------------
+      - name: Code-review skill uses the explicit-range transport
+        run: |
+          if ! grep -qF 'Explicit diff range: <fixed-point>...HEAD' skills/code-review/SKILL.md || \
+             ! grep -qF 'Could not run' skills/code-review/SKILL.md || \
+             ! grep -qF 'NEEDS FIXES' skills/code-review/SKILL.md; then
+            echo "::error file=skills/code-review/SKILL.md::missing explicit-range transport or fail-closed wording"
+            exit 1
+          fi
+          echo "code-review Step 1 includes explicit-range transport."
+
       # ---- code-review enforcement (DEV-113) ----------------------------
       - name: Code-review enforcement checks
         run: |

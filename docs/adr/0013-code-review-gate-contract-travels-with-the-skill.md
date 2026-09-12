@@ -24,9 +24,19 @@ the skill's authority and its sink, not a single judgment it makes.
    `/ship-review`'s resolution path and fail-closed rule. An unresolvable
    feature or term stops the review before it starts: **Could not run**, the
    missing context named, verdict **NEEDS FIXES**.
-2. **Step 1 accepts an explicit diff range.** When the caller supplies one,
-   the review covers only that range: `/remediate` passes the pinned fix diff
-   on later rounds, `/ship-review` the rebase delta.
+2. **Step 1 accepts `Explicit diff range: <fixed-point>...HEAD`.** When the
+   caller supplies that single-line invocation-prompt field, the review covers
+   only that three-dot range. `<fixed-point>` is the left side and is Step 3a's
+   `fixed_point`; the right side is always `HEAD`. Callers that pin a concrete
+   head make the workspace HEAD equal that pin, then pass
+   `<fixed-point>...HEAD`. Malformed, unresolved, empty, or head-mismatched
+   ranges fail closed before fan-out: **Could not run** with the failed range
+   check, verdict **NEEDS FIXES**. `/remediate` passes
+   `Explicit diff range: ROUND_BASE...HEAD` on later rounds, `/ship-review`
+   `Explicit diff range: <stage-9-cleared-commit>...HEAD` for a non-empty
+   rebase delta, and `/pr-review` `Explicit diff range: baseSha...HEAD` on a
+   workspace at `headSha`. The pre-pass artifact is evidence, not a substitute
+   for the field, and no artifact-path input replaces it.
 3. **Step 8 sorts and hands off.** Verified findings above the closing bar go
    to `/remediate`; below-bar or out-of-scope findings become follow-ups,
    never silently relabelled, with source and severity retained either way.
