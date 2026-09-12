@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # Creates a task branch from an up-to-date base branch, following the convention:
-#   {type}/{issue}-{slugified-title}     where type is feature | bug | hotfix
+#   {type}/{id}-{slugified-title}     where type is feature | bug | hotfix
 #
 # By default the branch is created in its own git worktree beside the repo, so
 # several tasks - and several agents - can run at once. A single checkout
@@ -8,20 +8,23 @@
 # entirely. Pass -NoWorktree (or set task.worktree: false) for the old
 # switch-in-place behaviour.
 #
-# The title defaults to the GitHub issue title (fetched with `gh`) unless
-# -Description is supplied. The harness is GitHub-native but the tracker is
-# optional: pass -Description and no -Issue to work with no tracker at all.
+# Retrieval is tracker-neutral via get-task.ps1. harness.yml `tracker` is
+# github (default), youtrack, or none. -TaskId is canonical; -Issue is a
+# compatibility alias. Pass -Description and no -TaskId for description-only
+# intake. Provider/config/id/fetch failures happen before any git mutation.
 #
 # Usage:
+#   ./scripts/new-task-branch.ps1 -TaskId 142
 #   ./scripts/new-task-branch.ps1 -Issue 142
-#   ./scripts/new-task-branch.ps1 -Issue 142 -Type bug
+#   ./scripts/new-task-branch.ps1 -TaskId 142 -Type bug
 #   ./scripts/new-task-branch.ps1 -Description "Add upload retry" -Type feature
-#   ./scripts/new-task-branch.ps1 -Issue 142 -Push
-#   ./scripts/new-task-branch.ps1 -Issue 142 -NoWorktree
+#   ./scripts/new-task-branch.ps1 -TaskId 142 -Push
+#   ./scripts/new-task-branch.ps1 -TaskId 142 -NoWorktree
 
 [CmdletBinding()]
 param(
-    [string]$Issue,
+    [Alias('Issue')]
+    [string]$TaskId,
     [string]$Type,
     [string]$Description,
     [string]$BaseBranch,
@@ -39,18 +42,19 @@ $ErrorActionPreference = 'Stop'
 
 if ($Help) {
     Write-Output @"
-Usage: new-task-branch.ps1 [-Issue <number>] [-Type <feature|bug|hotfix>] [-Description <text>] [-BaseBranch <name>] [-Push] [-NoWorktree]
+Usage: new-task-branch.ps1 [-TaskId <id>] [-Type <feature|bug|hotfix>] [-Description <text>] [-BaseBranch <name>] [-Push] [-NoWorktree]
 
-Creates {type}/{issue}-{slug} from an up-to-date {Remote}/{BaseBranch}, in its own
+Creates {type}/{id}-{slug} from an up-to-date {Remote}/{BaseBranch}, in its own
 git worktree under <repo>.worktrees/ unless worktrees are turned off.
-If -Description is omitted, the GitHub issue title is used (requires the `gh` CLI, authenticated).
-If -Type is omitted, it is inferred from the issue's labels (a 'bug' label -> bug), defaulting to feature.
+Retrieval is delegated to get-task.ps1 using harness.yml tracker (github, youtrack, none).
+If -Description is omitted, the tracker summary is used.
+If -Type is omitted, it is inferred by the provider (GitHub labels / YouTrack Type), defaulting to feature.
 Hotfix is always an explicit human call - it is never inferred.
 
 OPTIONS:
-  -Issue <number>     GitHub issue number, e.g. 142. Optional when -Description is given
-  -Type <type>        feature | bug | hotfix (inferred from labels when omitted)
-  -Description <text> Branch description; defaults to the issue title
+  -TaskId <id>        Tracker task id (canonical). Alias: -Issue
+  -Type <type>        feature | bug | hotfix (inferred from the tracker when omitted)
+  -Description <text> Branch description; defaults to the tracker summary
   -BaseBranch <name>  Base branch (default: the remote's default branch)
   -Remote <name>      Remote name (default: origin)
   -Push               Push the new branch and set upstream
@@ -66,11 +70,8 @@ if ($Worktree -and $NoWorktree) {
     throw 'Pass -Worktree or -NoWorktree, not both.'
 }
 
-if ([string]::IsNullOrWhiteSpace($Issue) -and [string]::IsNullOrWhiteSpace($Description)) {
-    throw 'Pass -Issue <number>, -Description <text>, or both. See -Help.'
-}
-if ($Issue -and $Issue -notmatch '^\d+$') {
-    throw "Issue must be a GitHub issue number, e.g. -Issue 142 (got '$Issue')."
+if ([string]::IsNullOrWhiteSpace($TaskId) -and [string]::IsNullOrWhiteSpace($Description)) {
+    throw 'Pass -TaskId <id>, -Description <text>, or both. See -Help.'
 }
 
 $validTypes = @('feature', 'bug', 'hotfix')
@@ -121,6 +122,32 @@ $mainRoot = Get-MainWorktreeRoot -RepoRoot $repoRoot
 # worktree does not have one and would silently answer with defaults.
 $config = Get-HarnessConfig -RepoRoot $mainRoot
 $useWorktree = if ($Worktree) { $true } elseif ($NoWorktree) { $false } else { [bool]$config['task.worktree'] }
+$tracker = [string]$config['tracker']
+
+# Provider/config/id/fetch failures happen before any branch, worktree, git
+# fetch, git push, or file mutation. get-task.ps1 owns retrieval and type
+# inference so this script does not duplicate provider logic.
+$getTaskScript = Join-Path $PSScriptRoot 'get-task.ps1'
+if (-not (Test-Path -LiteralPath $getTaskScript)) {
+    throw "Required helper '$getTaskScript' is missing. Re-run install.ps1 to ship get-task.ps1."
+}
+
+$getTaskArgs = @{ RepoRoot = $mainRoot }
+if (-not [string]::IsNullOrWhiteSpace($TaskId)) { $getTaskArgs['TaskId'] = $TaskId }
+if (-not [string]::IsNullOrWhiteSpace($Description)) { $getTaskArgs['Description'] = $Description }
+if ($Type) { $getTaskArgs['Type'] = $Type }
+
+$task = & $getTaskScript @getTaskArgs | ConvertFrom-Json
+$summary = [string]$task.Summary
+$resolvedId = $task.Id
+if (-not $Type) {
+    $Type = [string]$task.Type
+    Write-Host "Type not given; inferred '$Type'."
+}
+
+if ([string]::IsNullOrWhiteSpace($summary)) {
+    throw 'Could not resolve a description for this task. Pass -Description explicitly.'
+}
 
 # A dirty tree only conflicts with switching THIS checkout. Creating a separate
 # worktree touches no tracked file here, and refusing anyway would reintroduce
@@ -133,41 +160,12 @@ if (-not $useWorktree) {
     }
 }
 
-# --- resolve the title (and type) from the issue when not supplied ----------
-$summary = $Description
-$issueLabels = @()
-
-if ($Issue -and ([string]::IsNullOrWhiteSpace($summary) -or -not $Type)) {
-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        throw "The 'gh' CLI is required to read issue #$Issue. Install it (https://cli.github.com) and run 'gh auth login', or pass -Description and -Type explicitly."
-    }
-
-    $raw = gh issue view $Issue --json number,title,body,labels 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        throw "Could not read issue #${Issue}: $raw"
-    }
-
-    $fetched = $raw | ConvertFrom-Json
-    if ([string]::IsNullOrWhiteSpace($summary)) { $summary = $fetched.title }
-    $issueLabels = @($fetched.labels | ForEach-Object { $_.name })
-}
-
-if ([string]::IsNullOrWhiteSpace($summary)) {
-    throw "Could not resolve a description for issue #$Issue. Pass -Description explicitly."
-}
-
-# Hotfix is never inferred - it stays an explicit human call.
-if (-not $Type) {
-    $Type = if ($issueLabels | Where-Object { $_ -match '^(bug|defect)$' }) { 'bug' } else { 'feature' }
-    Write-Host "Type not given; inferred '$Type' from issue labels."
-}
-
 $slug = ConvertTo-BranchSlug -Text $summary
 if (-not $slug) {
     throw "Description slug is empty after sanitizing '$summary'. Pass a -Description with alphanumeric characters."
 }
 
-$branch = if ($Issue) { "$Type/$Issue-$slug" } else { "$Type/$slug" }
+$branch = if ($resolvedId) { "$Type/$resolvedId-$slug" } else { "$Type/$slug" }
 
 # --- resolve the base branch ------------------------------------------------
 if (-not $BaseBranch) {
@@ -288,10 +286,19 @@ if ($Push) {
     if ($LASTEXITCODE -ne 0) { throw "Failed to push '$branch'." }
 }
 
-# GitHub auto-links '#142' anywhere in the message. It is deliberately a suffix,
-# not a prefix: a subject starting with '#' is treated as a comment by git's
-# editor-based commit path and would be silently stripped.
-$commitSubject = if ($Issue) { "$summary (#$Issue)" } else { $summary }
+# GitHub auto-links '#142' anywhere in the message. YouTrack links a bare
+# readable id in parentheses. Both are suffixes: a subject starting with '#'
+# is treated as a comment by git's editor-based commit path and would be
+# silently stripped. Description-only intake has no tracker suffix.
+$commitSubject = if (-not $resolvedId) {
+    $summary
+}
+elseif ($tracker -eq 'youtrack') {
+    "$summary ($resolvedId)"
+}
+else {
+    "$summary (#$resolvedId)"
+}
 
 Write-Output ''
 Write-Output "Branch created: $branch"
@@ -310,7 +317,7 @@ if ($worktreePath) {
     Write-Output '  dotnet tool restore   # each worktree restores its own tools'
     Write-Output ''
 }
-Write-Output 'Reference the issue in commit subjects so GitHub links the work. Before opening a PR, run:'
+Write-Output 'Reference the task in commit subjects so the tracker links the work. Before opening a PR, run:'
 Write-Output '  ./scripts/rebase-task-branch.ps1 -Push'
 if ($worktreePath) {
     Write-Output ''

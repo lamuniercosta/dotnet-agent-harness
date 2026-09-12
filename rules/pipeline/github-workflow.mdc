@@ -1,41 +1,46 @@
 ---
-description: GitHub issue intake, branch naming, commit, and rebase-before-PR conventions
+description: Tracker-neutral task intake, branch naming, commit, and rebase-before-PR conventions
 alwaysApply: false
 ---
 
-# GitHub Workflow
+# Task workflow
 
-When the user references an issue number, or asks to start a task, create a branch, or prep a PR, follow these conventions. Full guidance: `/task`.
+When the user references a task id, or asks to start a task, create a branch, or prep a PR, follow these conventions. Full guidance: `/task`.
+
+Intake is **tracker-neutral**. `harness.yml` `tracker` is `github` (default), `youtrack`, or `none`. GitHub remains the code host for remotes, branches, commits, pushes, and pull requests.
 
 ## Task intake
 
-Read the issue directly with the `gh` CLI — no tokens, config files, or environment variables of your own:
+Delegate retrieval to `./scripts/get-task.ps1` — do not call `gh` or YouTrack REST yourself, and never print `YOUTRACK_TOKEN`:
 
 ```powershell
-gh issue view 142 --json number,title,body,labels
+./scripts/get-task.ps1 -TaskId 142
+./scripts/get-task.ps1 -TaskId DAH-123
 ```
 
-The tracker is **optional**. With nothing to read from, pass a description straight through and everything below still applies.
+`-Issue` is a compatibility alias for `-TaskId`. The tracker is **optional**. With nothing to read from, pass a description straight through and everything below still applies. `tracker: none` is description-only; supplying `-TaskId`/`-Issue` fails before git mutation.
 
 ## Branch naming
 
 Create branches from the **latest remote default branch** using:
 
 ```powershell
+./scripts/new-task-branch.ps1 -TaskId 142
 ./scripts/new-task-branch.ps1 -Issue 142
-./scripts/new-task-branch.ps1 -Issue 142 -Type bug
+./scripts/new-task-branch.ps1 -TaskId 142 -Type bug
+./scripts/new-task-branch.ps1 -TaskId DAH-123
 ./scripts/new-task-branch.ps1 -Description "Add upload retry" -Type feature
 ```
 
-- Feature → `feature/{issue}-{slug}`
-- Bug → `bug/{issue}-{slug}`
-- Hotfix → `hotfix/{issue}-{slug}`
+- Feature → `feature/{id}-{slug}`
+- Bug → `bug/{id}-{slug}`
+- Hotfix → `hotfix/{id}-{slug}`
 
-Type is inferred from the issue's labels (`bug`/`defect` → `bug`), defaulting to `feature`. **Hotfix is always an explicit human call** and is never inferred. Never branch from a stale local default branch — the script fetches first.
+GitHub ids are numeric (`feature/142-…`). YouTrack ids stay readable and keep their case (`feature/DAH-123-…`). Description-only intake omits the id. Type is inferred by the provider (GitHub `bug`/`defect` labels → `bug`; YouTrack `Type = Bug` → `bug`), defaulting to `feature`. **Hotfix is always an explicit human call** and is never inferred. Never branch from a stale local default branch — the script fetches first. Config, id, and fetch failures happen before any git mutation.
 
 ## Worktree per task
 
-Each task gets its own git worktree at `<repo>.worktrees/{type}-{issue}-{slug}`, beside the repo. A single checkout serialises work: one branch at a time, and a dirty tree blocks intake. `cd` into the worktree the script prints and do the work there — the main checkout stays on its own branch.
+Each task gets its own git worktree at `<repo>.worktrees/{type}-{id}-{slug}`, beside the repo. A single checkout serialises work: one branch at a time, and a dirty tree blocks intake. `cd` into the worktree the script prints and do the work there — the main checkout stays on its own branch.
 
 Never create a worktree inside the repo. Git excludes linked worktrees from `git status`, but `dotnet build`, InspectCode, and recursive globs still walk them, so one task's checkout contaminates another's gate results.
 
@@ -49,13 +54,14 @@ Immediately run `/grill-with-docs` — question the development, settle vocabula
 
 ## Commit messages
 
-Reference the issue in the subject so GitHub links the work:
+Reference the task in the subject so the tracker links the work:
 
 ```
 Add dark mode toggle (#142)
+Add retry handling (DAH-123)
 ```
 
-The reference is a **suffix, not a prefix**. A subject beginning with `#` is treated as a comment by git's editor-based commit path and gets silently stripped; GitHub auto-links `#142` anywhere in the message.
+The reference is a **suffix, not a prefix**. A subject beginning with `#` is treated as a comment by git's editor-based commit path and gets silently stripped. GitHub auto-links `#142`; YouTrack links the readable id in parentheses. Description-only intake has no tracker suffix.
 
 Only commit when explicitly asked — the standard git safety rules still apply.
 
@@ -77,4 +83,4 @@ If this repository maintains a context-floor baseline, running the ratchet regen
 
 ## What is deliberately not here
 
-No hosted code-review service, no issue-tracker integration beyond `gh`, and no metered PR bot. The review that gates a PR is `/ship-review`, which runs this harness's own agents locally. CodeQL is the only CI-side analysis, and it is free for public repositories and optional everywhere else.
+No hosted code-review service, and no metered PR bot. Issue intake is tracker-neutral (`github`, `youtrack`, or `none`); Git hosting stays GitHub. The review that gates a PR is `/ship-review`, which runs this harness's own agents locally. CodeQL is the only CI-side analysis, and it is free for public repositories and optional everywhere else.

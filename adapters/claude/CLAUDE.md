@@ -113,6 +113,11 @@ configured model and effort. Only `fast` is pinned to a cheaper model by default
 
 Stage order and gates: see the agent-pipeline rule.
 
+Task intake is **tracker-neutral**: `harness.yml` `tracker` is `github` (default),
+`youtrack`, or `none`. `/task <id>` dispatches through `scripts/get-task.ps1`.
+The `github-workflow` rule (filename kept) holds branch, commit, and rebase
+conventions. GitHub remains the code host for remotes, commits, and PRs.
+
 Consult `/using-agent-skills` at the start of any non-trivial task; it routes to
 the right stage and supporting skills.
 

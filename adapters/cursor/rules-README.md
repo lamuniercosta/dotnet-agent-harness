@@ -15,8 +15,9 @@ them by import:
 ```
 
 Five C# gate rules load via `globs:` when `.cs` files are touched. Three
-procedure rules (`github-workflow`, `readme-maintenance`, `architect-gate`) load
-via skill invocation, not as always-on imports.
+procedure rules (`github-workflow` — tracker-neutral task intake, filename kept;
+`readme-maintenance`; `architect-gate`) load via skill invocation, not as
+always-on imports.
 
 Cursor can only auto-load rules from `.cursor/rules/`, and a Claude `@import`
 resolves any relative path — so the three always-on copies here serve both,

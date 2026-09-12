@@ -176,7 +176,7 @@ The harness pipeline runs in fixed order. In Codex, use the matching harness ski
 available (`$name`, or implicit activation from a matching request); otherwise carry out
 the phase directly — see [Limitations](#limitations-under-codex).
 
-0. **Task intake** — read the issue, create the branch
+0. **Task intake** — tracker-neutral `$task <id>`: read the configured tracker task (`github`, `youtrack`, or `none`) and create the branch
 1. **Alignment (MANDATORY)** (`/grill-with-docs`) — settle vocabulary and assumptions in `CONTEXT.md` + ADRs before any
    spec. Non-negotiable; a spec written before the grill encodes the wrong nouns
 2. **Formal spec** — `/speckit-specify` through `/speckit-analyze`
@@ -211,6 +211,10 @@ The closing bar and frozen scope decide which findings get a fix commit on the o
 base branch, tracker, agent model tiers. It is the **single source of truth**:
 `CodeMetricsConfig.txt`, `stryker-config.json`, and the `.editorconfig` gate
 severities are all rendered from it by `install.ps1` on every run.
+
+Task intake is **tracker-neutral**: `tracker` is `github` (default), `youtrack`,
+or `none`. `$task <id>` dispatches through `scripts/get-task.ps1`. There is no
+CLI tracker override. GitHub remains the code host for remotes, commits, and PRs.
 
 `.specify/memory/constitution.md` is rendered **only when absent**. Once it exists
 it is the project's own law and no install touches it again — so if it quotes a

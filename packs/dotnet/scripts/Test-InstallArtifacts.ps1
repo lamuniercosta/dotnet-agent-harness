@@ -84,6 +84,13 @@ try {
         ($expectedImports -gt 0) `
         "no @.cursor/rules/ imports found in $adapter"
 
+    # ── Proof that get-task.ps1 ships ────────────────────────────────────────
+    $repo = New-TargetRepo
+    $repos += $repo
+    Invoke-Install -Repo $repo | Out-Null
+    Assert-That 'get-task.ps1 is installed into scripts/' `
+        (Test-Path (Join-Path $repo 'scripts/get-task.ps1'))
+
     # ── CLAUDE.md: absent ────────────────────────────────────────────────────
     $repo = New-TargetRepo
     $repos += $repo

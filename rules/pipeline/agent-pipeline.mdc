@@ -7,7 +7,7 @@ alwaysApply: true
 
 ## Stage Order
 
-0. **Task intake** — `/task <issue>` (the entry step): read the GitHub issue with `gh` and create the `{feature|bug|hotfix}/{issue}-{slug}` branch off the remote's default branch in a worktree
+0. **Task intake** — `/task <id>` (the entry step): tracker-neutral read of the configured tracker task (`github`, `youtrack`, or `none`) and create the `{feature|bug|hotfix}/{id}-{slug}` branch off the remote's default branch in a worktree
 1. **Alignment (MANDATORY)** — `/grill-with-docs`: question the development, settle vocabulary in `CONTEXT.md` + ADRs, and write `specs/<feature>/brief.md`. Runs before any spec or code — never skipped
 2. **Formal spec** — `/speckit-specify`, `/speckit-clarify`, `/speckit-checklist`, `/speckit-plan`, `/speckit-tasks`, `/speckit-analyze`
 3. **Human gate 1** *(5–10 min)* — approve spec, plan, tasks
@@ -29,7 +29,7 @@ Acceptance tests (Gherkin + Reqnroll) are **opt-in**. Skip Stage 4, Human gate 2
 
 ## Handoff Rules
 
-- Every task starts with `/task`; `/grill-with-docs` is **mandatory** immediately after and before `/speckit-specify` — never skip straight to spec or code
+- Every task starts with `/task <id>`; intake is tracker-neutral (`harness.yml` `tracker`). `/grill-with-docs` is **mandatory** immediately after and before `/speckit-specify` — never skip straight to spec or code
 - Do not skip human gates unless the user explicitly approves (gate 2 applies only when acceptance scenarios exist)
 - Do not block progress on missing `.feature` files; unit + integration coverage is the required bar
 - When present, Gherkin lives in `specs/<feature>/acceptance/` — the source of truth for acceptance scenarios
