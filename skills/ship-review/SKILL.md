@@ -56,7 +56,7 @@ stage-9-cleared commit to the rebased head. If empty, record a named
 correctness **confirmation** in the consolidated report and **do not invoke**
 `/code-review`. That confirmation still counts as the lane having run: do not
 skip the lane and do not treat emptiness as a missing reviewer. If non-empty,
-invoke `/code-review` with that **explicit diff range**.
+invoke `/code-review` with `Explicit diff range: <stage-9-cleared-commit>...HEAD`.
 
 When that nested `/code-review` returns `declined: true` with a non-null
 `decline_reason` and `findings: []`, or reports **out of scope for this skill**,
@@ -91,7 +91,7 @@ A Security or Coverage consumer verifies `repository`, `head_sha`, `fixed_point`
 **Read-only during fan-out**: `code-reviewer` and `security-reviewer` have no dedicated Edit or Write tools; Bash is available but not a sanctioned write path. Integrity during fan-out relies on that profile constraint, not filesystem permissions.
 
 The ship-review artifact is **not** an input to nested `/code-review`. If
-non-empty, `/code-review` receives the **explicit diff range** and computes its
+non-empty, `/code-review` receives `Explicit diff range: <stage-9-cleared-commit>...HEAD` and computes its
 own pre-pass (Steps 1–3a) over that range, writing an independent artifact
 under its own `code-review/` subdirectory (not the `ship-review/` path). If empty,
 `/code-review` is not invoked; Security and Coverage still consume the
@@ -101,7 +101,7 @@ Dispatch security, coverage, and (when the rebase delta is non-empty) `/code-rev
 
 | Reviewer | Agent | Brief |
 |---|---|---|
-| Correctness & design | `/code-review` | First determine whether the rebase delta is empty. If empty: named confirmation, do not invoke `/code-review`, not a skipped lane. If non-empty: explicit diff range from stage-9-cleared commit to rebased head. If nested `/code-review` declines (no `.cs`): report the lane as **out of scope for this skill**, not a clean pass. |
+| Correctness & design | `/code-review` | First determine whether the rebase delta is empty. If empty: named confirmation, do not invoke `/code-review`, not a skipped lane. If non-empty: `Explicit diff range: <stage-9-cleared-commit>...HEAD`. If nested `/code-review` declines (no `.cs`): report the lane as **out of scope for this skill**, not a clean pass. |
 | Security | `security-reviewer` | `run-vulnerable-packages.ps1`, plus review for secrets/connection strings, injection, missing authorization, permissive CORS, PII in logs or telemetry attributes |
 | Coverage | `mutation-analyst` | Coverage gaps and Stryker survivors against the change set |
 

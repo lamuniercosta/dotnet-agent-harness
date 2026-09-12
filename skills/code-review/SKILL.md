@@ -19,9 +19,9 @@ Each axis runs in an isolated sub-agent when the host supports delegation, with 
 
 Before resolving loop terms (Step 0) and before blast-radius scoring (Step 2), classify changed file extensions.
 
-Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it. If the caller supplies an explicit diff range, classify and later review only that range.
+Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it. If the invocation prompt carries `Explicit diff range: <fixed-point>...HEAD`, classify and later review only that range after Step 1's validation.
 
-Resolve the range only far enough to list extensions: `git rev-parse` the fixed point (or the explicit range) and `git diff --name-only <fixed-point>...HEAD` (three-dot, or the caller-supplied range). If the range itself cannot be resolved — bad ref, unreadable, or empty diff — stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**. That is not an out-of-scope refusal.
+Resolve the range only far enough to list extensions: `git rev-parse` the fixed point (or the left side of the accepted explicit range) and `git diff --name-only` of the accepted `diff_range` (`<fixed-point>...HEAD`, three-dot). If the range itself cannot be resolved — bad ref, unreadable, empty diff, or a failed Step 1 range check — stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**. That is not an out-of-scope refusal.
 
 If the non-empty file list contains **zero** `.cs` files:
 
@@ -41,11 +41,32 @@ Resolve `FEATURE_DIR` as `/pipeline`: task value, or `.specify/scripts/powershel
 
 ### 1. Pin the fixed point
 
-Reuse the fixed point and range already resolved during classification. Capture the diff command once: `git diff <fixed-point>...HEAD` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+Callers transport a scoped review in the invocation prompt as this exact single-line field:
+
+```text
+Explicit diff range: <fixed-point>...HEAD
+```
+
+`<fixed-point>` is the left side of the range and is this step's `fixed_point` (and Step 3a's `fixed_point`). The right side is always `HEAD`. Callers that pin a concrete head must make the workspace HEAD equal that pin, then pass `<fixed-point>...HEAD`. Do not accept `<left>...<right>` as a public grammar. The pre-pass artifact is evidence and fan-out input; it is not a substitute for this field. Do not accept an artifact-path input.
+
+When the field is present, review only that range. Validate the transported value before fan-out:
+
+- Single line
+- Contains exactly one `...` (three-dot; reject `..`)
+- Non-empty endpoints
+- No whitespace
+- No endpoint beginning with `-`
+- Right endpoint is the literal `HEAD`
+- Left endpoint resolves with `git rev-parse`
+- `HEAD` resolves to the current review head (`git rev-parse HEAD`)
+
+On any failure: stop before fan-out, report **Could not run** with the failed range check, verdict **NEEDS FIXES**.
+
+When the field is absent, reuse the fixed point already resolved during classification. When present and accepted, derive `diff_range`, the diff command, and the commit list from that range: `diff_range` is the accepted `<fixed-point>...HEAD`; `fixed_point` is the left side.
+
+Capture the diff command once: `git diff` of `diff_range` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
 
 Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here — not inside three parallel sub-agents.
-
-If the caller supplies an explicit diff range, review only that range.
 
 ### 2. Score blast radius
 
@@ -90,14 +111,16 @@ After Steps 1–3 complete, write one Markdown scratch file that the Step 6 axes
 | `repository` | Absolute path to the repo root | Prevents cross-repo collision |
 | `branch` | Current branch name | Context for the reader |
 | `head_sha` | Full 40-char `git rev-parse HEAD` | Freshness — must match consumer's HEAD |
-| `fixed_point` | The base ref or SHA from Step 1 | Prevents wrong-base stale reads |
-| `diff_range` | The three-dot range (`<fixed-point>...HEAD`) | Explicit scope binding |
+| `fixed_point` | The left side of the accepted explicit range when present; otherwise the base ref or SHA from Step 1 | Prevents wrong-base stale reads |
+| `diff_range` | The accepted explicit range when present; otherwise `<fixed-point>...HEAD` | Explicit scope binding |
 | `written_at` | UTC ISO-8601 timestamp | Audit trail; not used for verification |
+
+When Step 1 accepted `Explicit diff range: <fixed-point>...HEAD`, `fixed_point`, `diff_range`, the diff command, and the commit list are derived from that range. The artifact does not replace the invocation-prompt field.
 
 **Body**, in order:
 
-1. **Diff command** — the literal `git diff <fixed-point>...HEAD`
-2. **Commit list** — output of `git log <fixed-point>..HEAD --oneline`
+1. **Diff command** — `git diff` of the accepted `diff_range` (explicit range when present; otherwise `git diff <fixed-point>...HEAD`)
+2. **Commit list** — `git log <fixed-point>..HEAD --oneline` (`fixed_point` is the left side of the accepted range when present)
 3. **Blast-radius table** — the scored table from Step 2
 4. **Roslyn pre-pass results** — from Step 3, when available; omit this section when the Roslyn MCP tools are unavailable
 5. **Tooling-gate status** — `dotnet format --verify-no-changes` and `dotnet build` pass/fail, with diagnostics on failure

@@ -646,7 +646,9 @@ try {
          ($codexCodeReview -match '(?is)Do not infer defaults')) `
         'missing closing bar, frozen scope, or round cap must stop before fan-out'
     Assert-That 'Codex code-review accepts an explicit diff range' `
-        (($codexCodeReview -match '(?is)explicit diff range') -and
+        (($codexCodeReview -match '(?is)Explicit diff range: <fixed-point>\.\.\.HEAD') -and
+         ($codexCodeReview -match '(?is)Could not run') -and
+         ($codexCodeReview -match '(?is)NEEDS FIXES') -and
          ($codexCodeReview -match '(?is)review only that range')) `
         'an explicit caller-supplied range must override the default fixed-point diff'
     Assert-That 'Codex code-review routes above-bar findings to $remediate and below-bar to Follow-ups' `
@@ -669,7 +671,9 @@ try {
          ($claudeCodeReview -match '(?is)fail closed')) `
         'a Claude/Cursor skills-path copy must keep the fail-closed loop terms'
     Assert-That 'Claude code-review accepts an explicit diff range' `
-        (($claudeCodeReview -match '(?is)explicit diff range') -and
+        (($claudeCodeReview -match '(?is)Explicit diff range: <fixed-point>\.\.\.HEAD') -and
+         ($claudeCodeReview -match '(?is)Could not run') -and
+         ($claudeCodeReview -match '(?is)NEEDS FIXES') -and
          ($claudeCodeReview -match '(?is)review only that range')) `
         'an installer regression on .claude/skills must not drop the explicit-range rule'
     Assert-That 'Claude code-review routes above-bar findings to /remediate and below-bar to Follow-ups' `
