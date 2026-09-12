@@ -236,7 +236,7 @@ function Invoke-SkipCountProbeChild {
 
     return [pscustomobject]@{
         ExitCode = $exitCode
-        Text     = "$stdoutText$stderrText"
+        Text     = ($stdoutText, $stderrText) -join [Environment]::NewLine
     }
 }
 
