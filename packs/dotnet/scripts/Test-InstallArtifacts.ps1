@@ -90,6 +90,12 @@ try {
     Invoke-Install -Repo $repo | Out-Null
     Assert-That 'get-task.ps1 is installed into scripts/' `
         (Test-Path (Join-Path $repo 'scripts/get-task.ps1'))
+    Assert-That 'github-workflow.mdc is installed into .cursor/rules/' `
+        (Test-Path (Join-Path $repo '.cursor/rules/github-workflow.mdc'))
+    Assert-That 'required artifacts exist' `
+        ((Test-Path (Join-Path $repo 'AGENTS.md')) -and 
+         (Test-Path (Join-Path $repo 'CLAUDE.md')) -and 
+         (Test-Path (Join-Path $repo 'harness.yml')))
 
     # ── CLAUDE.md: absent ────────────────────────────────────────────────────
     $repo = New-TargetRepo
@@ -792,8 +798,8 @@ try {
         (($claudeTask -match '/grill-with-docs') -and ($claudeTask -notmatch '\$grill-with-docs')) `
         'Codex adaptation must never rewrite the shared Claude/Cursor delivery'
     Assert-That 'the default install reports both host invocation syntaxes' `
-        (($output -match '(?m)^\s+/task <issue>') -and
-         ($output -match '(?m)^\s+\$task <issue>') -and
+        (($output -match '(?m)^\s+/task <task-id>') -and
+         ($output -match '(?m)^\s+\$task <task-id>') -and
          ($output -match 'specify integration install codex')) `
         'the default serves all hosts and must not hide either next command'
 
@@ -1001,8 +1007,8 @@ try {
     Assert-That '-Platform both still writes the Claude adapter' `
         (Test-Path (Join-Path $repo 'CLAUDE.md'))
     Assert-That '-Platform both reports slash syntax and no Codex next step' `
-        (($output -match '(?m)^\s+/task <issue>') -and
-         ($output -notmatch '(?m)^\s+\$task <issue>') -and
+        (($output -match '(?m)^\s+/task <task-id>') -and
+         ($output -notmatch '(?m)^\s+\$task <task-id>') -and
          ($output -notmatch 'integration install codex'))
 }
 finally {

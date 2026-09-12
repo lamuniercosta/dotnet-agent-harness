@@ -1010,14 +1010,14 @@ else {
 }
 Write-Output '  ./scripts/run-roslyn-analyzers.ps1 -All    # audit the code you already have'
 if ($Platform -eq 'codex') {
-    Write-Output '  $task <issue>                             # start the pipeline in Codex'
+    Write-Output '  $task <task-id>                             # start the pipeline in Codex'
 }
 elseif ($Platform -eq 'all') {
-    Write-Output '  /task <issue>                             # Cursor / Claude Code'
-    Write-Output '  $task <issue>                             # Codex'
+    Write-Output '  /task <task-id>                             # Cursor / Claude Code'
+    Write-Output '  $task <task-id>                             # Codex'
 }
 else {
-    Write-Output '  /task <issue>                             # start the pipeline'
+    Write-Output '  /task <task-id>                             # start the pipeline'
 }
 Write-Output ''
 if ($Platform -in @('codex', 'all')) {
