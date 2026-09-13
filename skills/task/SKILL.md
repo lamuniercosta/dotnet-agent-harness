@@ -25,7 +25,7 @@ Typical invocation: `/task 142 feature`, `/task DAH-123`, or just `/task 142`.
 Depends on `harness.yml` `tracker`:
 
 - **`github`** (default) — the [`gh` CLI](https://cli.github.com), authenticated (`gh auth login`). No tokens, config files, or environment variables of your own — `gh` owns the credential.
-- **`youtrack`** — `YOUTRACK_URL` and `YOUTRACK_TOKEN` in the environment. Prefer process variables; on Windows, User-scope variables are the fallback so a newly persisted token works without restarting the host. The token must be a permanent token beginning with `perm:`. It is sent only as `Authorization: Bearer` — never in a URL, query string, error, log, or generated file. **Never print a live token.**
+- **`youtrack`** — `YOUTRACK_URL` and `YOUTRACK_TOKEN`. Token resolution checks process env, DPAPI file (`$env:USERPROFILE\.dotnet-agent-harness\youtrack-token`), and User-scope env in that order. The DPAPI file holds only the token; `YOUTRACK_URL` stays in the environment. The token must be a permanent token beginning with `perm:`. It is sent only as `Authorization: Bearer` — never in a URL, query string, error, log, or generated file. **Never print a live token.**
 - **`none`** — no tracker contact. Description-only intake. Supplying a task id fails before any git mutation.
 
 The tracker is **optional**. With no id to work from, pass a description straight through and everything below still applies:
@@ -122,6 +122,45 @@ GitHub remains the code host for remotes, branches, commits, pushes, and pull re
 
 ## YouTrack environment (Windows)
 
+Run these snippets in a terminal yourself, not through the agent (the secret scanner flags permanent tokens in prompts, and interactive input requires a terminal).
+
+### Hardened setup (recommended)
+
+Stores the token encrypted with DPAPI so it is not visible in environment variables or registry queries. The file is readable only by the same Windows user and is non-portable across machines or users (backup restores require running setup again).
+
+```powershell
+$youTrackUrl = 'https://lamuniercosta.youtrack.cloud'
+$secureToken = Read-Host 'Paste the YouTrack permanent token' -AsSecureString
+$tokenHandle = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+
+try {
+    $plainToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenHandle)
+
+    if ([string]::IsNullOrWhiteSpace($plainToken) -or
+        -not $plainToken.StartsWith('perm:', [StringComparison]::Ordinal)) {
+        throw "Expected a YouTrack permanent token beginning with 'perm:'."
+    }
+
+    $dir = "$env:USERPROFILE\.dotnet-agent-harness"
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $secureToken | ConvertFrom-SecureString | Set-Content -Path "$dir\youtrack-token" -Encoding UTF8
+
+    [Environment]::SetEnvironmentVariable('YOUTRACK_URL', $youTrackUrl, 'User')
+    [Environment]::SetEnvironmentVariable('YOUTRACK_TOKEN', $null, 'User')
+
+    Write-Host 'YouTrack token saved to DPAPI-encrypted file and user-scope YOUTRACK_URL was set.'
+}
+finally {
+    if ($tokenHandle -ne [IntPtr]::Zero) {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenHandle)
+    }
+
+    Remove-Variable plainToken, secureToken, tokenHandle -ErrorAction SilentlyContinue
+}
+```
+
+### Basic setup (legacy)
+
 One-time setup. It prompts without echoing the token, rejects non-permanent tokens, stores both variables for the Windows user, and makes them available to the current shell. Environment variables are plaintext process/user configuration, not a secret vault.
 
 ```powershell
@@ -153,6 +192,10 @@ finally {
     Remove-Variable plainToken, secureToken, tokenHandle -ErrorAction SilentlyContinue
 }
 ```
+
+### Rotating the token
+
+To rotate, revoke the old token in YouTrack, run Hardened setup to save the new token, and execute `[Environment]::SetEnvironmentVariable('YOUTRACK_TOKEN', $null, 'User')` to remove any lingering HKCU plaintext token. Close open shells or execute `Remove-Item Env:\YOUTRACK_TOKEN` to clear any stale process environment variables.
 
 Never print `$env:YOUTRACK_TOKEN` or `$plainToken` to confirm the setup.
 
