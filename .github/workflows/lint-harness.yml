@@ -334,6 +334,15 @@ jobs:
           fi
           echo "Constitution renders clean and stack-neutral."
 
+      # ---- task-branch test script harness.yml cleanup check --------------
+      - name: Task-branch test script harness.yml cleanup uses Join-Path
+        run: |
+          if grep -nE 'Remove-Item.*harness\.yml' packs/dotnet/scripts/Test-TaskBranchScripts.ps1 | grep -v 'Join-Path'; then
+            echo "::error::Remove-Item targeting harness.yml without Join-Path found in Test-TaskBranchScripts.ps1."
+            exit 1
+          fi
+          echo "Task-branch test script harness.yml cleanup uses Join-Path."
+
   self-tests:
     name: PowerShell self-tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
