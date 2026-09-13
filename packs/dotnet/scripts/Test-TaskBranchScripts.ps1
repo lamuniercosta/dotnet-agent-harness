@@ -483,12 +483,13 @@ try {
         param($Name, $Target)
         "${Name}:${Target}" | Out-File $tempEnv -Append
         if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
-        if ($Name -eq 'YOUTRACK_TOKEN' -and $Target -eq 'User') { return 'perm:test-token' }
+        if ($Name -eq 'YOUTRACK_TOKEN' -and $Target -eq 'Process') { return 'perm:test-token' }
         return ''
     }
     $task = & $getTask -TaskId DAH-123 -RepoRoot $wtWork -EnvironmentReader $reader -RestMethodInvoker { param($Method, $Uri, $Headers, $TimeoutSec) return [PSCustomObject]@{idReadable='DAH-123'; summary='Bug'; description='Bug'; customFields=@(@{name='Type'; value='Bug'})} } | ConvertFrom-Json
     Assert-That 'Id equals literal DAH-123' ($task.Id -eq 'DAH-123')
-    Assert-That 'env log contains YOUTRACK_TOKEN:User' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:User'))
+    $onWin = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
+    if ($onWin) { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) } else { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) }
     Remove-Item harness.yml -Force -ErrorAction SilentlyContinue
     
     Write-Host 'get-task.ps1 seam tests passed.'
