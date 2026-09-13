@@ -215,7 +215,7 @@ gates:
     threshold: 80
 ```
 
-Intake is **tracker-neutral**. `tracker: github` (the default) keeps GitHub Issues via `gh`. `tracker: youtrack` reads tasks through YouTrack REST using `YOUTRACK_URL` and `YOUTRACK_TOKEN`. Token resolution checks process env, DPAPI file (`$env:USERPROFILE\.dotnet-agent-harness\youtrack-token`), and User-scope env in that order — the token is sent as `Authorization: Bearer`, never in a URL, error, or log, and must begin with `perm:`. The DPAPI file holds only the token; `YOUTRACK_URL` stays in the environment. `tracker: none` is description-only and does not contact a tracker. There is no `task.tracker` setting and no CLI override.
+Intake is **tracker-neutral**. `tracker: github` (the default) keeps GitHub Issues via `gh`. `tracker: youtrack` reads tasks through YouTrack REST using `YOUTRACK_URL` and `YOUTRACK_TOKEN`. Token resolution checks process env, then on Windows the DPAPI file (`$env:USERPROFILE\.dotnet-agent-harness\youtrack-token`) and User-scope env in that order — the token is sent as `Authorization: Bearer`, never in a URL, error, or log, and must begin with `perm:`. The DPAPI file holds only the token; `YOUTRACK_URL` stays in the environment. `tracker: none` is description-only and does not contact a tracker. There is no `task.tracker` setting and no CLI override.
 
 Existing consumer `AGENTS.md`, `CLAUDE.md`, and constitutions are skip-if-exists / rendered only when absent — reinstalling this harness does not rewrite them. Fresh installs get the updated constitution wording; already-installed docs keep their current text until the repo edits them.
 
@@ -225,7 +225,7 @@ Run these snippets in a terminal yourself, not through the agent (the secret sca
 
 #### Hardened setup (recommended)
 
-Stores the token encrypted with DPAPI so it is not visible in environment variables or registry queries. The file is readable only by the same Windows user and is non-portable across machines or users (backup restores require running setup again).
+Stores the token encrypted with DPAPI so it is not visible in environment variables or registry queries. The file inherits the default ACLs of your user profile directory and is non-portable across machines or users (backup restores require running setup again).
 
 ```powershell
 $youTrackUrl = 'https://lamuniercosta.youtrack.cloud'
@@ -246,6 +246,7 @@ try {
 
     [Environment]::SetEnvironmentVariable('YOUTRACK_URL', $youTrackUrl, 'User')
     [Environment]::SetEnvironmentVariable('YOUTRACK_TOKEN', $null, 'User')
+    Remove-Item Env:\YOUTRACK_TOKEN -ErrorAction SilentlyContinue
 
     Write-Host 'YouTrack token saved to DPAPI-encrypted file and user-scope YOUTRACK_URL was set.'
 }

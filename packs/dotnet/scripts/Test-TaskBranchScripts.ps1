@@ -638,6 +638,9 @@ try {
             if ($null -eq $oldProcUrl) { Remove-Item Env:YOUTRACK_URL -ErrorAction SilentlyContinue } else { $env:YOUTRACK_URL = $oldProcUrl }
         }
     }
+    elseif ($IsWindows) {
+        Write-Host 'HARNESS_SKIP_REAL_DPAPI=1: real DPAPI round-trip test skipped.'
+    }
     elseif (-not $IsWindows) {
         # No DpapiFileReader: process env is the only source, so a missing
         # process token must fail. That is AC6 (DPAPI path skipped).
