@@ -459,10 +459,10 @@ try {
 
     $claudeSettingsPath = Join-Path $repo '.claude/settings.json'
     $claudeSettings = if (Test-Path $claudeSettingsPath) { Get-Content -LiteralPath $claudeSettingsPath -Raw } else { '' }
-    Assert-That 'installed Claude settings.json contains secret-scan in PreToolUse' `
-        (($claudeSettings -match 'PreToolUse') -and
-         ($claudeSettings -match 'secret-scan\.ps1')) `
-        'Claude PreToolUse hook must be wired for secret scanning on file reads'
+    Assert-That 'installed Claude settings.json wires secret-scan to PreToolUse/Read with ClaudePreTool' `
+        (($claudeSettings -match '"matcher":\s*"Read"') -and
+         ($claudeSettings -match 'ClaudePreTool')) `
+        'Claude PreToolUse/Read hook must carry the ClaudePreTool output contract'
 
     # ── Codex skills: generated from the canonical tree ─────────────────────
     $sourceSkillNames = @(Get-ChildItem -LiteralPath $skillsSource -Directory | ForEach-Object { $_.Name })

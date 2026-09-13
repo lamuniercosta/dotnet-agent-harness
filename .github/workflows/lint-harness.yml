@@ -27,7 +27,14 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v4
+      # ---- gitleaks custom rule present ----------------------------------
+      - name: YouTrack token gitleaks rule is present
+        run: |
+          if ! grep -qF 'youtrack-perm-token' .gitleaks.toml || ! grep -qF '\bperm:' .gitleaks.toml; then
+            echo "::error file=.gitleaks.toml::missing youtrack-perm-token rule id or perm: regex pattern"
+            exit 1
+          fi
+          echo "YouTrack token gitleaks rule present."
 
       # ---- no third-party reviewer dependencies -------------------------
       # The harness must run identically on both platforms and cost nothing
@@ -492,15 +499,6 @@ jobs:
       # sidesteps the action's licence handling entirely.
       #
       # --redact so a finding never puts the secret into a public build log.
-      # ---- gitleaks custom rule present ----------------------------------
-      - name: YouTrack token gitleaks rule is present
-        run: |
-          if ! grep -q 'youtrack-perm-token' .gitleaks.toml || ! grep -q 'perm:' .gitleaks.toml; then
-            echo "::error file=.gitleaks.toml::missing youtrack-perm-token rule id or perm: regex pattern"
-            exit 1
-          fi
-          echo "YouTrack token gitleaks rule present."
-
       - name: Scan history for committed secrets
         run: |
           VERSION=8.21.2
