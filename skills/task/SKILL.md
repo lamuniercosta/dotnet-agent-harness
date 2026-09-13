@@ -25,7 +25,7 @@ Typical invocation: `/task 142 feature`, `/task DAH-123`, or just `/task 142`.
 Depends on `harness.yml` `tracker`:
 
 - **`github`** (default) — the [`gh` CLI](https://cli.github.com), authenticated (`gh auth login`). No tokens, config files, or environment variables of your own — `gh` owns the credential.
-- **`youtrack`** — `YOUTRACK_URL` and `YOUTRACK_TOKEN`. Token resolution checks process env, DPAPI file (`$env:USERPROFILE\.dotnet-agent-harness\youtrack-token`), and User-scope env in that order. The DPAPI file holds only the token; `YOUTRACK_URL` stays in the environment. The token must be a permanent token beginning with `perm:`. It is sent only as `Authorization: Bearer` — never in a URL, query string, error, log, or generated file. **Never print a live token.**
+- **`youtrack`** — `YOUTRACK_URL` and `YOUTRACK_TOKEN`. Token resolution checks process env, then on Windows the DPAPI file (`$env:USERPROFILE\.dotnet-agent-harness\youtrack-token`) and User-scope env in that order. The DPAPI file holds only the token; `YOUTRACK_URL` stays in the environment. The token must be a permanent token beginning with `perm:`. It is sent only as `Authorization: Bearer` — never in a URL, query string, error, log, or generated file. **Never print a live token.**
 - **`none`** — no tracker contact. Description-only intake. Supplying a task id fails before any git mutation.
 
 The tracker is **optional**. With no id to work from, pass a description straight through and everything below still applies:
@@ -126,7 +126,7 @@ Run these snippets in a terminal yourself, not through the agent (the secret sca
 
 ### Hardened setup (recommended)
 
-Stores the token encrypted with DPAPI so it is not visible in environment variables or registry queries. The file is readable only by the same Windows user and is non-portable across machines or users (backup restores require running setup again).
+Stores the token encrypted with DPAPI so it is not visible in environment variables or registry queries. The file inherits the default ACLs of your user profile directory and is non-portable across machines or users (backup restores require running setup again).
 
 ```powershell
 $youTrackUrl = 'https://lamuniercosta.youtrack.cloud'
@@ -147,6 +147,7 @@ try {
 
     [Environment]::SetEnvironmentVariable('YOUTRACK_URL', $youTrackUrl, 'User')
     [Environment]::SetEnvironmentVariable('YOUTRACK_TOKEN', $null, 'User')
+    Remove-Item Env:\YOUTRACK_TOKEN -ErrorAction SilentlyContinue
 
     Write-Host 'YouTrack token saved to DPAPI-encrypted file and user-scope YOUTRACK_URL was set.'
 }
