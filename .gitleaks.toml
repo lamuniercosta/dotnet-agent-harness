@@ -27,6 +27,11 @@
 [extend]
 useDefault = true
 
+[[rules]]
+id = "youtrack-perm-token"
+description = "YouTrack permanent token"
+regex = '''\bperm:[A-Za-z0-9._=-]{20,}'''
+
 [allowlist]
 description = "Test fixtures and detection patterns - shapes by design, not secrets"
 paths = [

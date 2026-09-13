@@ -26,6 +26,26 @@ function Invoke-Hook {
     }
 }
 
+function Invoke-HookStreams {
+    param([string]$Script, [string[]]$ScriptArgs, [string]$Json)
+    $stderrPath = Join-Path ([System.IO.Path]::GetTempPath()) ('hook-stderr-' + [guid]::NewGuid().ToString('N') + '.txt')
+    try {
+        $stdout = @($Json | & pwsh -NoProfile -File $Script @ScriptArgs 2>$stderrPath)
+        $stderr = ''
+        if (Test-Path -LiteralPath $stderrPath) {
+            $stderrText = Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
+            if ($null -ne $stderrText) { $stderr = $stderrText }
+        }
+        return [PSCustomObject]@{
+            ExitCode = $LASTEXITCODE
+            StdOut   = ($stdout -join [Environment]::NewLine).Trim()
+            StdErr   = $stderr.Trim()
+        }
+    } finally {
+        Remove-Item -LiteralPath $stderrPath -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Convert-StdOutJson {
     param([string]$Text)
     try { return $Text | ConvertFrom-Json -ErrorAction Stop } catch { return $null }
@@ -100,6 +120,21 @@ Write-Host 'secret-scan.ps1 CursorReadFile contract:'
 Assert-Json 'credential-shaped read warns but allows' (Invoke-Hook $secretScan $cursorReadFile (Prompt-Payload "aws_access_key_id = $fakeAwsKey")) {
     param($Result, $Json)
     $Result.ExitCode -eq 0 -and $Json -and $Json.permission -eq 'allow'
+}
+
+Write-Host ''
+Write-Host 'secret-scan.ps1 ClaudePreTool contract:'
+$claudePreTool = @('-OutputContract', 'ClaudePreTool')
+$claudeFinding = Invoke-HookStreams $secretScan $claudePreTool (Prompt-Payload "aws_access_key_id = $fakeAwsKey")
+$checks++
+$claudeStdoutJson = Convert-StdOutJson $claudeFinding.StdOut
+if ($claudeFinding.ExitCode -eq 0 -and
+    $claudeFinding.StdErr -match 'secret-scan: possible credential' -and
+    $claudeFinding.StdOut -eq '' -and
+    -not $claudeStdoutJson) {
+    Write-Host '  ok       finding warns on stderr, exits 0, no stdout JSON'
+} else {
+    Write-Host '  FAIL     ClaudePreTool finding contract' -ForegroundColor Red; $failures++
 }
 
 Write-Host ''
