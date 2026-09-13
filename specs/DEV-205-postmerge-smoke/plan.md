@@ -48,7 +48,8 @@ section is a separate deliverable and is not specified here.
 **Setup (after common):** At the scratch root, create these files only
 (zero `.cs` files): `notes/readme.md`, `tools/helper.ps1`, and
 `ci/workflow.yml`. Do **not** modify the installed `skills/`, `rules/`,
-`adapters/`, `hooks/`, or `.claude/` trees. Stage and commit those three
+`adapters/`, `hooks/`, `.claude/`, `.agents/skills/`, or `.cursor/rules/`
+trees. Stage and commit those three
 files on top of the initial commit so the three-dot range is non-empty.
 Classification uses that range's extension list.
 
@@ -137,6 +138,8 @@ range transport above.
    ```text
    Step 0: FEATURE_DIR=specs/001-smoke via .specify/scripts/powershell/check-prerequisites.ps1 -Json; closing bar, frozen scope, and round cap resolved from specs/001-smoke/brief.md
    ```
+
+   Transcript evidence (here and wherever else this runbook requires it) is matched substantively — step name plus resolved FEATURE_DIR plus loop terms present — not literally word-for-word.
 
 3. Step 2 blast-radius scoring runs.
 4. Step 3 attempts the `cwm-roslyn-navigator` pre-pass: the pre-pass is
