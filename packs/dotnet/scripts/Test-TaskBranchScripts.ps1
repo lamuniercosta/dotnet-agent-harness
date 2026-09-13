@@ -489,8 +489,108 @@ try {
     $task = & $getTask -TaskId DAH-123 -RepoRoot $wtWork -EnvironmentReader $reader -RestMethodInvoker { param($Method, $Uri, $Headers, $TimeoutSec) return [PSCustomObject]@{idReadable='DAH-123'; summary='Bug'; description='Bug'; customFields=@(@{name='Type'; value='Bug'})} } | ConvertFrom-Json
     Assert-That 'Id equals literal DAH-123' ($task.Id -eq 'DAH-123')
     $onWin = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
-    if ($onWin) { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) } else { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) }
+    if ($onWin) {     Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) } else { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) }
     Remove-Item harness.yml -Force -ErrorAction SilentlyContinue
+
+    # ── Split-NativeOutput helper (filter-a..c) ──────────────────────────────
+    $parseErrors = $null
+    $tokens = $null
+    $getTaskAst = [System.Management.Automation.Language.Parser]::ParseFile($getTask, [ref]$tokens, [ref]$parseErrors)
+    Assert-That 'get-task.ps1 parses for Split-NativeOutput extraction' `
+        (-not $parseErrors -or @($parseErrors).Count -eq 0)
+    $splitFn = @(
+        $getTaskAst.FindAll({
+            param($n)
+            $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Split-NativeOutput'
+        }, $true)
+    )[0]
+    Assert-That 'Split-NativeOutput is defined in get-task.ps1' ($null -ne $splitFn)
+    . ([scriptblock]::Create($splitFn.Extent.Text))
+
+    $filterErrA = [System.Management.Automation.ErrorRecord]::new(
+        [Exception]::new('filter-a-stderr'),
+        'filter-a',
+        [System.Management.Automation.ErrorCategory]::NotSpecified,
+        $null)
+    $filterA = Split-NativeOutput @('stdout-one', 'stdout-two', $filterErrA)
+    Assert-That 'filter-a: stdout joins both strings' `
+        ($filterA.Stdout.Contains('stdout-one') -and $filterA.Stdout.Contains('stdout-two'))
+    Assert-That 'filter-a: stderr is Exception.Message' ($filterA.Stderr -eq 'filter-a-stderr')
+
+    $filterB = Split-NativeOutput @('only-out-1', 'only-out-2')
+    Assert-That 'filter-b: stdout contains both strings' `
+        ($filterB.Stdout.Contains('only-out-1') -and $filterB.Stdout.Contains('only-out-2'))
+    Assert-That 'filter-b: stderr is empty' ([string]::IsNullOrEmpty([string]$filterB.Stderr))
+
+    $filterErrC1 = [System.Management.Automation.ErrorRecord]::new(
+        [Exception]::new('filter-c-one'),
+        'filter-c-1',
+        [System.Management.Automation.ErrorCategory]::NotSpecified,
+        $null)
+    $filterErrC2 = [System.Management.Automation.ErrorRecord]::new(
+        [Exception]::new('filter-c-two'),
+        'filter-c-2',
+        [System.Management.Automation.ErrorCategory]::NotSpecified,
+        $null)
+    $filterC = Split-NativeOutput @($filterErrC1, $filterErrC2)
+    Assert-That 'filter-c: stdout is empty' ([string]::IsNullOrEmpty([string]$filterC.Stdout))
+    Assert-That 'filter-c: stderr contains both messages' `
+        ($filterC.Stderr.Contains('filter-c-one') -and $filterC.Stderr.Contains('filter-c-two'))
+
+    # ── GitHub seam tests via GitHubInvoker (gh-a..gh-d) ─────────────────────
+    $harnessYml = Join-Path $wtWork 'harness.yml'
+
+    Set-Content -LiteralPath $harnessYml -Encoding UTF8 -Value 'tracker: github'
+    try {
+        $ghAInvoker = { param($Id) '{"number":208,"title":"Split streams","body":"fake-body","labels":[{"name":"bug"}]}' }
+        $ghA = & $getTask -TaskId 208 -RepoRoot $wtWork -GitHubInvoker $ghAInvoker | ConvertFrom-Json
+        Assert-That 'gh-a: valid JSON yields Id/Summary/Type' `
+            ($ghA.Id -eq '208' -and $ghA.Summary -eq 'Split streams' -and $ghA.Type -eq 'bug')
+    }
+    finally {
+        Remove-Item -LiteralPath $harnessYml -Force -ErrorAction SilentlyContinue
+    }
+
+    Set-Content -LiteralPath $harnessYml -Encoding UTF8 -Value 'tracker: github'
+    try {
+        $ghBError = ''
+        try {
+            & $getTask -TaskId 208 -RepoRoot $wtWork -GitHubInvoker { param($Id) 'To get started with GitHub CLI, please run: gh auth login' } | Out-Null
+        }
+        catch { $ghBError = $_.Exception.Message }
+        Assert-That 'gh-b: non-JSON mentions issue id' ($ghBError -match '208') $ghBError
+    }
+    finally {
+        Remove-Item -LiteralPath $harnessYml -Force -ErrorAction SilentlyContinue
+    }
+
+    Set-Content -LiteralPath $harnessYml -Encoding UTF8 -Value 'tracker: github'
+    try {
+        $ghCError = ''
+        try {
+            & $getTask -TaskId 208 -RepoRoot $wtWork -GitHubInvoker { param($Id) '' } | Out-Null
+        }
+        catch { $ghCError = $_.Exception.Message }
+        Assert-That 'gh-c: empty return mentions issue id and auth check' `
+            ($ghCError -match '208' -and $ghCError -match 'gh auth status' -and $ghCError -notmatch 'PropertyNotFound') $ghCError
+    }
+    finally {
+        Remove-Item -LiteralPath $harnessYml -Force -ErrorAction SilentlyContinue
+    }
+
+    Set-Content -LiteralPath $harnessYml -Encoding UTF8 -Value 'tracker: github'
+    try {
+        $ghDError = ''
+        try {
+            & $getTask -TaskId 208 -RepoRoot $wtWork -GitHubInvoker { param($Id) '{"number":208,"body":"fake-body","labels":[]}' } | Out-Null
+        }
+        catch { $ghDError = $_.Exception.Message }
+        Assert-That 'gh-d: missing title could not resolve a description' `
+            ($ghDError -match 'could not resolve a description') $ghDError
+    }
+    finally {
+        Remove-Item -LiteralPath $harnessYml -Force -ErrorAction SilentlyContinue
+    }
     
     Write-Host 'get-task.ps1 seam tests passed.'
 
@@ -511,7 +611,7 @@ try {
 
     # A missing harness.yml must SAY the worktree is on defaults. A silent
     # fallback is indistinguishable from a correctly configured run.
-    Remove-Item -LiteralPath (Join-Path $wtWork 'harness.yml') -Force
+    Remove-Item -LiteralPath (Join-Path $wtWork 'harness.yml') -Force -ErrorAction SilentlyContinue
     $noConfigOutput = (& $newScript -Description 'No config here' -Type feature -BaseBranch main -Remote origin 3>&1 6>&1 | Out-String)
     Assert-That 'a missing harness.yml is reported, not silently defaulted' `
         ($noConfigOutput -match 'harness defaults') $noConfigOutput
