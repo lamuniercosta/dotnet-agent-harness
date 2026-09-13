@@ -156,6 +156,30 @@ function Split-NativeOutput {
     }
 }
 
+function Format-GhDiagnostic {
+    param(
+        [string]$Stderr,
+        [string]$Stdout,
+        [int]$ExitCode,
+        [string[]]$Secrets = @()
+    )
+
+    $diagnostic = [string]$Stderr
+    if ([string]::IsNullOrWhiteSpace($diagnostic)) {
+        $diagnostic = [string]$Stdout
+    }
+    if ([string]::IsNullOrWhiteSpace($diagnostic)) {
+        $diagnostic = "gh exited $ExitCode"
+    }
+    foreach ($token in $Secrets) {
+        $diagnostic = Protect-SecretText -Text $diagnostic -Secret $token
+    }
+    if ($diagnostic.Length -gt 500) {
+        $diagnostic = $diagnostic.Substring(0, 500)
+    }
+    return $diagnostic
+}
+
 function Get-GitHubTask {
     param([string]$Id)
 
@@ -171,31 +195,20 @@ function Get-GitHubTask {
         if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
             throw "The 'gh' CLI is required to read issue #$Id. Install it (https://cli.github.com) and run 'gh auth login', or pass -Description and -Type explicitly."
         }
-        $previousNativePref = $PSNativeCommandUseErrorActionPreference
+        $previousNativePref = (Get-Variable -Name PSNativeCommandUseErrorActionPreference -ValueOnly -ErrorAction SilentlyContinue)
         $PSNativeCommandUseErrorActionPreference = $false
         try {
             $merged = gh issue view $Id --json number,title,body,labels 2>&1
             $exitCode = $LASTEXITCODE
         }
         finally {
-            $PSNativeCommandUseErrorActionPreference = $previousNativePref
+            if ($null -ne $previousNativePref) { $PSNativeCommandUseErrorActionPreference = $previousNativePref }
         }
 
         $split = Split-NativeOutput $merged
         if ($exitCode -ne 0) {
-            $diagnostic = [string]$split.Stderr
-            if ([string]::IsNullOrWhiteSpace($diagnostic)) {
-                $diagnostic = [string]$split.Stdout
-            }
-            if ([string]::IsNullOrWhiteSpace($diagnostic)) {
-                $diagnostic = "gh exited $exitCode"
-            }
-            elseif ($diagnostic.Length -gt 500) {
-                $diagnostic = $diagnostic.Substring(0, 500)
-            }
-            foreach ($token in @($env:GH_TOKEN, $env:GITHUB_TOKEN, $env:GH_ENTERPRISE_TOKEN)) {
-                $diagnostic = Protect-SecretText -Text $diagnostic -Secret $token
-            }
+            $secrets = @($env:GH_TOKEN, $env:GITHUB_TOKEN, $env:GH_ENTERPRISE_TOKEN, $env:GITHUB_ENTERPRISE_TOKEN)
+            $diagnostic = Format-GhDiagnostic -Stderr $split.Stderr -Stdout $split.Stdout -ExitCode $exitCode -Secrets $secrets
             throw "Could not read issue #${Id}: $diagnostic"
         }
         $raw = $split.Stdout
