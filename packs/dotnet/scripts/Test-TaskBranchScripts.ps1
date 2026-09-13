@@ -455,13 +455,13 @@ try {
     $capturedUri = Get-Content -Raw $tempUri
     Assert-That 'YouTrack mock sends Authorization header' ($capturedHeaders -match 'Bearer perm:test-token')
     Assert-That 'YouTrack mock does not leak token in URI' ($capturedUri -notmatch 'perm:test-token')
-    Remove-Item harness.yml -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $wtWork 'harness.yml') -Force -ErrorAction SilentlyContinue
     
     # (b) Bug infers bug
     Set-Content -LiteralPath (Join-Path $wtWork 'harness.yml') -Encoding UTF8 -Value 'tracker: youtrack'
     $taskBug = & $getTask -TaskId DAH-123 -Description 'Bug' -RepoRoot $wtWork -RestMethodInvoker { param($Method, $Uri, $Headers, $TimeoutSec) return [PSCustomObject]@{idReadable='DAH-123'; summary='Bug'; description='Bug'; customFields=@(@{name='Type'; value='Bug'})} } | ConvertFrom-Json
     Assert-That 'Bug infers bug' ($taskBug.Type -eq 'bug')
-    Remove-Item harness.yml -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $wtWork 'harness.yml') -Force -ErrorAction SilentlyContinue
 
     # (c) Test subprocess call with stubbed token
     Set-Content -LiteralPath (Join-Path $wtWork 'harness.yml') -Encoding UTF8 -Value 'tracker: youtrack'
@@ -472,7 +472,7 @@ try {
     # The simplest fix for the token error is just to stub the env.
     $output = & pwsh -NoProfile -File $getTask -TaskId DAH-123 -Description 'Bug' -RepoRoot $wtWork 2>&1
     Assert-That 'Subprocess call succeeds with stubbed token' ($LASTEXITCODE -eq 0 -or $output -match 'YouTrack request for') $output
-    Remove-Item harness.yml -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $wtWork 'harness.yml') -Force -ErrorAction SilentlyContinue
 
     # (d) Drop GET_TASK_MOCK_TRACKER and Scope property
     Set-Content -LiteralPath (Join-Path $wtWork 'harness.yml') -Encoding UTF8 -Value 'tracker: youtrack'
@@ -490,7 +490,7 @@ try {
     Assert-That 'Id equals literal DAH-123' ($task.Id -eq 'DAH-123')
     $onWin = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
     if ($onWin) { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) } else { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) }
-    Remove-Item harness.yml -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $wtWork 'harness.yml') -Force -ErrorAction SilentlyContinue
 
     # ── DEV-206: YOUTRACK_TOKEN DPAPI three-source resolution ────────────────
     # Seam-driven order tests run on every platform. Real DPAPI is Windows-only.
