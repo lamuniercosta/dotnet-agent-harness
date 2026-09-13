@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "measuredAt": "2026-09-12T23:27:14.8694746Z",
+  "measuredAt": "2026-09-13T14:30:50.4640284Z",
   "hosts": {
     "claude": {
       "bytes": 21872,
@@ -13,8 +13,8 @@
       ]
     },
     "codex": {
-      "bytes": 16205,
-      "estTokens": 4052,
+      "bytes": 16361,
+      "estTokens": 4091,
       "files": [
         "adapters/codex/AGENTS.md"
       ]
