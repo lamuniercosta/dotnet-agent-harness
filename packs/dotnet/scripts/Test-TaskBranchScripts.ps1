@@ -489,7 +489,7 @@ try {
     $task = & $getTask -TaskId DAH-123 -RepoRoot $wtWork -EnvironmentReader $reader -RestMethodInvoker { param($Method, $Uri, $Headers, $TimeoutSec) return [PSCustomObject]@{idReadable='DAH-123'; summary='Bug'; description='Bug'; customFields=@(@{name='Type'; value='Bug'})} } | ConvertFrom-Json
     Assert-That 'Id equals literal DAH-123' ($task.Id -eq 'DAH-123')
     $onWin = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
-    if ($onWin) {     Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) } else { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) }
+    if ($onWin) { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) } else { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) }
     Remove-Item harness.yml -Force -ErrorAction SilentlyContinue
 
     # ── Split-NativeOutput helper (filter-a..c) ──────────────────────────────
@@ -505,7 +505,7 @@ try {
         }, $true)
     )[0]
     Assert-That 'Split-NativeOutput is defined in get-task.ps1' ($null -ne $splitFn)
-    . ([scriptblock]::Create($splitFn.Extent.Text))
+    if ($splitFn) { . ([scriptblock]::Create($splitFn.Extent.Text)) }
 
     $filterErrA = [System.Management.Automation.ErrorRecord]::new(
         [Exception]::new('filter-a-stderr'),
@@ -537,6 +537,35 @@ try {
     Assert-That 'filter-c: stderr contains both messages' `
         ($filterC.Stderr.Contains('filter-c-one') -and $filterC.Stderr.Contains('filter-c-two'))
 
+    # ── Format-GhDiagnostic helper (diag-a..c) ───────────────────────────────
+    $protectFn = @(
+        $getTaskAst.FindAll({
+            param($n)
+            $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Protect-SecretText'
+        }, $true)
+    )[0]
+    if ($protectFn) { . ([scriptblock]::Create($protectFn.Extent.Text)) }
+
+    $fmtFn = @(
+        $getTaskAst.FindAll({
+            param($n)
+            $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Format-GhDiagnostic'
+        }, $true)
+    )[0]
+    Assert-That 'Format-GhDiagnostic is defined in get-task.ps1' ($null -ne $fmtFn)
+    if ($fmtFn) { . ([scriptblock]::Create($fmtFn.Extent.Text)) }
+
+    $longStderr = 'secret-token-abc ' + ('x' * 600)
+    $diagA = Format-GhDiagnostic -Stderr $longStderr -Stdout 'stdout-ignored' -ExitCode 1 -Secrets @('secret-token-abc')
+    Assert-That 'diag-a: stderr present returns stderr truncated and redacted' `
+        ($diagA.Length -eq 500 -and $diagA -match '<redacted>' -and $diagA -notmatch 'secret-token-abc')
+
+    $diagB = Format-GhDiagnostic -Stderr '' -Stdout 'stdout-message' -ExitCode 1
+    Assert-That 'diag-b: stderr empty stdout present returns stdout' ($diagB -eq 'stdout-message')
+
+    $diagC = Format-GhDiagnostic -Stderr '' -Stdout '' -ExitCode 42
+    Assert-That 'diag-c: both empty returns gh exited N' ($diagC -eq 'gh exited 42')
+
     # ── GitHub seam tests via GitHubInvoker (gh-a..gh-d) ─────────────────────
     $harnessYml = Join-Path $wtWork 'harness.yml'
 
@@ -545,7 +574,7 @@ try {
         $ghAInvoker = { param($Id) '{"number":208,"title":"Split streams","body":"fake-body","labels":[{"name":"bug"}]}' }
         $ghA = & $getTask -TaskId 208 -RepoRoot $wtWork -GitHubInvoker $ghAInvoker | ConvertFrom-Json
         Assert-That 'gh-a: valid JSON yields Id/Summary/Type' `
-            ($ghA.Id -eq '208' -and $ghA.Summary -eq 'Split streams' -and $ghA.Type -eq 'bug')
+            ($ghA.Id -eq '208' -and $ghA.Summary -eq 'Split streams' -and $ghA.Type -eq 'bug' -and $ghA.Description -eq 'fake-body')
     }
     finally {
         Remove-Item -LiteralPath $harnessYml -Force -ErrorAction SilentlyContinue
@@ -559,6 +588,9 @@ try {
         }
         catch { $ghBError = $_.Exception.Message }
         Assert-That 'gh-b: non-JSON mentions issue id' ($ghBError -match '208') $ghBError
+        Assert-That 'gh-b: non-JSON wording present' ($ghBError -match 'non-JSON') $ghBError
+        Assert-That 'gh-b: raw payload absent' ($ghBError -notmatch 'gh auth login') $ghBError
+        Assert-That 'gh-b: stacktrace absent' ($ghBError -notmatch 'ConvertFrom-Json') $ghBError
     }
     finally {
         Remove-Item -LiteralPath $harnessYml -Force -ErrorAction SilentlyContinue
