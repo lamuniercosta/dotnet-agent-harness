@@ -492,6 +492,175 @@ try {
     if ($onWin) { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) } else { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) }
     Remove-Item harness.yml -Force -ErrorAction SilentlyContinue
 
+    # ── DEV-206: YOUTRACK_TOKEN DPAPI three-source resolution ────────────────
+    # Seam-driven order tests run on every platform. Real DPAPI is Windows-only.
+    # HARNESS_SKIP_REAL_DPAPI=1 forces that branch off (ubuntu-CI simulation).
+    # Fake tokens stay in comparisons; Assert-That Detail is a source tag only.
+    Set-Content -LiteralPath (Join-Path $wtWork 'harness.yml') -Encoding UTF8 -Value 'tracker: youtrack'
+    $tokenSourceFile = Join-Path $tempRoot 'token-source.txt'
+    $newTokenInvoker = {
+        param($Method, $Uri, $Headers, $TimeoutSec)
+        $src = 'other'
+        if ($Headers.Authorization -eq 'Bearer perm:test-token-dpapi') { $src = 'dpapi' }
+        elseif ($Headers.Authorization -eq 'Bearer perm:test-token-process') { $src = 'process' }
+        elseif ($Headers.Authorization -eq 'Bearer perm:test-token-user') { $src = 'user' }
+        Set-Content -LiteralPath $tokenSourceFile -Value $src -Encoding UTF8
+        return [PSCustomObject]@{ idReadable = 'DAH-123'; summary = 'Bug'; description = 'Bug'; customFields = @(@{ name = 'Type'; value = 'Bug' }) }
+    }.GetNewClosure()
+
+    # (e) DPAPI seam wins when process env is empty; reader trims trailing newline
+    $envReaderE = {
+        param($Name, $Target)
+        if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
+        return ''
+    }
+    $dpapiReaderE = { param($Path) return "perm:test-token-dpapi`n" }
+    & $getTask -TaskId DAH-123 -RepoRoot $wtWork -EnvironmentReader $envReaderE `
+        -DpapiFileReader $dpapiReaderE -RestMethodInvoker $newTokenInvoker | Out-Null
+    Assert-That 'e: DPAPI seam wins when process env is empty' `
+        ((Get-Content -LiteralPath $tokenSourceFile -Raw).Trim() -eq 'dpapi') 'source-tag'
+
+    # (f) process env wins over DPAPI seam
+    $envReaderF = {
+        param($Name, $Target)
+        if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
+        if ($Name -eq 'YOUTRACK_TOKEN' -and $Target -eq 'Process') { return 'perm:test-token-process' }
+        return ''
+    }
+    $dpapiReaderF = { param($Path) return 'perm:test-token-dpapi' }
+    & $getTask -TaskId DAH-123 -RepoRoot $wtWork -EnvironmentReader $envReaderF `
+        -DpapiFileReader $dpapiReaderF -RestMethodInvoker $newTokenInvoker | Out-Null
+    Assert-That 'f: process env wins over DPAPI seam' `
+        ((Get-Content -LiteralPath $tokenSourceFile -Raw).Trim() -eq 'process') 'source-tag'
+
+    # (g) DPAPI seam returns nothing → User-scope env is the fallback
+    $envReaderG = {
+        param($Name, $Target)
+        if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
+        if ($Name -eq 'YOUTRACK_TOKEN' -and $Target -eq 'User') { return 'perm:test-token-user' }
+        return ''
+    }
+    $dpapiReaderG = { param($Path) return '' }
+    & $getTask -TaskId DAH-123 -RepoRoot $wtWork -EnvironmentReader $envReaderG `
+        -DpapiFileReader $dpapiReaderG -RestMethodInvoker $newTokenInvoker | Out-Null
+    Assert-That 'g: empty DPAPI seam falls through to User-scope env' `
+        ((Get-Content -LiteralPath $tokenSourceFile -Raw).Trim() -eq 'user') 'source-tag'
+
+    # (h) DPAPI seam is not consulted when resolving YOUTRACK_URL
+    $dpapiCallLog = Join-Path $tempRoot 'dpapi-calls.txt'
+    Set-Content -LiteralPath $dpapiCallLog -Value '' -Encoding UTF8
+    $envReaderH = {
+        param($Name, $Target)
+        if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'User') { return 'https://example.invalid' }
+        if ($Name -eq 'YOUTRACK_TOKEN' -and $Target -eq 'User') { return 'perm:test-token-user' }
+        return ''
+    }
+    $dpapiReaderH = {
+        param($Path)
+        'called' | Out-File -LiteralPath $dpapiCallLog -Append -Encoding UTF8
+        return 'perm:test-token-dpapi'
+    }.GetNewClosure()
+    & $getTask -TaskId DAH-123 -RepoRoot $wtWork -EnvironmentReader $envReaderH `
+        -DpapiFileReader $dpapiReaderH -RestMethodInvoker $newTokenInvoker | Out-Null
+    $dpapiCallCount = @(Get-Content -LiteralPath $dpapiCallLog | Where-Object { $_.Trim() -eq 'called' }).Count
+    Assert-That 'h: DPAPI seam is not consulted for YOUTRACK_URL' `
+        ($dpapiCallCount -eq 1) 'call-count'
+    Assert-That 'h: token still comes from DPAPI when URL uses User env' `
+        ((Get-Content -LiteralPath $tokenSourceFile -Raw).Trim() -eq 'dpapi') 'source-tag'
+
+    # Decrypt-failure: seam throws → path-only warning, User fallback, never blob
+    $dpapiBlobHex = '01000000D08C9DDF0115D1118C7A00C04FC297EBDEADBEEF'
+    $envReaderFail = {
+        param($Name, $Target)
+        if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
+        if ($Name -eq 'YOUTRACK_TOKEN' -and $Target -eq 'User') { return 'perm:test-token-user' }
+        return ''
+    }
+    $dpapiReaderFail = {
+        param($Path)
+        throw "ConvertTo-SecureString failed: $dpapiBlobHex perm:leaked-secret"
+    }
+    $decryptWarnings = $null
+    $oldWarnProfile = $env:USERPROFILE
+    $fakeWarnProfile = Join-Path $tempRoot 'warn-profile'
+    New-Item -ItemType Directory -Path (Join-Path $fakeWarnProfile '.dotnet-agent-harness') -Force | Out-Null
+    $env:USERPROFILE = $fakeWarnProfile
+    try {
+        & $getTask -TaskId DAH-123 -RepoRoot $wtWork -EnvironmentReader $envReaderFail `
+            -DpapiFileReader $dpapiReaderFail -RestMethodInvoker $newTokenInvoker `
+            -WarningVariable decryptWarnings | Out-Null
+    }
+    finally {
+        $env:USERPROFILE = $oldWarnProfile
+    }
+    $warnText = @($decryptWarnings | ForEach-Object { "$_" }) -join ' '
+    Assert-That 'decrypt failure falls through to User-scope env' `
+        ((Get-Content -LiteralPath $tokenSourceFile -Raw).Trim() -eq 'user') 'source-tag'
+    Assert-That 'decrypt failure warning names the token file path' `
+        ($warnText -match 'youtrack-token') 'path-only'
+    Assert-That 'decrypt failure warning does not contain blob or token material' `
+        ($warnText -notmatch 'perm:' -and $warnText -notmatch 'DEADBEEF' -and $warnText -notmatch '01000000') 'no-blob'
+
+    $runRealDpapi = $IsWindows -and ($env:HARNESS_SKIP_REAL_DPAPI -ne '1')
+    if ($runRealDpapi) {
+        $fakeProfile = Join-Path $tempRoot 'dpapi-profile'
+        $tokenDir = Join-Path $fakeProfile '.dotnet-agent-harness'
+        New-Item -ItemType Directory -Path $tokenDir -Force | Out-Null
+        $tokenFile = Join-Path $tokenDir 'youtrack-token'
+        $underTemp = $tokenFile.StartsWith($tempRoot, [System.StringComparison]::OrdinalIgnoreCase)
+        Assert-That 'i: real-DPAPI path stays under the test temp dir' $underTemp 'temp-dir'
+
+        $secure = ConvertTo-SecureString 'perm:test-token-dpapi' -AsPlainText -Force
+        $blob = $secure | ConvertFrom-SecureString
+        $utf8Bom = New-Object System.Text.UTF8Encoding $true
+        [System.IO.File]::WriteAllText($tokenFile, $blob + "`r`n", $utf8Bom)
+
+        $oldProfile = $env:USERPROFILE
+        $oldProcToken = $env:YOUTRACK_TOKEN
+        $oldProcUrl = $env:YOUTRACK_URL
+        $env:USERPROFILE = $fakeProfile
+        $env:YOUTRACK_TOKEN = $null
+        $env:YOUTRACK_URL = $null
+        try {
+            $envReaderI = {
+                param($Name, $Target)
+                if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
+                return ''
+            }
+            & $getTask -TaskId DAH-123 -RepoRoot $wtWork -EnvironmentReader $envReaderI `
+                -RestMethodInvoker $newTokenInvoker | Out-Null
+            Assert-That 'i: Windows DPAPI round-trip with BOM and trailing newline' `
+                ((Get-Content -LiteralPath $tokenSourceFile -Raw).Trim() -eq 'dpapi') 'source-tag'
+        }
+        finally {
+            $env:USERPROFILE = $oldProfile
+            if ($null -eq $oldProcToken) { Remove-Item Env:YOUTRACK_TOKEN -ErrorAction SilentlyContinue } else { $env:YOUTRACK_TOKEN = $oldProcToken }
+            if ($null -eq $oldProcUrl) { Remove-Item Env:YOUTRACK_URL -ErrorAction SilentlyContinue } else { $env:YOUTRACK_URL = $oldProcUrl }
+        }
+    }
+    elseif (-not $IsWindows) {
+        # No DpapiFileReader: process env is the only source, so a missing
+        # process token must fail. That is AC6 (DPAPI path skipped).
+        $oldSkipToken = $env:YOUTRACK_TOKEN
+        $oldSkipUrl = $env:YOUTRACK_URL
+        $env:YOUTRACK_TOKEN = $null
+        $env:YOUTRACK_URL = 'https://example.invalid'
+        try {
+            $skipError = ''
+            try {
+                & $getTask -TaskId DAH-123 -RepoRoot $wtWork `
+                    -RestMethodInvoker { param($Method, $Uri, $Headers, $TimeoutSec) throw 'should-not-run' } | Out-Null
+            }
+            catch { $skipError = $_.Exception.Message }
+            Assert-That 'non-Windows skips DPAPI file resolution' `
+                ($skipError -match 'YOUTRACK_TOKEN is not set') 'missing-token'
+        }
+        finally {
+            if ($null -eq $oldSkipToken) { Remove-Item Env:YOUTRACK_TOKEN -ErrorAction SilentlyContinue } else { $env:YOUTRACK_TOKEN = $oldSkipToken }
+            if ($null -eq $oldSkipUrl) { Remove-Item Env:YOUTRACK_URL -ErrorAction SilentlyContinue } else { $env:YOUTRACK_URL = $oldSkipUrl }
+        }
+    }
+
     # ── Split-NativeOutput helper (filter-a..c) ──────────────────────────────
     $parseErrors = $null
     $tokens = $null
@@ -624,8 +793,7 @@ try {
     finally {
         Remove-Item -LiteralPath $harnessYml -Force -ErrorAction SilentlyContinue
     }
-    
-    Write-Host 'get-task.ps1 seam tests passed.'
+        Write-Host 'get-task.ps1 seam tests passed.'
 
     # -NoWorktree keeps the old contract, dirty-tree refusal included.
     $dirtyError = ''

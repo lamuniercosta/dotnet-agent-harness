@@ -7,6 +7,12 @@
 #   -EnvironmentReader  { param($Name, $Target) ... }  # Target is Process or User
 #   -RestMethodInvoker  { param($Method, $Uri, $Headers, $TimeoutSec) ... }
 #   -GitHubInvoker      { param($Id) ... }             # returns gh --json text
+#   -DpapiFileReader    { param($Path) ... }           # receives the DPAPI token
+#     file path; return plaintext or empty. Production path is
+#     $env:USERPROFILE\.dotnet-agent-harness\youtrack-token (Windows, token
+#     name only). Tests must point this at a temp dir and must never read
+#     the real profile path. Decrypt failure should throw; the caller warns
+#     with the path only (never the blob) and falls through to User env.
 #
 # The token is sent only as Authorization: Bearer, never in a URL, query
 # string, error, or log. Seams must not print it either.
@@ -21,6 +27,7 @@ param(
     [scriptblock]$EnvironmentReader,
     [scriptblock]$RestMethodInvoker,
     [scriptblock]$GitHubInvoker,
+    [scriptblock]$DpapiFileReader,
     [switch]$Help
 )
 
@@ -37,7 +44,11 @@ Reads the configured tracker and writes a JSON object with Id, Summary,
 Description, and Type. -Issue is a compatibility alias for -TaskId.
 
   github    numeric ids only; uses the gh CLI
-  youtrack  readable ids such as DAH-123; REST via YOUTRACK_URL / YOUTRACK_TOKEN
+  youtrack  readable ids such as DAH-123; REST via YOUTRACK_URL / YOUTRACK_TOKEN.
+            YOUTRACK_TOKEN is resolved from process env, then (Windows) the
+            DPAPI file %USERPROFILE%\.dotnet-agent-harness\youtrack-token,
+            then (Windows) User-scope env. The file holds only the token.
+            YOUTRACK_URL stays in the environment (process env, then User-scope).
   none      description-only; supplying -TaskId / -Issue is an error
 
 OPTIONS:
@@ -85,7 +96,41 @@ function Get-TrackerEnvironmentVariable {
     $onWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
         [System.Runtime.InteropServices.OSPlatform]::Windows)
 
-    if ($onWindows) {
+    $dpapiPath = Join-Path $env:USERPROFILE (Join-Path '.dotnet-agent-harness' 'youtrack-token')
+
+    # File lookup is token-only. Resolving YOUTRACK_URL must never decrypt the file.
+    if ($Name -eq 'YOUTRACK_TOKEN') {
+        $fileReader = $DpapiFileReader
+        if (-not $fileReader -and $onWindows) {
+            $fileReader = {
+                param([string]$Path)
+                if ([string]::IsNullOrWhiteSpace($Path) -or -not (Test-Path -LiteralPath $Path)) {
+                    return $null
+                }
+                $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+                if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+                $secure = ConvertTo-SecureString -String $raw.Trim()
+                $plain = [System.Net.NetworkCredential]::new('', $secure).Password
+                if ($null -eq $plain) { return $null }
+                return ([string]$plain).Trim()
+            }
+        }
+        if ($fileReader) {
+            try {
+                $fromFile = & $fileReader $dpapiPath
+                if (-not [string]::IsNullOrWhiteSpace([string]$fromFile)) {
+                    return ([string]$fromFile).Trim()
+                }
+            }
+            catch {
+                Write-Warning "Could not decrypt YouTrack token file '$dpapiPath'."
+            }
+        }
+    }
+
+    # User-scope is Windows-only in production. A custom EnvironmentReader is
+    # consulted on every platform so seam-driven tests can exercise fallback.
+    if ($onWindows -or $EnvironmentReader) {
         $user = & $reader $Name 'User'
         if ([string]::IsNullOrWhiteSpace([string]$user)) { return $null }
         return ([string]$user).Trim()
@@ -258,10 +303,10 @@ function Get-YouTrackTask {
     $token = Get-TrackerEnvironmentVariable -Name 'YOUTRACK_TOKEN'
 
     if ([string]::IsNullOrWhiteSpace($url)) {
-        throw 'YOUTRACK_URL is not set. Set it in the process environment, or on Windows as a User-scope variable.'
+        throw 'YOUTRACK_URL is not set. Set it in the process environment, or on Windows as a User-scope variable. The file holds only the token. YOUTRACK_URL stays in the environment.'
     }
     if ([string]::IsNullOrWhiteSpace($token)) {
-        throw 'YOUTRACK_TOKEN is not set. Set a permanent token (perm:...) in the process environment, or on Windows as a User-scope variable.'
+        throw 'YOUTRACK_TOKEN is not set. Set a permanent token (perm:...) in the process environment, or on Windows in the DPAPI file (%USERPROFILE%\.dotnet-agent-harness\youtrack-token) or as a User-scope variable. The file holds only the token. YOUTRACK_URL stays in the environment.'
     }
     if (-not $token.StartsWith('perm:', [StringComparison]::Ordinal)) {
         throw "YOUTRACK_TOKEN must be a YouTrack permanent token beginning with 'perm:'."

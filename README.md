@@ -215,11 +215,52 @@ gates:
     threshold: 80
 ```
 
-Intake is **tracker-neutral**. `tracker: github` (the default) keeps GitHub Issues via `gh`. `tracker: youtrack` reads tasks through YouTrack REST using `YOUTRACK_URL` and `YOUTRACK_TOKEN` only — the token is sent as `Authorization: Bearer`, never in a URL, error, or log, and must begin with `perm:`. `tracker: none` is description-only and does not contact a tracker. There is no `task.tracker` setting and no CLI override.
+Intake is **tracker-neutral**. `tracker: github` (the default) keeps GitHub Issues via `gh`. `tracker: youtrack` reads tasks through YouTrack REST using `YOUTRACK_URL` and `YOUTRACK_TOKEN`. Token resolution checks process env, DPAPI file (`$env:USERPROFILE\.dotnet-agent-harness\youtrack-token`), and User-scope env in that order — the token is sent as `Authorization: Bearer`, never in a URL, error, or log, and must begin with `perm:`. The DPAPI file holds only the token; `YOUTRACK_URL` stays in the environment. `tracker: none` is description-only and does not contact a tracker. There is no `task.tracker` setting and no CLI override.
 
 Existing consumer `AGENTS.md`, `CLAUDE.md`, and constitutions are skip-if-exists / rendered only when absent — reinstalling this harness does not rewrite them. Fresh installs get the updated constitution wording; already-installed docs keep their current text until the repo edits them.
 
-YouTrack on Windows (one-time). Environment variables are plaintext process/user configuration, not a secret vault — document that tradeoff, and never print the token:
+### YouTrack on Windows (one-time)
+
+Run these snippets in a terminal yourself, not through the agent (the secret scanner flags permanent tokens in prompts, and interactive input requires a terminal).
+
+#### Hardened setup (recommended)
+
+Stores the token encrypted with DPAPI so it is not visible in environment variables or registry queries. The file is readable only by the same Windows user and is non-portable across machines or users (backup restores require running setup again).
+
+```powershell
+$youTrackUrl = 'https://lamuniercosta.youtrack.cloud'
+$secureToken = Read-Host 'Paste the YouTrack permanent token' -AsSecureString
+$tokenHandle = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
+
+try {
+    $plainToken = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenHandle)
+
+    if ([string]::IsNullOrWhiteSpace($plainToken) -or
+        -not $plainToken.StartsWith('perm:', [StringComparison]::Ordinal)) {
+        throw "Expected a YouTrack permanent token beginning with 'perm:'."
+    }
+
+    $dir = "$env:USERPROFILE\.dotnet-agent-harness"
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    $secureToken | ConvertFrom-SecureString | Set-Content -Path "$dir\youtrack-token" -Encoding UTF8
+
+    [Environment]::SetEnvironmentVariable('YOUTRACK_URL', $youTrackUrl, 'User')
+    [Environment]::SetEnvironmentVariable('YOUTRACK_TOKEN', $null, 'User')
+
+    Write-Host 'YouTrack token saved to DPAPI-encrypted file and user-scope YOUTRACK_URL was set.'
+}
+finally {
+    if ($tokenHandle -ne [IntPtr]::Zero) {
+        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenHandle)
+    }
+
+    Remove-Variable plainToken, secureToken, tokenHandle -ErrorAction SilentlyContinue
+}
+```
+
+#### Basic setup (legacy)
+
+Environment variables are plaintext process/user configuration, not a secret vault — document that tradeoff, and never print the token:
 
 ```powershell
 $youTrackUrl = 'https://lamuniercosta.youtrack.cloud'
@@ -250,6 +291,10 @@ finally {
     Remove-Variable plainToken, secureToken, tokenHandle -ErrorAction SilentlyContinue
 }
 ```
+
+#### Rotating the token
+
+To rotate, revoke the old token in YouTrack, run Hardened setup to save the new token, and execute `[Environment]::SetEnvironmentVariable('YOUTRACK_TOKEN', $null, 'User')` to remove any lingering HKCU plaintext token. Close open shells or execute `Remove-Item Env:\YOUTRACK_TOKEN` to clear any stale process environment variables.
 
 It is parsed by a strict subset reader: 2-space indent, `key: value`, nested maps,
 `#` comments. **No flow mappings** (`{ a: 1 }`), lists, or anchors — and **unknown keys
