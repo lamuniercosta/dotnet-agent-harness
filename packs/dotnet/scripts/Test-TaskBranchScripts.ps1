@@ -555,10 +555,11 @@ try {
     Assert-That 'Format-GhDiagnostic is defined in get-task.ps1' ($null -ne $fmtFn)
     if ($fmtFn) { . ([scriptblock]::Create($fmtFn.Extent.Text)) }
 
-    $longStderr = 'secret-token-abc ' + ('x' * 600)
-    $diagA = Format-GhDiagnostic -Stderr $longStderr -Stdout 'stdout-ignored' -ExitCode 1 -Secrets @('secret-token-abc')
+    $diagASecret = 'fake-diag-a-token-straddle'
+    $longStderr = ('x' * 490) + $diagASecret + ('y' * 50)
+    $diagA = Format-GhDiagnostic -Stderr $longStderr -Stdout 'stdout-ignored' -ExitCode 1 -Secrets @($diagASecret)
     Assert-That 'diag-a: stderr present returns stderr truncated and redacted' `
-        ($diagA.Length -eq 500 -and $diagA -match '<redacted>' -and $diagA -notmatch 'secret-token-abc')
+        ($diagA.Length -eq 500 -and $diagA -match '<redacted>' -and $diagA -notmatch 'fake-diag-' -and $diagA -notmatch [regex]::Escape($diagASecret))
 
     $diagB = Format-GhDiagnostic -Stderr '' -Stdout 'stdout-message' -ExitCode 1
     Assert-That 'diag-b: stderr empty stdout present returns stdout' ($diagB -eq 'stdout-message')
