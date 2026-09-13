@@ -134,6 +134,28 @@ function New-TaskRecord {
     }
 }
 
+function Split-NativeOutput {
+    param($Records)
+
+    $stdoutItems = [System.Collections.Generic.List[object]]::new()
+    $stderrMessages = [System.Collections.Generic.List[string]]::new()
+    foreach ($item in @($Records)) {
+        if ($item -is [System.Management.Automation.ErrorRecord]) {
+            $message = ''
+            try { $message = [string]$item.Exception.Message } catch { $message = '' }
+            $stderrMessages.Add($message)
+        }
+        else {
+            $stdoutItems.Add($item)
+        }
+    }
+
+    @{
+        Stdout = [string](@($stdoutItems | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+        Stderr = [string](@($stderrMessages) -join [Environment]::NewLine)
+    }
+}
+
 function Get-GitHubTask {
     param([string]$Id)
 
@@ -149,14 +171,56 @@ function Get-GitHubTask {
         if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
             throw "The 'gh' CLI is required to read issue #$Id. Install it (https://cli.github.com) and run 'gh auth login', or pass -Description and -Type explicitly."
         }
-        $raw = gh issue view $Id --json number,title,body,labels 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "Could not read issue #${Id}: $raw"
+        $previousNativePref = $PSNativeCommandUseErrorActionPreference
+        $PSNativeCommandUseErrorActionPreference = $false
+        try {
+            $merged = gh issue view $Id --json number,title,body,labels 2>&1
+            $exitCode = $LASTEXITCODE
         }
+        finally {
+            $PSNativeCommandUseErrorActionPreference = $previousNativePref
+        }
+
+        $split = Split-NativeOutput $merged
+        if ($exitCode -ne 0) {
+            $diagnostic = [string]$split.Stderr
+            if ([string]::IsNullOrWhiteSpace($diagnostic)) {
+                $diagnostic = [string]$split.Stdout
+            }
+            if ([string]::IsNullOrWhiteSpace($diagnostic)) {
+                $diagnostic = "gh exited $exitCode"
+            }
+            elseif ($diagnostic.Length -gt 500) {
+                $diagnostic = $diagnostic.Substring(0, 500)
+            }
+            foreach ($token in @($env:GH_TOKEN, $env:GITHUB_TOKEN, $env:GH_ENTERPRISE_TOKEN)) {
+                $diagnostic = Protect-SecretText -Text $diagnostic -Secret $token
+            }
+            throw "Could not read issue #${Id}: $diagnostic"
+        }
+        $raw = $split.Stdout
     }
 
-    $fetched = $raw | ConvertFrom-Json
-    $summary = if (-not [string]::IsNullOrWhiteSpace($Description)) { $Description } else { [string]$fetched.title }
+    if ([string]::IsNullOrWhiteSpace([string]$raw)) {
+        throw "Issue #$Id returned no data from gh. Check 'gh auth status' and that the issue exists."
+    }
+
+    try {
+        $fetched = $raw | ConvertFrom-Json
+    }
+    catch {
+        $rawText = [string]$raw
+        $trimmed = $rawText.TrimStart()
+        $firstByte = if ($trimmed.Length -gt 0) { $trimmed.Substring(0, 1) } else { '' }
+        throw "Issue #${Id}: gh returned non-JSON output (length $($rawText.Length), starts with '$firstByte'). Check 'gh auth status'."
+    }
+
+    $summary = if (-not [string]::IsNullOrWhiteSpace($Description)) {
+        $Description
+    }
+    else {
+        try { [string]$fetched.title } catch { '' }
+    }
     if ([string]::IsNullOrWhiteSpace($summary)) {
         throw "Could not resolve a description for issue #$Id. Pass -Description explicitly."
     }
