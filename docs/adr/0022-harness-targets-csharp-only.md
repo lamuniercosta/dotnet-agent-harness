@@ -81,4 +81,4 @@ cut disclosure. This repository's self-review path remains the PowerShell
 tests under `scripts/local/` and the grep gates in
 `.github/workflows/lint-harness.yml`, not `/code-review`.
 
-2026-09-13: Post-merge validation runbook at specs/DEV-205-postmerge-smoke/plan.md (DEV-205).
+2026-09-13: Post-merge validation runbook at [specs/DEV-205-postmerge-smoke/plan.md](../../specs/DEV-205-postmerge-smoke/plan.md) (DEV-205).
