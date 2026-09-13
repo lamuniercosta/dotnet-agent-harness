@@ -22,7 +22,7 @@
 #>
 
 param(
-    [ValidateSet('Legacy', 'Codex', 'CursorPrompt', 'CursorReadFile')]
+    [ValidateSet('Legacy', 'Codex', 'CursorPrompt', 'CursorReadFile', 'ClaudePreTool')]
     [string]$OutputContract = 'Legacy'
 )
 
@@ -151,6 +151,14 @@ if ($OutputContract -eq 'Codex') {
             additionalContext = $warning
         }
     } | ConvertTo-Json -Compress -Depth 5
+    exit 0
+}
+
+# Claude PreToolUse/Read: warn on stderr and allow the read. Claude Code
+# surfaces PreToolUse stderr to the model, so the warning is visible without
+# converting this scanner into a blocking hook.
+if ($OutputContract -eq 'ClaudePreTool') {
+    [Console]::Error.WriteLine($warning)
     exit 0
 }
 

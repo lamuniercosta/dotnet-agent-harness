@@ -30,6 +30,7 @@ baseBranch: main
 # Issue tracker for `/task` intake. One of:
 #   github   — GitHub Issues via the gh CLI (default, backward-compatible)
 #   youtrack — YouTrack REST via YOUTRACK_URL / YOUTRACK_TOKEN (header-only auth)
+#              (the token belongs in YOUTRACK_TOKEN, never in this file)
 #   none     — description-only; no tracker contact
 # There is no task.tracker setting and no CLI tracker override.
 # Alternatives:

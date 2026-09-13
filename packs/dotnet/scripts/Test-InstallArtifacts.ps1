@@ -457,6 +457,13 @@ try {
          ($codexHooks -match 'gate-nudge\.ps1')) `
         'the Codex adapter must wire every shared prompt and tool-use hook'
 
+    $claudeSettingsPath = Join-Path $repo '.claude/settings.json'
+    $claudeSettings = if (Test-Path $claudeSettingsPath) { Get-Content -LiteralPath $claudeSettingsPath -Raw } else { '' }
+    Assert-That 'installed Claude settings.json contains secret-scan in PreToolUse' `
+        (($claudeSettings -match 'PreToolUse') -and
+         ($claudeSettings -match 'secret-scan\.ps1')) `
+        'Claude PreToolUse hook must be wired for secret scanning on file reads'
+
     # ── Codex skills: generated from the canonical tree ─────────────────────
     $sourceSkillNames = @(Get-ChildItem -LiteralPath $skillsSource -Directory | ForEach-Object { $_.Name })
     $codexSkillsPath = Join-Path $repo '.agents/skills'

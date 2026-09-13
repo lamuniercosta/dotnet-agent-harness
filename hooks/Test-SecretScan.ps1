@@ -32,6 +32,11 @@ function Prompt-Payload {
     return (@{ prompt = $Text } | ConvertTo-Json -Compress -Depth 5)
 }
 
+function File-Payload {
+    param([string]$Path)
+    return (@{ tool_input = @{ file_path = $Path } } | ConvertTo-Json -Compress -Depth 5)
+}
+
 function Assert-Flags {
     param([string]$Name, [string]$Text)
     $script:checks++
@@ -92,6 +97,39 @@ Assert-Quiet 'git sha'               'Vendored at upstream commit 4f2e1a9c8b7d6e
 Assert-Quiet 'short assignment'      'var token = "abc123"'
 Assert-Quiet 'ordinary code'         'public static decimal Clamp(decimal value) => Math.Clamp(value, 0m, 100m);'
 Assert-Quiet 'empty payload'         ''
+
+Write-Host ''
+Write-Host 'File-read path scans file content:'
+$readTemp = Join-Path ([System.IO.Path]::GetTempPath()) ('secret-scan-read-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $readTemp | Out-Null
+try {
+    $permToken = 'perm:test-' + ('x' * 20)
+    $flagFile = Join-Path $readTemp 'flagged.txt'
+    $quietFile = Join-Path $readTemp 'quiet.txt'
+    Set-Content -LiteralPath $flagFile -Value "token = $permToken"
+    Set-Content -LiteralPath $quietFile -Value 'ordinary file content'
+
+    $checks++
+    if ((Invoke-Scan (File-Payload $flagFile)).ExitCode -eq 2) { Write-Host '  ok       flagged: file-read perm token' }
+    else { Write-Host '  FAIL     missed:  file-read perm token' -ForegroundColor Red; $failures++ }
+
+    $checks++
+    if ((Invoke-Scan (File-Payload $quietFile)).ExitCode -eq 0) { Write-Host '  ok       quiet:   ordinary file' }
+    else { Write-Host '  FAIL     false positive: ordinary file' -ForegroundColor Red; $failures++ }
+
+    $checks++
+    $claudeFinding = Invoke-Scan (File-Payload $flagFile) 'ClaudePreTool'
+    try { $claudeJson = $claudeFinding.Output | ConvertFrom-Json -ErrorAction Stop } catch { $claudeJson = $null }
+    if ($claudeFinding.ExitCode -eq 0 -and
+        $claudeFinding.Output -match 'secret-scan: possible credential' -and
+        -not $claudeJson) {
+        Write-Host '  ok       ClaudePreTool file-read finding warns and allows'
+    } else {
+        Write-Host '  FAIL     ClaudePreTool file-read finding contract' -ForegroundColor Red; $failures++
+    }
+} finally {
+    Remove-Item -LiteralPath $readTemp -Recurse -Force -ErrorAction SilentlyContinue
+}
 
 Write-Host ''
 Write-Host 'Malformed input never wedges the session:'
