@@ -337,8 +337,13 @@ jobs:
       # ---- task-branch test script harness.yml cleanup check --------------
       - name: Task-branch test script harness.yml cleanup uses Join-Path
         run: |
-          if grep -nE 'Remove-Item.*harness\.yml' packs/dotnet/scripts/Test-TaskBranchScripts.ps1 | grep -v 'Join-Path'; then
-            echo "::error::Remove-Item targeting harness.yml without Join-Path found in Test-TaskBranchScripts.ps1."
+          f=packs/dotnet/scripts/Test-TaskBranchScripts.ps1
+          if [ ! -f "$f" ]; then
+            echo "::error file=$f::target script does not exist"
+            exit 1
+          fi
+          if grep -niE 'Remove-Item.*harness\.yml' "$f" | grep -nvi 'Join-Path'; then
+            echo "::error file=$f::Remove-Item targeting harness.yml without Join-Path found"
             exit 1
           fi
           echo "Task-branch test script harness.yml cleanup uses Join-Path."
