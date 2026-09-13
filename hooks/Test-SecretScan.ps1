@@ -127,6 +127,14 @@ try {
     } else {
         Write-Host '  FAIL     ClaudePreTool file-read finding contract' -ForegroundColor Red; $failures++
     }
+
+    $checks++
+    $claudeClean = Invoke-Scan (File-Payload $quietFile) 'ClaudePreTool'
+    if ($claudeClean.ExitCode -eq 0 -and $claudeClean.Output -notmatch 'secret-scan') {
+        Write-Host '  ok       ClaudePreTool clean file stays quiet'
+    } else {
+        Write-Host '  FAIL     ClaudePreTool clean file should not warn' -ForegroundColor Red; $failures++
+    }
 } finally {
     Remove-Item -LiteralPath $readTemp -Recurse -Force -ErrorAction SilentlyContinue
 }

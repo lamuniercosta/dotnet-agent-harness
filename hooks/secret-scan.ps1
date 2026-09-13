@@ -154,9 +154,9 @@ if ($OutputContract -eq 'Codex') {
     exit 0
 }
 
-# Claude PreToolUse/Read: warn on stderr and allow the read. Claude Code
-# surfaces PreToolUse stderr to the model, so the warning is visible without
-# converting this scanner into a blocking hook.
+# Claude PreToolUse/Read: warn on stderr and allow the read. Whether the
+# host surfaces exit-0 stderr to the model is not guaranteed and is not
+# provable in-repo. This is advisory coverage, not enforcement.
 if ($OutputContract -eq 'ClaudePreTool') {
     [Console]::Error.WriteLine($warning)
     exit 0
