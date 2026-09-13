@@ -48,7 +48,7 @@ Description, and Type. -Issue is a compatibility alias for -TaskId.
             YOUTRACK_TOKEN is resolved from process env, then (Windows) the
             DPAPI file $env:USERPROFILE\.dotnet-agent-harness\youtrack-token,
             then (Windows) User-scope env. The file holds only the token.
-            YOUTRACK_URL stays in the environment (process env, then User-scope).
+            YOUTRACK_URL stays in the environment (process env, then (Windows) User-scope env).
   none      description-only; supplying -TaskId / -Issue is an error
 
 OPTIONS:
@@ -96,7 +96,7 @@ function Get-TrackerEnvironmentVariable {
     $onWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
         [System.Runtime.InteropServices.OSPlatform]::Windows)
 
-    $dpapiPath = if ($onWindows) { Join-Path $env:USERPROFILE (Join-Path '.dotnet-agent-harness' 'youtrack-token') } else { $null }
+    $dpapiPath = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { Join-Path $env:USERPROFILE (Join-Path '.dotnet-agent-harness' 'youtrack-token') } else { $null }
 
     # File lookup is token-only. Resolving YOUTRACK_URL must never decrypt the file.
     if ($Name -eq 'YOUTRACK_TOKEN') {
