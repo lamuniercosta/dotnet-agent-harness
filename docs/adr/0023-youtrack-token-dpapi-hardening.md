@@ -1,6 +1,6 @@
 # YouTrack token DPAPI hardening
 
-We introduce an opt-in DPAPI-encrypted file option as a hardened persistence mechanism for `YOUTRACK_TOKEN` on Windows at `$env:USERPROFILE\.dotnet-agent-harness\youtrack-token`.
+We introduce an opt-in DPAPI-encrypted file option as a hardened persistence mechanism for `YOUTRACK_TOKEN` on Windows at `$env:USERPROFILE\.dotnet-agent-harness\youtrack-token`. Plaintext `YOUTRACK_TOKEN` in HKCU User-scope environment variables is passively inherited by every child process and easily enumerable via registry tools, which the DPAPI file avoids.
 
 ## Context
 
