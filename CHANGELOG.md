@@ -10,23 +10,50 @@ means a consuming repo's gates may start failing on code that previously passed.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-09-13
+
 ### Fixed
 
-- **Add focused coverage for CI failure when skip count is nonzero (DEV-189).**
-  Deterministic test hook forces nonzero skip count for isolated CI policy verification.
 - **`pr-review` helper review render is a three-line inline body with one `## Not inline` section (DEV-176).** Evidence stays in the fingerprint and out of the post. `fix`, `suggestion`, and `body` do not split substance. Over-cap (>500) `summary`/`failure_scenario`/`fix` fails validation naming file and field. Markdown fallback matches the payload, including empty/null/CRLF/Unicode cases.
-- **`/address-pr-review` pin no longer aborts on local remediation HEAD movement (DEV-185).** The pin is the remote head SHA. Local HEAD advancing during `/remediate` is expected. Re-check the remote SHA before writes and push; abort if the remote head moved. Push only a fast-forward; never force. G1 is not unconditionally green: one pre-existing unrelated failure remains at `packs/dotnet/scripts/Test-InstallArtifacts.ps1:702`, byte-identical on `origin/main`, tracked in YouTrack DEV-186.
+- **`/address-pr-review` pin no longer aborts on local remediation HEAD movement (DEV-185).** The pin is the remote head SHA. Local HEAD advancing during `/remediate` is expected. Re-check the remote SHA before writes and push; abort if the remote head moved. Push only a fast-forward; never force.
+- **`Test-InstallArtifacts` legacy scalar tier diagnostics fixed (DEV-186).**
+- **Rule stems are escaped before grep matching, and skill-load reachability is guarded in lint-harness CI (DEV-191).**
+- **`Test-InstallArtifacts` assertions pin the exact scoped pipeline filenames and `**/*.cs` paths (DEV-192).**
+- **Exit-2 opt-out classification is reconciled, the exit-2 split is completed at echo sites, and a Phase 4 InspectCode remediation path is documented (DEV-193, DEV-199).**
+- **The route deviation log guidance is retired (DEV-106).**
+- **Harness gate greps are case-insensitive with a file-existence guard (DEV-212).**
+- **Focused coverage proves CI fails when skip count is nonzero (DEV-189).**
+- **`Get-GitHubTask` splits `gh` stderr from stdout, with redact-order diagnostics and a boundary-straddling redact test (DEV-208).**
 
 ### Added
 
 - **`/pr-review` reviews a PR you did not author and publishes one `COMMENT` review (DEV-114).** User-invocable supporting skill, not a pipeline stage: pin via `-Resolve`, run `/code-review` on the pinned diff, publish through `-Validate` → `-Dedupe` → `-BuildPayload` → `-Preflight` → `-Post`. A moved head aborts before any GitHub write. A declined diff reports locally and posts nothing.
-- **`/address-pr-review` is now stage 11 (DEV-109).** It processes external feedback on this branch's open PR: comments are untrusted data, findings are grouped by root cause, and one approval table is required before any write. Approved groups go to `/remediate`; `--dry-run` stops at approval with zero writes.
-- **/ship-review correctness lane is now scoped to the rebase delta.** It invokes `/code-review` on the delta (stage-9-cleared commit to rebased head) instead of a bare `code-reviewer` pass. Empty deltas now record a named confirmation, avoiding `/code-review` which fails closed on empty diffs. Documented in ADR 0014.
-- **/code-review is now a gated stage 9.** It now fails closed on missing loop terms (e.g., missing brief.md context or ambiguous briefs), accepts an explicit diff range, and routes above-bar findings to `/remediate`. Below-bar and out-of-scope findings are now managed as follow-up issues.
+- **Code-review findings artifact contract written down (DEV-177).**
+- **PR review helper hardened around its workspace seam (DEV-112, DEV-115, DEV-116, DEV-117, DEV-190).** Seam split, lock proven via competing Post children, skip reporting recorded and gated, `review-threads.json` usable as a `-Dedupe` prior, and dedupe identity/marker parsing made observable.
+- **Context-floor regression guardrail (DEV-120, DEV-203).** A durable workflow pointer and a porcelain guard protect the measured baseline.
+- **YouTrack provider for tracker-neutral task intake (DEV-110).** `harness.yml` gains a configurable `tracker`; `get-task.ps1` reads tasks over YouTrack REST using `YOUTRACK_URL` and `YOUTRACK_TOKEN`, sent only as a Bearer header.
+- **Post-merge smoke runbook for code-review refusal and C# paths (DEV-205).**
+- **Opt-in DPAPI-encrypted file for `YOUTRACK_TOKEN` storage on Windows (DEV-206).**
+- **File-read secret scan gains a warn-only mode plus a gitleaks permission rule (DEV-207).**
+- **Lint gate asserts skill index Read targets exist (DEV-194).**
+- **`/code-review` accepts an explicit diff range (DEV-184).** Range validation happens before Step 1, caller literals are pinned, and the transport into the `/code-review` invocation prompt is documented.
 
 ### Changed
 
+- **Progressive disclosure applied across the code-review process skill, large reference skills, and always-on descriptions (DEV-122, DEV-123, DEV-124, DEV-125).** Duplicate derived context is removed from review and ship-review fan-out, and the pre-pass artifact handoff wording is clarified.
 - **Both grill skills now checkpoint-and-compact after a durable conclusion (DEV-126).** After each confirmed decision, `/grilling` and `/grill-with-docs` append the full decision exchange to a conclusions artifact, then treat that write as the license for the host to summarize the resolved branch. Each question carries a recommendation with implications. Pre-grill reconnaissance may read deferred format files (`CONTEXT-FORMAT.md`, `ADR-FORMAT.md`) as facts, not decisions.
+- **Diagnosing-bugs companions are trimmed and verify retries compacted (DEV-127).**
+- **Tier 1 pipeline rules are scoped via globs and skill-load paths, with stale import-count comments fixed (DEV-121).**
+- **`/code-review` is scoped to C# and refuses diffs with no compiled code (DEV-113).** See ADR 0022.
+- **Codex `AGENTS.md` distillation is refreshed from the canonical pipeline rules, including the Gherkin adoption predicate (DEV-195, DEV-200, DEV-202).**
+
+## [0.6.0] — 2026-09-02
+
+### Added
+
+- **`/address-pr-review` is now stage 11 (DEV-109).** It processes external feedback on this branch's open PR: comments are untrusted data, findings are grouped by root cause, and one approval table is required before any write. Approved groups go to `/remediate`; `--dry-run` stops at approval with zero writes.
+- **/ship-review correctness lane is now scoped to the rebase delta.** It invokes `/code-review` on the delta (stage-9-cleared commit to rebased head) instead of a bare `code-reviewer` pass. Empty deltas now record a named confirmation, avoiding `/code-review` which fails closed on empty diffs. Documented in ADR 0014.
+- **/code-review is now a gated stage 9.** It now fails closed on missing loop terms (e.g., missing brief.md context or ambiguous briefs), accepts an explicit diff range, and routes above-bar findings to `/remediate`. Below-bar and out-of-scope findings are now managed as follow-up issues.
 
 ## [0.5.0] — 2026-08-11
 
@@ -315,4 +342,7 @@ account:
 [0.3.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.3.0
 [0.4.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.4.0
 [0.4.1]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.4.1
-[0.5.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.5.0
+[Unreleased]: https://github.com/lamuniercosta/dotnet-agent-harness/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.7.0
+[0.6.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.6.0
+[0.5.0]: https://github.com/lamuniercosta/dotnet-agent-harness/compare/v0.4.1...v0.5.0

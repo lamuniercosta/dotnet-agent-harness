@@ -1,6 +1,6 @@
 # dotnet-agent-harness
 
-`v0.5.0`
+`v0.7.0`
 
 A gated, spec-driven development pipeline for AI coding agents — for **Cursor**,
 **Claude Code**, and **Codex**, with no paid third-party service.
@@ -17,7 +17,7 @@ scripts actually catch defects.
 |---|---|---|
 | **Pipeline** | 11 stages | Ticket to PR, with three human approval gates |
 | **Gates** | 6 | Numeric thresholds, each a script with a real exit code |
-| **Skills** | 25 | `SKILL.md` files — process, pipeline stages, and .NET reference |
+| **Skills** | 28 | `SKILL.md` files — process, pipeline stages, and .NET reference |
 | **Agents** | 7 | Tiered subagents for noisy stages and cheap mechanical errands |
 | **Rules** | 3 + 8 + 8 | Three always-on; eight scoped (5 glob + 3 skill-load); eight vendored |
 | **Hooks** | 4 | Destructive-command guard, secret scan, format-on-edit, gate reminder |
@@ -103,7 +103,7 @@ which scaffolds a solution and then calls the same installer — one code path.
 The canonical source plus host-specific delivery files:
 
 ```
-.claude/skills/         25 skill copies ← Cursor and Claude Code
+.claude/skills/         28 skill copies ← Cursor and Claude Code
 .agents/skills/         generated Codex copies ← invoke as `$name`
 .claude/agents/          7 generated profiles ← Claude Code
 .cursor/agents/          7 generated profiles ← Cursor
@@ -305,7 +305,7 @@ default would be the exact failure the gates exist to prevent.
 ## Layout
 
 ```
-skills/              25 SKILL.md sources → host discovery directories on install
+skills/              28 SKILL.md sources → host discovery directories on install
 .claude/agents/       7 canonical profiles → three host discovery formats
 rules/pipeline/      11 authored rules (3 always-on, 5 glob-scoped, 3 skill-load)
 rules/vendor/         8 third-party .NET rules, isolated and attributed (see NOTICE)
