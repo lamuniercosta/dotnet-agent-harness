@@ -41,3 +41,21 @@ Three protections the dry-run suite enforced are gone with the launcher:
 
 The placement argument in ADR 0010 is unchanged; a 2026-09-14 addendum there
 points at this retirement.
+
+## Preserved API knowledge
+
+Four OpenRouter request semantics the launcher verified, and that still apply
+to OpenCode. The deferred CLAUDE.md rewrite (DEV-233) should reference them.
+
+1. **`extraBody` wins the request merge.** Reasoning effort must not travel in
+   the profile (or equivalent extra body). Effort is per-tier; the profile is
+   keyed by model. A `fast` run that writes extra-body effort first would pin
+   `low` onto a later `deep` run of the same model.
+2. **Dual reasoning fields return HTTP 400.** Sending both a flat
+   `reasoning_effort` and a nested `reasoning.effort` fails with
+   `"reasoning_effort" and "reasoning.effort" are both provided`.
+3. **`provider.max_price` fails closed with HTTP 404** when the cap is below
+   every endpoint's price (no endpoints matched), rather than routing somewhere
+   cheaper.
+4. **`provider.sort = "price"`** routes each request to the cheapest endpoint
+   serving that model id.
