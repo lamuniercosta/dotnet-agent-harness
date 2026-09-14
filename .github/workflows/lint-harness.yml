@@ -407,6 +407,7 @@ jobs:
       # Note: git grep exit 2 (e.g. bad pathspec) is treated as clean by
       # standard POSIX shell conditional; accepted risk as risk is near-zero in CI.
       - name: OPENROUTER_API_KEY is not hardcoded outside workflow or documentation
+        shell: bash
         run: |
           if git grep -rn OPENROUTER_API_KEY -- ':!.github/workflows/' ':!CLAUDE.md' ':!docs/'; then echo FAIL; exit 1; fi
 
