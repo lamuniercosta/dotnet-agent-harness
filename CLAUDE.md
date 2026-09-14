@@ -84,16 +84,22 @@ pwsh ./scripts/local/Get-ModelRoute.ps1 -List
 pwsh ./scripts/local/Get-ModelRoute.ps1 -Command /implement -RepoRoot ../SomeRepo -Area frontend
 ```
 
-`scripts/local/Test-ModelProbe.ps1` auditions a candidate model on a named host against the floor-model probe kit (G1 trap, per-seat bars, cost ladder) and writes the resulting cell into `scripts/local/seat-map.json`:
+`Get-ModelRoute.ps1` only advises — it never launches or configures anything. Read down the chain
+to the first option you still have allowance for. **If that lands below the
+floor, the work waits**; running below it means knowingly accepting reduced
+quality, which is the one thing the map exists to make visible.
+
+`scripts/local/Test-ModelProbe.ps1` auditions a candidate model on a named host against the floor-model probe kit (G1 trap, per-seat bars, cost ladder) and writes the resulting cell into `scripts/local/seat-map.json`. `Test-ModelProbe.ps1` launches hosts and can bill; use `-WhatIf` for non-launching validation.
 
 ```powershell
 pwsh ./scripts/local/Test-ModelProbe.ps1 -Host cursor -Model composer-2.5 -Test Verdict -Seat conductor -Rung floor -WhatIf
 ```
 
-It only advises — it never launches or configures anything. Read down the chain
-to the first option you still have allowance for. **If that lands below the
-floor, the work waits**; running below it means knowingly accepting reduced
-quality, which is the one thing the map exists to make visible.
+Running a probe without `-WhatIf` launches the model host and updates `seat-map.json` (dirtying the worktree state; commit or revert changes after probing):
+
+```powershell
+pwsh ./scripts/local/Test-ModelProbe.ps1 -Host cursor -Model composer-2.5 -Test Verdict -Seat conductor -Rung floor
+```
 
 The deviation log is retired. `Add-RouteDeviation.ps1` and its `route-log.jsonl`
 remain on disk but are no longer part of the routine. The trial they served
