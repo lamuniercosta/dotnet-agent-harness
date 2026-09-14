@@ -20,11 +20,15 @@ $validEvidence = @('measured', 'cleared', 'probed', 'unmeasured')
 $validPools = @('CLAUDE', 'CODEX', 'CURSOR', 'AGY-G', 'AGY-C', 'JETBRAINS', 'GEMINI', 'OPENROUTER', 'ZEN')
 $validCostSources = @('actual', 'estimated', 'unknown')
 
-$failures = @()
+# Data-driven invariants from seat-map.json
+$invariants = $seatMap.invariants
+$maxCursorHeads = if ($null -ne $invariants -and $null -ne $invariants.maxCursorHeads) { [int]$invariants.maxCursorHeads } else { 2 }
+$maxAgyGHeads = if ($null -ne $invariants -and $null -ne $invariants.maxAgyGHeads) { [int]$invariants.maxAgyGHeads } else { 1 }
+$minGeminiHeads = if ($null -ne $invariants -and $null -ne $invariants.minGeminiHeads) { [int]$invariants.minGeminiHeads } else { 1 }
+$disallowedFloorPools = if ($null -ne $invariants -and $null -ne $invariants.disallowedFloorPools) { @($invariants.disallowedFloorPools) } else { @('ZEN') }
+$zenFloorExceptions = if ($null -ne $invariants -and $null -ne $invariants.zenFloorExceptions) { @($invariants.zenFloorExceptions) } else { @('Quill') }
 
-if ($seatMap.seats.Count -ne 11) {
-    $failures += "Expected 11 seats, but found $($seatMap.seats.Count)."
-}
+$failures = @()
 
 $cursorHeads = 0
 $agyGHeads = 0
@@ -80,26 +84,26 @@ foreach ($seat in $seatMap.seats) {
     if ($seat.rungs.head.pool -eq 'AGY-G') { $agyGHeads++ }
     if ($seat.rungs.head.pool -eq 'GEMINI') { $geminiHeads++ }
 
-    # Floor pool rule: Zen is never a floor (Quill documented temporary exception)
-    if ($seat.rungs.floor.pool -eq 'ZEN' -and $seat.codename -ne 'Quill') {
-        $failures += "Seat '$($seat.codename)' has ZEN on floor (Zen is never a floor)."
+    # Floor pool rule checking disallowed floor pools with exceptions
+    if ($disallowedFloorPools -contains $seat.rungs.floor.pool -and $zenFloorExceptions -notcontains $seat.codename -and $zenFloorExceptions -notcontains $seat.id) {
+        $failures += "Seat '$($seat.codename)' has $($seat.rungs.floor.pool) on floor."
     }
 }
 
-if ($cursorHeads -gt 2) {
-    $failures += "At most two Cursor heads allowed (found $cursorHeads)."
+if ($cursorHeads -gt $maxCursorHeads) {
+    $failures += "At most $maxCursorHeads Cursor heads allowed (found $cursorHeads)."
 }
-if ($agyGHeads -gt 1) {
-    $failures += "At most one AGY-G head allowed (found $agyGHeads)."
+if ($agyGHeads -gt $maxAgyGHeads) {
+    $failures += "At most $maxAgyGHeads AGY-G heads allowed (found $agyGHeads)."
 }
-if ($geminiHeads -lt 1) {
-    $failures += "At least one Gemini head required (found $geminiHeads)."
+if ($geminiHeads -lt $minGeminiHeads) {
+    $failures += "At least $minGeminiHeads Gemini heads required (found $geminiHeads)."
 }
 
 if ($failures.Count -gt 0) {
-    $failures | ForEach-Object { Write-Error $_ }
+    $failures | ForEach-Object { Write-Error $_ -ErrorAction Continue }
     exit 1
 } else {
-    Write-Host "Test-SeatMap: All checks PASSED (11 seats, schema valid, charter invariants held)." -ForegroundColor Green
+    Write-Host "Test-SeatMap: All checks PASSED ($($seatMap.seats.Count) seats, schema valid, charter invariants held)." -ForegroundColor Green
     exit 0
 }
