@@ -48,3 +48,8 @@ Thumbs.db
 /.junie/
 /.cursor/agents/
 /.codex/agents/
+
+# Maestri seat state: role prompts, per-seat scratch and findings. Durable
+# state belongs to Maestri, and the record of a task is its ticket and PR
+# (never a seat's notes), so none of it is versioned here.
+/.maestri/
