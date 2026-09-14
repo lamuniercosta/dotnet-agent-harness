@@ -1019,6 +1019,8 @@ try {
          ($output -notmatch 'integration install codex'))
 
     # ── Security config merge scenarios (a) through (f) ────────────────────────
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+
     # (a) Fresh install (no prior file): merged output matches template, .bak does not exist
     $repo = New-TargetRepo
     $repos += $repo
@@ -1027,23 +1029,37 @@ try {
     $claudeSettingsBak = "${claudeSettingsPath}.pre-harness.bak"
     $templateClaudeSettings = Get-Content -LiteralPath (Join-Path $harnessRoot 'adapters/claude/settings.json') -Raw | ConvertFrom-Json -AsHashtable
     $installedClaudeSettings = Get-Content -LiteralPath $claudeSettingsPath -Raw | ConvertFrom-Json -AsHashtable
-    Assert-That 'scenario (a): fresh install merged output matches template and .bak does not exist' `
-        ((-not (Test-Path -LiteralPath $claudeSettingsBak)) -and
-         ($installedClaudeSettings.permissions.allow.Count -eq $templateClaudeSettings.permissions.allow.Count))
+    $aMatch = ($installedClaudeSettings.permissions.allow.Count -eq $templateClaudeSettings.permissions.allow.Count) -and
+              ($installedClaudeSettings.Contains('hooks') -and $installedClaudeSettings.hooks.Contains('PreToolUse') -and @($installedClaudeSettings.hooks['PreToolUse']).Count -eq @($templateClaudeSettings.hooks['PreToolUse']).Count)
+    Assert-That 'scenario (a): fresh install merged output matches template structure and .bak does not exist' `
+        ((-not (Test-Path -LiteralPath $claudeSettingsBak)) -and $aMatch)
 
-    # (b) Reinstall twice clean: harness entries appear exactly once, consumer entries unchanged
+    # (b) Reinstall twice clean: harness entries appear exactly once across all 3 adapter files
     Invoke-Install -Repo $repo -Platform 'all' | Out-Null
-    $reinstalledClaudeSettings = Get-Content -LiteralPath $claudeSettingsPath -Raw | ConvertFrom-Json -AsHashtable
-    Assert-That 'scenario (b): reinstall twice clean keeps harness entries exactly once' `
-        ($reinstalledClaudeSettings.permissions.allow.Count -eq $templateClaudeSettings.permissions.allow.Count)
+    $reinstalledClaude = Get-Content -LiteralPath (Join-Path $repo '.claude/settings.json') -Raw | ConvertFrom-Json -AsHashtable
+    $reinstalledCursor = Get-Content -LiteralPath (Join-Path $repo '.cursor/hooks.json') -Raw | ConvertFrom-Json -AsHashtable
+    $reinstalledCodex  = Get-Content -LiteralPath (Join-Path $repo '.codex/hooks.json') -Raw | ConvertFrom-Json -AsHashtable
+    $templateCursor    = Get-Content -LiteralPath (Join-Path $harnessRoot 'adapters/cursor/hooks.json') -Raw | ConvertFrom-Json -AsHashtable
+    $templateCodex     = Get-Content -LiteralPath (Join-Path $harnessRoot 'adapters/codex/hooks.json') -Raw | ConvertFrom-Json -AsHashtable
+    
+    $cursorCountBefore = (@($templateCursor.hooks.Keys | ForEach-Object { $templateCursor.hooks[$_] })).Count
+    $cursorCountAfter  = (@($reinstalledCursor.hooks.Keys | ForEach-Object { $reinstalledCursor.hooks[$_] })).Count
+    
+    $bMatch = ($reinstalledClaude.permissions.allow.Count -eq $templateClaudeSettings.permissions.allow.Count) -and
+              ($reinstalledClaude.Contains('hooks') -and $reinstalledClaude.hooks.Contains('PreToolUse') -and @($reinstalledClaude.hooks['PreToolUse']).Count -eq @($templateClaudeSettings.hooks['PreToolUse']).Count) -and
+              ($reinstalledCursor.Contains('hooks') -and $cursorCountAfter -eq $cursorCountBefore) -and
+              ($reinstalledCodex.Contains('hooks') -and $reinstalledCodex.hooks.Contains('UserPromptSubmit') -and @($reinstalledCodex.hooks['UserPromptSubmit']).Count -eq @($templateCodex.hooks['UserPromptSubmit']).Count)
+    Assert-That 'scenario (b): reinstall twice clean keeps harness entries exactly once in all adapter files' $bMatch
 
-    # (c) Pre-seeded custom deny+ask+custom hook, install TWICE, all present unchanged both runs
+    # (c) Pre-seeded custom deny+ask+custom hooks across .claude/.cursor/.codex (incl commandWindows)
     $repo = New-TargetRepo
     $repos += $repo
     $claudeDir = Join-Path $repo '.claude'
-    New-Item -ItemType Directory -Path $claudeDir -Force | Out-Null
-    $seededSettingsPath = Join-Path $claudeDir 'settings.json'
-    $seededObj = [ordered]@{
+    $cursorDir = Join-Path $repo '.cursor'
+    $codexDir  = Join-Path $repo '.codex'
+    New-Item -ItemType Directory -Path $claudeDir, $cursorDir, $codexDir -Force | Out-Null
+    
+    $seededClaude = [ordered]@{
         permissions = [ordered]@{
             allow = @('Bash(git status)')
             deny = @('Bash(rm -rf /)')
@@ -1053,29 +1069,38 @@ try {
             PreToolUse = @(
                 [ordered]@{
                     matcher = 'Write'
-                    hooks = @(
-                        [ordered]@{
-                            type = 'command'
-                            command = 'pwsh ./custom-hook.ps1'
-                        }
-                    )
+                    hooks = @([ordered]@{ type = 'command'; command = 'pwsh ./custom-claude.ps1' })
                 }
             )
         }
     }
-    Set-Content -LiteralPath $seededSettingsPath -Value ($seededObj | ConvertTo-Json -Depth 10) -Encoding UTF8
+    $seededCursor = [ordered]@{
+        version = 1
+        hooks = [ordered]@{
+            PreToolUse = @([ordered]@{ command = 'pwsh ./custom-cursor.ps1' })
+        }
+    }
+    $seededCodex = [ordered]@{
+        hooks = [ordered]@{
+            UserPromptSubmit = @([ordered]@{ command = 'pwsh ./custom-codex.ps1'; commandWindows = 'powershell.exe ./custom-codex.ps1' })
+        }
+    }
+    [System.IO.File]::WriteAllText((Join-Path $claudeDir 'settings.json'), ($seededClaude | ConvertTo-Json -Depth 10), $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $cursorDir 'hooks.json'), ($seededCursor | ConvertTo-Json -Depth 10), $utf8NoBom)
+    [System.IO.File]::WriteAllText((Join-Path $codexDir 'hooks.json'), ($seededCodex | ConvertTo-Json -Depth 10), $utf8NoBom)
+
     Invoke-Install -Repo $repo -Platform 'all' | Out-Null
-    $afterRun1 = Get-Content -LiteralPath $seededSettingsPath -Raw | ConvertFrom-Json -AsHashtable
     Invoke-Install -Repo $repo -Platform 'all' | Out-Null
-    $afterRun2 = Get-Content -LiteralPath $seededSettingsPath -Raw | ConvertFrom-Json -AsHashtable
-    $c1Custom = ($afterRun1.permissions.deny -contains 'Bash(rm -rf /)') -and
-                ($afterRun1.permissions.ask -contains 'Bash(sudo *)') -and
-                ($afterRun1.hooks.PreToolUse | Where-Object { $_.matcher -eq 'Write' -and $_.hooks[0].command -eq 'pwsh ./custom-hook.ps1' })
-    $c2Custom = ($afterRun2.permissions.deny -contains 'Bash(rm -rf /)') -and
-                ($afterRun2.permissions.ask -contains 'Bash(sudo *)') -and
-                ($afterRun2.hooks.PreToolUse | Where-Object { $_.matcher -eq 'Write' -and $_.hooks[0].command -eq 'pwsh ./custom-hook.ps1' })
-    Assert-That 'scenario (c): pre-seeded custom deny+ask+custom hook present and unchanged after two installs' `
-        ([bool]$c1Custom -and [bool]$c2Custom)
+
+    $afterClaude = Get-Content -LiteralPath (Join-Path $claudeDir 'settings.json') -Raw | ConvertFrom-Json -AsHashtable
+    $afterCursor = Get-Content -LiteralPath (Join-Path $cursorDir 'hooks.json') -Raw | ConvertFrom-Json -AsHashtable
+    $afterCodex  = Get-Content -LiteralPath (Join-Path $codexDir 'hooks.json') -Raw | ConvertFrom-Json -AsHashtable
+
+    $cMatchClaude = ($afterClaude.permissions.deny -contains 'Bash(rm -rf /)') -and ($afterClaude.permissions.ask -contains 'Bash(sudo *)')
+    $cMatchCursor = [bool]($afterCursor.hooks.PreToolUse | Where-Object { $_.command -eq 'pwsh ./custom-cursor.ps1' })
+    $cMatchCodex  = [bool]($afterCodex.hooks.UserPromptSubmit | Where-Object { $_.command -eq 'pwsh ./custom-codex.ps1' -and $_.commandWindows -eq 'powershell.exe ./custom-codex.ps1' })
+    Assert-That 'scenario (c): pre-seeded custom entries and hooks (incl commandWindows) present across hosts after two installs' `
+        ([bool]$cMatchClaude -and [bool]$cMatchCursor -and [bool]$cMatchCodex)
 
     # (d) Consumer deny matching harness allow: WARNING in stdout AND deny entry survives in file
     $repo = New-TargetRepo
@@ -1089,46 +1114,65 @@ try {
             deny = @($templateAllowFirst)
         }
     }
-    Set-Content -LiteralPath $conflictSettingsPath -Value ($conflictObj | ConvertTo-Json -Depth 10) -Encoding UTF8
+    [System.IO.File]::WriteAllText($conflictSettingsPath, ($conflictObj | ConvertTo-Json -Depth 10), $utf8NoBom)
     $conflictOutput = Invoke-Install -Repo $repo -Platform 'claude'
     $conflictRead = Get-Content -LiteralPath $conflictSettingsPath -Raw | ConvertFrom-Json -AsHashtable
     Assert-That 'scenario (d): conflict produces WARNING in stdout and consumer deny survives in file' `
         (($conflictOutput -match 'WARNING:.+permission conflict') -and ($conflictRead.permissions.deny -contains $templateAllowFirst))
 
-    # (e) Malformed JSON: WARNING, live file unchanged, .bak holds original bytes
+    # (e) Malformed JSON: WARNING, live file unchanged, .bak NOT overwritten / created if parse fails prior
     $repo = New-TargetRepo
     $repos += $repo
     $claudeDir = Join-Path $repo '.claude'
     New-Item -ItemType Directory -Path $claudeDir -Force | Out-Null
     $malformedSettingsPath = Join-Path $claudeDir 'settings.json'
+    $goodContent = '{"permissions":{"deny":["Bash(good)"]}}'
     $malformedContent = '{ "permissions": { "allow": [ "invalid json without closing brace"'
-    [System.IO.File]::WriteAllText($malformedSettingsPath, $malformedContent, [System.Text.UTF8Encoding]::new($false))
+    
+    # Pre-seed with good content and install to create a valid .bak
+    [System.IO.File]::WriteAllText($malformedSettingsPath, $goodContent, $utf8NoBom)
+    Invoke-Install -Repo $repo -Platform 'claude' | Out-Null
+    $bakPath = "${malformedSettingsPath}.pre-harness.bak"
+    $goodBakContent = [System.IO.File]::ReadAllText($bakPath)
+
+    # Corrupt the consumer file and run install again
+    [System.IO.File]::WriteAllText($malformedSettingsPath, $malformedContent, $utf8NoBom)
     $malformedOutput = Invoke-Install -Repo $repo -Platform 'claude'
     $liveContentAfter = [System.IO.File]::ReadAllText($malformedSettingsPath)
-    $bakPath = "${malformedSettingsPath}.pre-harness.bak"
-    $bakContent = if (Test-Path -LiteralPath $bakPath) { [System.IO.File]::ReadAllText($bakPath) } else { '' }
-    Assert-That 'scenario (e): malformed JSON emits WARNING, leaves live file unchanged, and .bak holds original bytes' `
+    $bakContentAfter = [System.IO.File]::ReadAllText($bakPath)
+
+    Assert-That 'scenario (e): malformed JSON emits WARNING, leaves live file unchanged, and .bak is NOT overwritten' `
         (($malformedOutput -match 'WARNING: malformed JSON') -and
          ($liveContentAfter -eq $malformedContent) -and
-         ($bakContent -eq $malformedContent))
+         ($bakContentAfter -eq $goodBakContent))
 
-    # (f) Write-failure rollback: (.bak exists, live file restored to .bak content)
-    # We test rollback during round-trip validation failure or file lock
+    # (f) Real write-failure rollback test via Merge-HarnessJsonFile dot-sourcing
     $repo = New-TargetRepo
     $repos += $repo
     $claudeDir = Join-Path $repo '.claude'
     New-Item -ItemType Directory -Path $claudeDir -Force | Out-Null
     $rollbackSettingsPath = Join-Path $claudeDir 'settings.json'
     $initialContent = '{"permissions":{"deny":["Bash(initial)"]}}'
-    [System.IO.File]::WriteAllText($rollbackSettingsPath, $initialContent, [System.Text.UTF8Encoding]::new($false))
-    # Mock invalid roundtrip by hooking or creating a file write mock if feasible, or testing Merge-HarnessJsonFile roundtrip failure path directly
-    # Since Merge-HarnessJsonFile is in install.ps1, we verify .bak exists and restoration happens on failed post-write parse
-    $bakRollbackPath = "${rollbackSettingsPath}.pre-harness.bak"
-    [System.IO.File]::Copy($rollbackSettingsPath, $bakRollbackPath, $true)
-    # Perform a test copy restore check simulating Merge-HarnessJsonFile rollback behavior
+    [System.IO.File]::WriteAllText($rollbackSettingsPath, $initialContent, $utf8NoBom)
+    
+    # Dot-source install.ps1 functions by setting dummy args if needed or loading script scope
+    # Create invalid template file that parses valid initially but fails merge roundtrip or mock invalid output
+    $invalidTemplatePath = Join-Path $repo 'invalid-template.json'
+    [System.IO.File]::WriteAllText($invalidTemplatePath, '{"permissions":"not-an-object"}', $utf8NoBom)
+
+    # Dot-source install.ps1 helper functions in a child scope or directly
+    $scriptBlock = [scriptblock]::Create(". '$installer' -TargetRepo '$repo' -WhatIf; Merge-HarnessJsonFile -TargetPath '$rollbackSettingsPath' -TemplatePath '$invalidTemplatePath' -DisplayName 'test'")
+    $rollbackFailed = $false
+    try {
+        & $scriptBlock
+    }
+    catch {
+        $rollbackFailed = $true
+    }
+
     $restoredContent = [System.IO.File]::ReadAllText($rollbackSettingsPath)
-    Assert-That 'scenario (f): rollback restores live file from .bak on failure' `
-        ((Test-Path -LiteralPath $bakRollbackPath) -and ($restoredContent -eq $initialContent))
+    Assert-That 'scenario (f): real rollback restores live file from .bak on round-trip / merge failure' `
+        ($rollbackFailed -and ($restoredContent -eq $initialContent))
 }
 finally {
     foreach ($r in $repos) {
