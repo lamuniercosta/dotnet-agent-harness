@@ -111,3 +111,10 @@ revisited when someone has a reason to, not when the log fills up.
 
 `#76` in **Consequences** is DEV-107, now closed for the same reason: it was
 gated on whether the .NET orchestrator gets built, and it does not.
+
+## Addendum, 2026-09-14
+
+The tier→model table cited here moved to OpenCode configuration; the Junie
+launcher was retired in
+[ADR 0024](0024-retire-junie-openrouter-launcher-for-opencode.md). The
+placement decision in this ADR stands. Existing text above is not rewritten.

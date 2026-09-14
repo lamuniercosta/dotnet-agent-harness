@@ -407,9 +407,9 @@ jobs:
       # decides which profiles it may overwrite, so both need guarding after
       # merge. The suite is a dry run by construction: -WhatIf and -ProfileOnly
       # keep it off Junie and off the network, and it needs no OPENROUTER_API_KEY.
-      - name: OpenRouter launcher keeps the key out and hand-tuned profiles intact
-        shell: pwsh
-        run: ./scripts/local/Test-OpenRouterTask.ps1
+      - name: OPENROUTER_API_KEY is not hardcoded outside workflow or documentation
+        run: |
+          if git grep -rn OPENROUTER_API_KEY -- ':!.github/workflows/' ':!CLAUDE.md' ':!docs/'; then echo FAIL; exit 1; fi
 
       # Both directions. A scanner that matches nothing looks exactly like a
       # clean codebase, and one that matches everything gets switched off.
