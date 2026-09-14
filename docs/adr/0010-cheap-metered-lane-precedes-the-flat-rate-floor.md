@@ -101,12 +101,13 @@ were to be recorded through `Add-RouteDeviation.ps1` and read back to confirm or
 refute the unmeasured saving on the mechanical rows; over the following month the
 log collected two entries and no deviations at all. The trial that owned it
 (DEV-106) concluded that hand-annotated logging does not survive contact with real
-work, and the orchestrator epic it was de-risking is deferred as superseded.
+work, and the orchestrator epic it was de-risking is closed as superseded
+(`Closed` in YouTrack, not `Done`).
 
 The decision in this ADR stands — nothing found since contradicts it. What changes
 is that the saving stays a prior indefinitely rather than pending measurement, and
 a reader should not go looking for a deviation log to settle it. The row is
 revisited when someone has a reason to, not when the log fills up.
 
-`#76` in **Consequences** is DEV-107, now deferred for the same reason: it was
+`#76` in **Consequences** is DEV-107, now closed for the same reason: it was
 gated on whether the .NET orchestrator gets built, and it does not.
