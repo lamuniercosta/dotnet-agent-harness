@@ -130,4 +130,4 @@ orchestrating the seats. See
 [ADR 0024](docs/adr/0024-retire-junie-openrouter-launcher-for-opencode.md).
 
 Configuration details to be documented when the operator confirms the current
-OpenCode setup.
+OpenCode setup (DEV-233).
