@@ -72,22 +72,15 @@ mode the team exists to prevent.
 
 ## Which host and model to run a command on
 
-`scripts/local/Get-ModelRoute.ps1` recommends a host and tier for a pipeline
-command, ordered best first, with a **floor** marking the lowest option that
-still does the work without losing quality:
+`scripts/local/seat-map.json` defines host and tier allocation for team seats, ordered best first (`head`, `then`, `floor`), with a **floor** marking the lowest option that still does the work without losing quality:
 
 ```powershell
-pwsh ./scripts/local/Get-ModelRoute.ps1 -List
+pwsh ./scripts/local/Sync-SeatMap.ps1 -Validate
 ```
 
-```powershell
-pwsh ./scripts/local/Get-ModelRoute.ps1 -Command /implement -RepoRoot ../SomeRepo -Area frontend
-```
-
-`Get-ModelRoute.ps1` only advises — it never launches or configures anything. Read down the chain
-to the first option you still have allowance for. **If that lands below the
+Read down the chain to the first option you still have allowance for. **If that lands below the
 floor, the work waits**; running below it means knowingly accepting reduced
-quality, which is the one thing the map exists to make visible.
+quality, which is the one thing the seat map exists to make visible.
 
 `scripts/local/Test-ModelProbe.ps1` auditions a candidate model on a named host against the floor-model probe kit (G1 trap, per-seat bars, cost ladder) and writes the resulting cell into `scripts/local/seat-map.json`. `Test-ModelProbe.ps1` launches hosts and can bill; use `-WhatIf` for non-launching validation.
 
@@ -101,20 +94,14 @@ Running a probe without `-WhatIf` launches the model host and updates `seat-map.
 pwsh ./scripts/local/Test-ModelProbe.ps1 -Host cursor -Model composer-2.5 -Test Verdict -Seat conductor -Rung floor
 ```
 
-The deviation log is retired. `Add-RouteDeviation.ps1` and its `route-log.jsonl`
-remain on disk but are no longer part of the routine. The trial they served
+The deviation log is retired. `route-log.jsonl`
+remains on disk but is no longer part of the routine. The trial it served
 concluded on 2026-09-08 (DEV-106), and its finding was that hand-annotated
 logging does not survive contact with real work: two entries and no deviations in
-a month. Routing corrections land in ADRs and in this file instead — ADR 0010 is an
-example. Any future spend tracking has to
+a month. Routing corrections land in ADRs (such as ADR 0025) and in this file instead. Any future spend tracking has to
 be cheaper to write than to skip, which is the constraint DEV-63 inherits.
 
-See `docs/adr/0008-route-map-records-work-demands.md` for why the map records what
-work demands rather than what models provide,
-`docs/adr/0010-cheap-metered-lane-precedes-the-flat-rate-floor.md` for the one
-row that spends metered capacity ahead of flat-rate, and
-`specs/046-route-map-advisor/` for the reasoning behind each row. Neither script
-is shipped by `install.ps1`.
+See `docs/adr/0025-versioned-seat-map-and-canvas-portal.md` for seat map versioning details. Script tooling is not shipped by `install.ps1`.
 
 ## OpenRouter via OpenCode
 
