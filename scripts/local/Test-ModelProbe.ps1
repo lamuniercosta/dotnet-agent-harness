@@ -868,8 +868,9 @@ if ([string]::IsNullOrWhiteSpace($binary)) {
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
 $kitRoot = Resolve-ProbeKitRoot
 $taskPath = Get-ProbeTaskPath -TestName $Test -KitRoot $kitRoot
+$kitWarning = $null
 if ([string]::IsNullOrWhiteSpace($taskPath)) {
-    Write-ProbeError "Probe kit not found or task '$($taskFiles[$Test])' missing. Set PROBE_KIT_ROOT or place the kit at artifacts/probe-kit."
+    $kitWarning = "Probe kit not found or task '$($taskFiles[$Test])' missing. Set PROBE_KIT_ROOT or place the kit at artifacts/probe-kit."
 }
 
 $workDir = Get-ProbeWorkingDirectory -TestName $Test -RepoRoot $repoRoot -KitRoot $kitRoot
@@ -892,7 +893,12 @@ Write-Host "Test:     $Test"
 Write-Host "Pool:     $pool"
 Write-Host "Launch:   $($launch.Command)"
 Write-Host "WorkDir:  $workDir"
-Write-Host "Task:     $taskPath"
+if ($kitWarning) {
+    Write-Host "Task:     (unresolved) $kitWarning"
+}
+else {
+    Write-Host "Task:     $taskPath"
+}
 if ($ProbeHost -eq 'opencode') {
     Write-Host 'Note:     OpenCode probes should not run while live OpenCode seats are active.'
     if ($null -ne $ambientEffort) {
@@ -911,6 +917,10 @@ if ($Test -eq 'Timeout') {
 if ($WhatIf) {
     Write-Host 'WhatIf:   validate+resolve+construct complete; launch will not execute.'
     exit 0
+}
+
+if ($kitWarning) {
+    Write-ProbeError $kitWarning
 }
 
 $junieSettings = Join-Path (Join-Path $HOME '.junie') 'settings.json'
