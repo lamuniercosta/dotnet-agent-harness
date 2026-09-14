@@ -50,12 +50,14 @@ function Get-SeatMapViolations {
     }
 
     $seenIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    $seenCodenames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 
     foreach ($seat in $seats) {
         $codename = if (Test-JsonProperty -Object $seat -Name 'codename') { [string]$seat.codename } else { '' }
         $seatId = if (Test-JsonProperty -Object $seat -Name 'id') { [string]$seat.id } else { '' }
         $roleId = if (Test-JsonProperty -Object $seat -Name 'roleId') { [string]$seat.roleId } else { '' }
         $preset = if (Test-JsonProperty -Object $seat -Name 'preset') { [string]$seat.preset } else { '' }
+        $name = if (Test-JsonProperty -Object $seat -Name 'name') { [string]$seat.name } else { '' }
         $label = if (-not [string]::IsNullOrWhiteSpace($codename)) { $codename } elseif (-not [string]::IsNullOrWhiteSpace($seatId)) { $seatId } else { '?' }
 
         if ([string]::IsNullOrWhiteSpace($seatId)) {
@@ -65,12 +67,17 @@ function Get-SeatMapViolations {
         }
         if ([string]::IsNullOrWhiteSpace($codename)) {
             $failures.Add("Seat '$label' is missing required codename.")
+        } elseif (-not $seenCodenames.Add($codename)) {
+            $failures.Add("Duplicate seat codename '$codename'.")
         }
         if ([string]::IsNullOrWhiteSpace($roleId)) {
             $failures.Add("Seat '$label' is missing required roleId.")
         }
         if ([string]::IsNullOrWhiteSpace($preset)) {
             $failures.Add("Seat '$label' is missing required preset.")
+        }
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            $failures.Add("Seat '$label' is missing required name.")
         }
 
         $rungs = $null

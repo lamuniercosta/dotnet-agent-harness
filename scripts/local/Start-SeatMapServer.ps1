@@ -154,6 +154,9 @@ function Apply-SeatRung {
     & $syncScript @syncArgs
     $syncExit = $LASTEXITCODE
     if ($syncExit -ne 0) {
+        $failLaunch = [string]$target.rungs.$RungName.launch
+        $failPool = [string]$target.rungs.$RungName.pool
+        Write-SeatMapSwapLog -Seat $target.codename -Rung $RungName -Launch $failLaunch -Pool $failPool -PreviousActiveRung $previousRung -PreviousLaunch $previousLaunch -PreviousPool $previousPool -LiveSwapped $false -Detail "partialSync exit $syncExit"
         return @{
             success     = $false
             error       = "Partial sync failure: Sync-SeatMap.ps1 exited $syncExit"

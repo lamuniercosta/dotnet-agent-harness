@@ -35,6 +35,9 @@ $maxAgy = Get-InvariantValue -Object $inv -Name 'maxAgyGHeads'
 $minGemini = Get-InvariantValue -Object $inv -Name 'minGeminiHeads'
 $floorPools = @(Get-InvariantValue -Object $inv -Name 'disallowedFloorPools')
 $distinct = Get-InvariantValue -Object $inv -Name 'distinctPoolsPerSeat'
+$zenExRaw = Get-InvariantValue -Object $inv -Name 'zenFloorExceptions'
+$zenEx = @()
+if ($null -ne $zenExRaw) { $zenEx = @($zenExRaw) }
 
 if ($null -eq $maxCursor -or [int]$maxCursor -ne 2) {
     $failures.Add("Charter policy pin: maxCursorHeads must be 2 (JSON has '$maxCursor').")
@@ -50,6 +53,9 @@ if ($floorPools -notcontains 'ZEN') {
 }
 if ($null -eq $distinct -or [bool]$distinct -ne $true) {
     $failures.Add("Charter policy pin: distinctPoolsPerSeat must be true (JSON has '$distinct').")
+}
+if ($zenEx.Count -ne 1 -or [string]$zenEx[0] -ne 'Quill') {
+    $failures.Add("Charter policy pin: zenFloorExceptions must be exactly Quill (JSON has '$($zenEx -join ', ')').")
 }
 
 foreach ($v in @(Get-SeatMapViolations -Map $seatMap)) {
