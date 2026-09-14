@@ -16,7 +16,45 @@ if (-not (Test-Path -LiteralPath $SeatMapPath)) {
 . (Join-Path $PSScriptRoot '_seat-map.ps1')
 
 $seatMap = Get-Content -LiteralPath $SeatMapPath -Raw | ConvertFrom-Json
-$failures = @(Get-SeatMapViolations -Map $seatMap)
+
+# PF1: charter policy is pinned here, not taken from the JSON under test.
+# The invariants block stays informational; editing its thresholds must not
+# green the gate.
+$failures = [System.Collections.Generic.List[string]]::new()
+$inv = $null
+if (Test-JsonProperty -Object $seatMap -Name 'invariants') { $inv = $seatMap.invariants }
+
+function Get-InvariantValue {
+    param($Object, [string]$Name)
+    if (-not (Test-JsonProperty -Object $Object -Name $Name)) { return $null }
+    return $Object.$Name
+}
+
+$maxCursor = Get-InvariantValue -Object $inv -Name 'maxCursorHeads'
+$maxAgy = Get-InvariantValue -Object $inv -Name 'maxAgyGHeads'
+$minGemini = Get-InvariantValue -Object $inv -Name 'minGeminiHeads'
+$floorPools = @(Get-InvariantValue -Object $inv -Name 'disallowedFloorPools')
+$distinct = Get-InvariantValue -Object $inv -Name 'distinctPoolsPerSeat'
+
+if ($null -eq $maxCursor -or [int]$maxCursor -ne 2) {
+    $failures.Add("Charter policy pin: maxCursorHeads must be 2 (JSON has '$maxCursor').")
+}
+if ($null -eq $maxAgy -or [int]$maxAgy -ne 1) {
+    $failures.Add("Charter policy pin: maxAgyGHeads must be 1 (JSON has '$maxAgy').")
+}
+if ($null -eq $minGemini -or [int]$minGemini -ne 1) {
+    $failures.Add("Charter policy pin: minGeminiHeads must be 1 (JSON has '$minGemini').")
+}
+if ($floorPools -notcontains 'ZEN') {
+    $failures.Add("Charter policy pin: disallowedFloorPools must contain ZEN (JSON has '$($floorPools -join ', ')').")
+}
+if ($null -eq $distinct -or [bool]$distinct -ne $true) {
+    $failures.Add("Charter policy pin: distinctPoolsPerSeat must be true (JSON has '$distinct').")
+}
+
+foreach ($v in @(Get-SeatMapViolations -Map $seatMap)) {
+    $failures.Add($v)
+}
 
 if ($failures.Count -gt 0) {
     $failures | ForEach-Object { Write-Error $_ -ErrorAction Continue }

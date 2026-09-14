@@ -105,12 +105,7 @@ See `docs/adr/0025-versioned-seat-map-and-canvas-portal.md` for seat map version
 
 ## OpenRouter via OpenCode
 
-`openrouter` remains the first route for `/code-review` and `/ship-review` in
-this checkout, and sits mid-chain as a cheap `fast` lane on the four mechanical
-commands (`/task`, `/speckit-specify`, `/speckit-tasks`, `/gherkin`) — above the
-flat-rate floor, for the reason argued in
-`docs/adr/0010-cheap-metered-lane-precedes-the-flat-rate-floor.md`. Every other
-stage keeps its existing route.
+`openrouter` remains available as an allocation in `scripts/local/seat-map.json` for fast mechanical seats, for the reason argued in [ADR 0025](docs/adr/0025-versioned-seat-map-and-canvas-portal.md). Every other stage keeps its existing route.
 
 Since 2026-09-14 OpenRouter is called through **OpenCode**, with Maestri
 orchestrating the seats. See

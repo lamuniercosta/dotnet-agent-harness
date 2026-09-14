@@ -40,14 +40,39 @@ function Get-SeatMapViolations {
     $agyGHeads = 0
     $geminiHeads = 0
 
+    if (-not (Test-JsonProperty -Object $Map -Name 'schemaVersion') -or $null -eq $Map.schemaVersion -or [string]$Map.schemaVersion -eq '') {
+        $failures.Add('Seat map is missing required schemaVersion.')
+    }
+
     $seats = @()
     if (Test-JsonProperty -Object $Map -Name 'seats') {
         $seats = @($Map.seats)
     }
 
+    $seenIds = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+
     foreach ($seat in $seats) {
-        $codename = if (Test-JsonProperty -Object $seat -Name 'codename') { [string]$seat.codename } else { '?' }
+        $codename = if (Test-JsonProperty -Object $seat -Name 'codename') { [string]$seat.codename } else { '' }
         $seatId = if (Test-JsonProperty -Object $seat -Name 'id') { [string]$seat.id } else { '' }
+        $roleId = if (Test-JsonProperty -Object $seat -Name 'roleId') { [string]$seat.roleId } else { '' }
+        $preset = if (Test-JsonProperty -Object $seat -Name 'preset') { [string]$seat.preset } else { '' }
+        $label = if (-not [string]::IsNullOrWhiteSpace($codename)) { $codename } elseif (-not [string]::IsNullOrWhiteSpace($seatId)) { $seatId } else { '?' }
+
+        if ([string]::IsNullOrWhiteSpace($seatId)) {
+            $failures.Add("Seat '$label' is missing required id.")
+        } elseif (-not $seenIds.Add($seatId)) {
+            $failures.Add("Duplicate seat id '$seatId'.")
+        }
+        if ([string]::IsNullOrWhiteSpace($codename)) {
+            $failures.Add("Seat '$label' is missing required codename.")
+        }
+        if ([string]::IsNullOrWhiteSpace($roleId)) {
+            $failures.Add("Seat '$label' is missing required roleId.")
+        }
+        if ([string]::IsNullOrWhiteSpace($preset)) {
+            $failures.Add("Seat '$label' is missing required preset.")
+        }
+
         $rungs = $null
         if (Test-JsonProperty -Object $seat -Name 'rungs') { $rungs = $seat.rungs }
 
@@ -56,38 +81,50 @@ function Get-SeatMapViolations {
             $cell = $null
             if (Test-JsonProperty -Object $rungs -Name $r) { $cell = $rungs.$r }
             if ($null -eq $cell) {
-                $failures.Add("Seat '$codename' is missing '$r' rung.")
+                $failures.Add("Seat '$label' is missing '$r' rung.")
                 continue
             }
 
             if (-not (Test-JsonProperty -Object $cell -Name 'launch') -or [string]::IsNullOrWhiteSpace([string]$cell.launch)) {
-                $failures.Add("Seat '$codename' rung '$r' missing launch line.")
+                $failures.Add("Seat '$label' rung '$r' missing launch line.")
             }
 
             $pool = $null
             if (Test-JsonProperty -Object $cell -Name 'pool') { $pool = [string]$cell.pool }
-            if ($validPools -notcontains $pool) {
-                $failures.Add("Seat '$codename' rung '$r' has unknown pool '$pool'.")
+            if ([string]::IsNullOrWhiteSpace($pool)) {
+                $failures.Add("Seat '$label' rung '$r' missing pool.")
+            } elseif ($validPools -notcontains $pool) {
+                $failures.Add("Seat '$label' rung '$r' has unknown pool '$pool'.")
             }
             $poolAt[$r] = $pool
 
-            $evidence = $null
-            if (Test-JsonProperty -Object $cell -Name 'evidence') { $evidence = [string]$cell.evidence }
-            if ($validEvidence -notcontains $evidence) {
-                $failures.Add("Seat '$codename' rung '$r' has unknown evidence '$evidence'.")
+            if ((Test-JsonProperty -Object $cell -Name 'evidence') -and -not [string]::IsNullOrWhiteSpace([string]$cell.evidence)) {
+                $evidence = [string]$cell.evidence
+                if ($validEvidence -notcontains $evidence) {
+                    $failures.Add("Seat '$label' rung '$r' has unknown evidence '$evidence'.")
+                }
             }
 
-            if (Test-JsonProperty -Object $cell -Name 'host') {
-                $hostName = [string]$cell.host
-                if ($hostName -ne '' -and $knownHosts -notcontains $hostName) {
-                    $failures.Add("Seat '$codename' rung '$r' has unknown host '$hostName'.")
+            $hostName = $null
+            if (Test-JsonProperty -Object $cell -Name 'host') { $hostName = [string]$cell.host }
+            if ([string]::IsNullOrWhiteSpace($hostName)) {
+                $failures.Add("Seat '$label' rung '$r' missing host.")
+            } else {
+                if ($knownHosts -notcontains $hostName) {
+                    $failures.Add("Seat '$label' rung '$r' has unknown host '$hostName'.")
                 }
                 if ($hostName -eq 'opencode') {
                     $launch = if (Test-JsonProperty -Object $cell -Name 'launch') { [string]$cell.launch } else { '' }
                     if ($launch -notmatch '(^|\s)(-m|--model)(\s|=|$)') {
-                        $failures.Add("Seat '$codename' rung '$r' OpenCode launch line is missing -m/--model.")
+                        $failures.Add("Seat '$label' rung '$r' OpenCode launch line is missing -m/--model.")
                     }
                 }
+            }
+
+            $modelName = $null
+            if (Test-JsonProperty -Object $cell -Name 'model') { $modelName = [string]$cell.model }
+            if ([string]::IsNullOrWhiteSpace($modelName)) {
+                $failures.Add("Seat '$label' rung '$r' missing model.")
             }
 
             if (Test-JsonProperty -Object $cell -Name 'tier') {
@@ -118,11 +155,11 @@ function Get-SeatMapViolations {
                 $costSource = $null
                 if (Test-JsonProperty -Object $cell.cost -Name 'source') { $costSource = $cell.cost.source }
                 if (-not $costSource -or $validCostSources -notcontains $costSource) {
-                    $failures.Add("Seat '$codename' rung '$r' has invalid cost.source '$costSource' (expected actual|estimated|unknown).")
+                    $failures.Add("Seat '$label' rung '$r' has invalid cost.source '$costSource' (expected actual|estimated|unknown).")
                 }
                 if ((Test-JsonProperty -Object $cell.cost -Name 'usd') -and $null -ne $cell.cost.usd) {
                     if (-not ($cell.cost.usd -is [int] -or $cell.cost.usd -is [long] -or $cell.cost.usd -is [double] -or $cell.cost.usd -is [decimal])) {
-                        $failures.Add("Seat '$codename' rung '$r' has non-numeric cost.usd '$($cell.cost.usd)'.")
+                        $failures.Add("Seat '$label' rung '$r' has non-numeric cost.usd '$($cell.cost.usd)'.")
                     }
                 }
             }
@@ -133,14 +170,14 @@ function Get-SeatMapViolations {
         if ($poolAt['head'] -eq 'GEMINI') { $geminiHeads++ }
 
         if ($disallowedFloorPools -contains $poolAt['floor'] -and $zenFloorExceptions -notcontains $codename -and $zenFloorExceptions -notcontains $seatId) {
-            $failures.Add("Seat '$codename' has $($poolAt['floor']) on floor.")
+            $failures.Add("Seat '$label' has $($poolAt['floor']) on floor.")
         }
 
         if ($distinctPoolsPerSeat) {
             $pools = @($poolAt['head'], $poolAt['then'], $poolAt['floor'])
             $unique = @($pools | Where-Object { $_ } | Select-Object -Unique)
             if ($unique.Count -lt 3) {
-                $failures.Add("Seat '$codename' does not have 3 distinct pools (found: $($pools -join ', ')).")
+                $failures.Add("Seat '$label' does not have 3 distinct pools (found: $($pools -join ', ')).")
             }
         }
     }
@@ -197,8 +234,9 @@ function Resolve-MaestriWorkspaceId {
     if ($matched.Count -gt 1) {
         throw "Multiple Maestri workspaces match this repo. Pass -WorkspaceId. Candidates: $($matched -join ', ')"
     }
+    # Hint matched nothing.
     if ($dirs.Count -eq 1) { return $dirs[0].Name }
-    throw "Could not auto-discover Maestri workspace. Pass -WorkspaceId. Found: $($dirs.Name -join ', ')"
+    throw "Repo-root hint matched no Maestri workspace and $($dirs.Count) workspaces exist. Pass -WorkspaceId. Found: $($dirs.Name -join ', ')"
 }
 
 function Save-Utf8NoBom {
@@ -245,6 +283,10 @@ function Write-SeatMapSwapLog {
         [string]$Rung,
         [Parameter(Mandatory = $true)]
         [string]$Launch,
+        [string]$Pool,
+        [string]$PreviousActiveRung,
+        [string]$PreviousLaunch,
+        [string]$PreviousPool,
         [bool]$LiveSwapped,
         [string]$Detail
     )
@@ -254,12 +296,16 @@ function Write-SeatMapSwapLog {
     }
     $logPath = Join-Path $dir 'seat-map-swaps.jsonl'
     $entry = [ordered]@{
-        at          = (Get-Date).ToString('o')
-        seat        = $Seat
-        rung        = $Rung
-        launch      = $Launch
-        liveSwapped = [bool]$LiveSwapped
-        detail      = $Detail
+        at                  = (Get-Date).ToString('o')
+        seat                = $Seat
+        previousActiveRung  = $PreviousActiveRung
+        previousLaunch      = $PreviousLaunch
+        previousPool        = $PreviousPool
+        rung                = $Rung
+        launch              = $Launch
+        pool                = $Pool
+        liveSwapped         = [bool]$LiveSwapped
+        detail              = $Detail
     } | ConvertTo-Json -Compress
     Add-Content -LiteralPath $logPath -Value $entry -Encoding utf8
 }

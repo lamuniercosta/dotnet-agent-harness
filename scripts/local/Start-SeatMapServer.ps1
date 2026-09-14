@@ -94,9 +94,7 @@ function Send-HttpResponse {
 
 function Get-RequestToken {
     param($Request)
-    $header = $Request.Headers['X-Seat-Map-Token']
-    if (-not [string]::IsNullOrWhiteSpace($header)) { return [string]$header }
-    return [string]$Request.QueryString['token']
+    return [string]$Request.Headers['X-Seat-Map-Token']
 }
 
 function Apply-SeatRung {
@@ -124,6 +122,18 @@ function Apply-SeatRung {
         return @{ success = $false; error = "Seat '$SeatId' has no '$RungName' rung" }
     }
 
+    $previousRung = 'head'
+    if ((Test-JsonProperty -Object $target -Name 'activeRung') -and -not [string]::IsNullOrWhiteSpace([string]$target.activeRung)) {
+        $previousRung = [string]$target.activeRung
+    }
+    $previousLaunch = ''
+    $previousPool = ''
+    if (Test-JsonProperty -Object $target.rungs -Name $previousRung) {
+        $prevCell = $target.rungs.$previousRung
+        if (Test-JsonProperty -Object $prevCell -Name 'launch') { $previousLaunch = [string]$prevCell.launch }
+        if (Test-JsonProperty -Object $prevCell -Name 'pool') { $previousPool = [string]$prevCell.pool }
+    }
+
     $target.activeRung = $RungName
     $violations = @(Get-SeatMapViolations -Map $map)
     if ($violations.Count -gt 0) {
@@ -142,8 +152,15 @@ function Apply-SeatRung {
         $syncArgs.WorkspaceId = $WorkspaceId
     }
     & $syncScript @syncArgs
-    if ($LASTEXITCODE -ne 0) {
-        return @{ success = $false; error = "Sync-SeatMap.ps1 exited $LASTEXITCODE" }
+    $syncExit = $LASTEXITCODE
+    if ($syncExit -ne 0) {
+        return @{
+            success     = $false
+            error       = "Partial sync failure: Sync-SeatMap.ps1 exited $syncExit"
+            partialSync = $true
+            seat        = $target.codename
+            activeRung  = $RungName
+        }
     }
 
     $launch = [string]$target.rungs.$RungName.launch
@@ -162,7 +179,7 @@ function Apply-SeatRung {
             Write-Warning $detail
         }
     }
-    Write-SeatMapSwapLog -Seat $target.codename -Rung $RungName -Launch $launch -LiveSwapped $liveSwapped -Detail $detail
+    Write-SeatMapSwapLog -Seat $target.codename -Rung $RungName -Launch $launch -Pool $pool -PreviousActiveRung $previousRung -PreviousLaunch $previousLaunch -PreviousPool $previousPool -LiveSwapped $liveSwapped -Detail $detail
 
     return @{
         success        = $true
@@ -177,6 +194,8 @@ function Apply-SeatRung {
 
 try {
     while ($listener.IsListening) {
+      $context = $null
+      $origin = ''
       try {
         $context = $listener.GetContext()
         $req = $context.Request
@@ -215,11 +234,27 @@ try {
             } finally {
                 $reader.Dispose()
             }
-            $payload = $body | ConvertFrom-Json
-            $seatId = [string]$payload.seatId
-            $rungName = [string]$payload.rung
+            $payload = $null
+            try {
+                $payload = $body | ConvertFrom-Json
+            } catch {
+                Send-HttpResponse -Context $context -Content '{"error":"malformed JSON"}' -ContentType 'application/json' -StatusCode 400 -Origin $origin
+                continue
+            }
+            if ($null -eq $payload) {
+                Send-HttpResponse -Context $context -Content '{"error":"malformed JSON"}' -ContentType 'application/json' -StatusCode 400 -Origin $origin
+                continue
+            }
+            $seatId = ''
+            $rungName = ''
+            if (Test-JsonProperty -Object $payload -Name 'seatId') { $seatId = [string]$payload.seatId }
+            if (Test-JsonProperty -Object $payload -Name 'rung') { $rungName = [string]$payload.rung }
             if ([string]::IsNullOrWhiteSpace($rungName) -and (Test-JsonProperty -Object $payload -Name 'activeRung')) {
                 $rungName = [string]$payload.activeRung
+            }
+            if ([string]::IsNullOrWhiteSpace($seatId) -or [string]::IsNullOrWhiteSpace($rungName)) {
+                Send-HttpResponse -Context $context -Content '{"error":"missing seatId or rung"}' -ContentType 'application/json' -StatusCode 400 -Origin $origin
+                continue
             }
             $result = Apply-SeatRung -SeatId $seatId -RungName $rungName
             $status = if ($result.success) { 200 } else { 400 }
@@ -230,6 +265,13 @@ try {
         }
       } catch {
         Write-Warning "Error handling request: $_"
+        if ($null -ne $context) {
+            try {
+                Send-HttpResponse -Context $context -Content '{"error":"request failed"}' -ContentType 'application/json' -StatusCode 400 -Origin $origin
+            } catch {
+                Write-Warning "Could not send error response: $_"
+            }
+        }
       }
     }
 } finally {
