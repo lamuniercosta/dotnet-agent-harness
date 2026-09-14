@@ -399,6 +399,10 @@ jobs:
         shell: pwsh
         run: ./scripts/local/Test-RouteMap.ps1
 
+      - name: Seat-map schema and charter invariants
+        shell: pwsh
+        run: ./scripts/local/Test-SeatMap.ps1
+
       # The launcher renders a Junie profile holding a credential reference and
       # decides which profiles it may overwrite, so both need guarding after
       # merge. The suite is a dry run by construction: -WhatIf and -ProfileOnly
