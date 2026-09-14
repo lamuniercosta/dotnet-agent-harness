@@ -1,0 +1,355 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-09-14",
+  "charterDate": "2026-09-11",
+  "invariants": {
+    "maxCursorHeads": 2,
+    "maxAgyGHeads": 1,
+    "minGeminiHeads": 1,
+    "disallowedFloorPools": ["ZEN"],
+    "distinctPoolsPerSeat": true
+  },
+  "seats": [
+    {
+      "id": "conductor",
+      "name": "Conductor",
+      "codename": "Dudamel",
+      "roleId": "0FD7CF98-CCD8-44DF-B78A-957262622A27",
+      "activeRung": "head",
+      "preset": "opencode",
+      "rungs": {
+        "head": {
+          "launch": "opencode --model opencode/muse-spark-1.3-contributor-free --auto",
+          "pool": "ZEN",
+          "evidence": "unmeasured",
+          "host": "opencode",
+          "model": "opencode/muse-spark-1.3-contributor-free"
+        },
+        "then": {
+          "launch": "codex --model gpt-5.6-luna --effort xhigh",
+          "pool": "CODEX",
+          "evidence": "unmeasured",
+          "host": "codex",
+          "model": "gpt-5.6-luna"
+        },
+        "floor": {
+          "launch": "agent --model composer-2.5",
+          "pool": "CURSOR",
+          "evidence": "unmeasured",
+          "host": "cursor",
+          "model": "composer-2.5"
+        }
+      }
+    },
+    {
+      "id": "keel",
+      "name": "Thinker",
+      "codename": "Keel",
+      "roleId": "3D84958E-075E-4739-8307-77D2F46FEA31",
+      "activeRung": "head",
+      "preset": "Claude Code",
+      "rungs": {
+        "head": {
+          "launch": "claude --model claude-opus-4-6 --effort high --permission-mode auto",
+          "pool": "CLAUDE",
+          "evidence": "measured",
+          "host": "claude",
+          "model": "claude-opus-4-6"
+        },
+        "then": {
+          "launch": "codex --model gpt-5.5 --effort high",
+          "pool": "CODEX",
+          "evidence": "unmeasured",
+          "host": "codex",
+          "model": "gpt-5.5"
+        },
+        "floor": {
+          "launch": "opencode --model openrouter/deepseek/deepseek-v4.1-flash",
+          "pool": "OPENROUTER",
+          "evidence": "measured",
+          "host": "opencode",
+          "model": "openrouter/deepseek/deepseek-v4.1-flash"
+        }
+      }
+    },
+    {
+      "id": "anvil",
+      "name": "Builder",
+      "codename": "Anvil",
+      "roleId": "BA23D857-A79B-4128-B154-8D05C3D5DC31",
+      "activeRung": "head",
+      "preset": "Cursor",
+      "rungs": {
+        "head": {
+          "launch": "agent --model cursor-grok-4.6-high --trust",
+          "pool": "CURSOR",
+          "evidence": "unmeasured",
+          "host": "cursor",
+          "model": "cursor-grok-4.6-high"
+        },
+        "then": {
+          "launch": "agy --model gemini-3.7-flash-low",
+          "pool": "AGY-G",
+          "evidence": "measured",
+          "host": "agy",
+          "model": "gemini-3.7-flash-low"
+        },
+        "floor": {
+          "launch": "gemini -m gemini-3.5-flash-lite --yolo",
+          "pool": "GEMINI",
+          "evidence": "cleared",
+          "host": "gemini",
+          "model": "gemini-3.5-flash-lite"
+        }
+      }
+    },
+    {
+      "id": "cog",
+      "name": "Mechanic",
+      "codename": "Cog",
+      "roleId": "1E272DA5-EB12-4E33-8A46-5D5579AB066C",
+      "activeRung": "floor",
+      "preset": "junie",
+      "rungs": {
+        "head": {
+          "launch": "junie gemini-3.1-flash-lite",
+          "pool": "JETBRAINS",
+          "evidence": "measured",
+          "host": "junie",
+          "model": "gemini-3.1-flash-lite"
+        },
+        "then": {
+          "launch": "gemini -m gemini-3.5-flash-lite --yolo",
+          "pool": "GEMINI",
+          "evidence": "cleared",
+          "host": "gemini",
+          "model": "gemini-3.5-flash-lite"
+        },
+        "floor": {
+          "launch": "agy --model gemini-3.6-flash-low",
+          "pool": "AGY-G",
+          "evidence": "measured",
+          "host": "agy",
+          "model": "gemini-3.6-flash-low"
+        }
+      }
+    },
+    {
+      "id": "wisp",
+      "name": "Scout",
+      "codename": "Wisp",
+      "roleId": "BC1DFB5E-A5F9-44A0-B7F6-B54E1A8C92A1",
+      "activeRung": "head",
+      "preset": "gemini",
+      "rungs": {
+        "head": {
+          "launch": "gemini -m gemini-3.5-flash-lite --yolo",
+          "pool": "GEMINI",
+          "evidence": "cleared",
+          "host": "gemini",
+          "model": "gemini-3.5-flash-lite"
+        },
+        "then": {
+          "launch": "opencode --model opencode/muse-spark-1.3-contributor-free",
+          "pool": "ZEN",
+          "evidence": "measured",
+          "host": "opencode",
+          "model": "opencode/muse-spark-1.3-contributor-free"
+        },
+        "floor": {
+          "launch": "opencode --model openrouter/thinkingmachines/inkling:free",
+          "pool": "OPENROUTER",
+          "evidence": "measured",
+          "host": "opencode",
+          "model": "openrouter/thinkingmachines/inkling:free"
+        }
+      }
+    },
+    {
+      "id": "gauge",
+      "name": "Verifier",
+      "codename": "Gauge",
+      "roleId": "10F01BD9-13DA-486F-A4B9-2871C99C3F3A",
+      "activeRung": "head",
+      "preset": "Cursor",
+      "rungs": {
+        "head": {
+          "launch": "agent --model composer-2.5 --trust",
+          "pool": "CURSOR",
+          "evidence": "unmeasured",
+          "host": "cursor",
+          "model": "composer-2.5"
+        },
+        "then": {
+          "launch": "opencode --model opencode/muse-spark-1.3-contributor-free",
+          "pool": "ZEN",
+          "evidence": "measured",
+          "host": "opencode",
+          "model": "opencode/muse-spark-1.3-contributor-free"
+        },
+        "floor": {
+          "launch": "gemini -m gemini-3.1-flash-lite --yolo",
+          "pool": "GEMINI",
+          "evidence": "cleared",
+          "host": "gemini",
+          "model": "gemini-3.1-flash-lite"
+        }
+      }
+    },
+    {
+      "id": "sentry",
+      "name": "Challenger Risk",
+      "codename": "Sentry",
+      "roleId": "B8809D4A-1FA3-4FC7-A778-43BC15EE3E39",
+      "activeRung": "head",
+      "preset": "opencode",
+      "rungs": {
+        "head": {
+          "launch": "opencode --model openrouter/z-ai/glm-5.3-flash --auto",
+          "pool": "OPENROUTER",
+          "evidence": "measured",
+          "host": "opencode",
+          "model": "openrouter/z-ai/glm-5.3-flash"
+        },
+        "then": {
+          "launch": "junie grok-4.3",
+          "pool": "JETBRAINS",
+          "evidence": "probed",
+          "host": "junie",
+          "model": "grok-4.3"
+        },
+        "floor": {
+          "launch": "agy --model gemini-3.7-flash-low",
+          "pool": "AGY-G",
+          "evidence": "measured",
+          "host": "agy",
+          "model": "gemini-3.7-flash-low"
+        }
+      }
+    },
+    {
+      "id": "ledger",
+      "name": "Challenger Standards",
+      "codename": "Ledger",
+      "roleId": "5B0DFF23-B156-4ACF-90C4-49EF76DB8177",
+      "activeRung": "head",
+      "preset": "Codex",
+      "rungs": {
+        "head": {
+          "launch": "codex --model gpt-5.6-luna --approve-for-me",
+          "pool": "CODEX",
+          "evidence": "probed",
+          "host": "codex",
+          "model": "gpt-5.6-luna"
+        },
+        "then": {
+          "launch": "agy --model gemini-3.7-flash-medium",
+          "pool": "AGY-G",
+          "evidence": "measured",
+          "host": "agy",
+          "model": "gemini-3.7-flash-medium"
+        },
+        "floor": {
+          "launch": "gemini -m gemini-3.1-flash-lite --yolo",
+          "pool": "GEMINI",
+          "evidence": "cleared",
+          "host": "gemini",
+          "model": "gemini-3.1-flash-lite"
+        }
+      }
+    },
+    {
+      "id": "compass",
+      "name": "Challenger Spec",
+      "codename": "Compass",
+      "roleId": "1E7515A4-5F96-4DD4-96DE-11A5916635CA",
+      "activeRung": "head",
+      "preset": "agy",
+      "rungs": {
+        "head": {
+          "launch": "agy --model gemini-3.8-flash-high",
+          "pool": "AGY-G",
+          "evidence": "measured",
+          "host": "agy",
+          "model": "gemini-3.8-flash-high"
+        },
+        "then": {
+          "launch": "agent --model muse-spark-1.3-high --trust",
+          "pool": "CURSOR",
+          "evidence": "probed",
+          "host": "cursor",
+          "model": "muse-spark-1.3-high"
+        },
+        "floor": {
+          "launch": "agy --model claude-sonnet-4-6",
+          "pool": "AGY-C",
+          "evidence": "measured",
+          "host": "agy",
+          "model": "claude-sonnet-4-6"
+        }
+      }
+    },
+    {
+      "id": "quill",
+      "name": "Writer",
+      "codename": "Quill",
+      "roleId": "AD8EE43F-9AE5-46C6-88C8-375C7C935AEA",
+      "activeRung": "head",
+      "preset": "agy",
+      "rungs": {
+        "head": {
+          "launch": "agy --model claude-sonnet-4-6",
+          "pool": "AGY-C",
+          "evidence": "measured",
+          "host": "agy",
+          "model": "claude-sonnet-4-6"
+        },
+        "then": {
+          "launch": "claude --model claude-sonnet-4-6",
+          "pool": "CLAUDE",
+          "evidence": "unmeasured",
+          "host": "claude",
+          "model": "claude-sonnet-4-6"
+        },
+        "floor": {
+          "launch": "opencode --model opencode/muse-spark-1.3-contributor-free",
+          "pool": "ZEN",
+          "evidence": "measured",
+          "host": "opencode",
+          "model": "opencode/muse-spark-1.3-contributor-free"
+        }
+      }
+    },
+    {
+      "id": "rigger",
+      "name": "Operator",
+      "codename": "Rigger",
+      "roleId": "2138D9EB-6583-4964-AA5C-E88D17CB343F",
+      "activeRung": "head",
+      "preset": "opencode",
+      "rungs": {
+        "head": {
+          "launch": "opencode --model openrouter/z-ai/glm-5.3-flash --auto",
+          "pool": "OPENROUTER",
+          "evidence": "unmeasured",
+          "host": "opencode",
+          "model": "openrouter/z-ai/glm-5.3-flash"
+        },
+        "then": {
+          "launch": "opencode --model opencode/muse-spark-1.2-contributor-free",
+          "pool": "ZEN",
+          "evidence": "measured",
+          "host": "opencode",
+          "model": "opencode/muse-spark-1.2-contributor-free"
+        },
+        "floor": {
+          "launch": "agent --model cursor-grok-4.5-low --trust",
+          "pool": "CURSOR",
+          "evidence": "unmeasured",
+          "host": "cursor",
+          "model": "cursor-grok-4.5-low"
+        }
+      }
+    }
+  ]
+}
