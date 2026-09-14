@@ -58,6 +58,7 @@ if (-not (Test-Path -LiteralPath $SeatMapPath)) {
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
 $seatMap = Get-Content -LiteralPath $SeatMapPath -Raw | ConvertFrom-Json
+$syncMisses = [System.Collections.Generic.List[string]]::new()
 
 function Write-ViolationsAndExit {
     param([object[]]$Violations)
@@ -140,11 +141,16 @@ if ($GenerateCommands -or $All) {
 if ($SyncRoles -or $All) {
     Write-Host "`n=== Syncing Role Prompts (.maestri/roles/) ===" -ForegroundColor Cyan
     $rolesDir = Join-Path $repoRoot '.maestri' 'roles'
-    if (Test-Path -LiteralPath $rolesDir) {
+    if (-not (Test-Path -LiteralPath $rolesDir)) {
+        $syncMisses.Add("Roles directory not found at: $rolesDir")
+        Write-Warning "Roles directory not found at: $rolesDir"
+    } else {
         foreach ($s in @($seatMap.seats)) {
             $roleFile = Join-Path $rolesDir $s.roleId 'role.json'
             if (-not (Test-Path -LiteralPath $roleFile)) {
-                Write-Warning "  Role file not found: $roleFile"
+                $msg = "Role file not found for $($s.codename): $roleFile"
+                $syncMisses.Add($msg)
+                Write-Warning "  $msg"
                 continue
             }
             $roleJson = Get-Content -LiteralPath $roleFile -Raw | ConvertFrom-Json
@@ -154,11 +160,11 @@ if ($SyncRoles -or $All) {
                 Save-SeatMap -Map $roleJson -Path $roleFile
                 Write-Host "  Updated role for $($s.codename) ($($s.name))" -ForegroundColor Green
             } else {
-                Write-Warning "  Could not find Model chain line in role for $($s.codename)"
+                $msg = "Could not find Model chain line in role for $($s.codename)"
+                $syncMisses.Add($msg)
+                Write-Warning "  $msg"
             }
         }
-    } else {
-        Write-Warning "Roles directory not found at: $rolesDir"
     }
 }
 
@@ -166,14 +172,20 @@ if ($SyncNotes -or $All) {
     Write-Host "`n=== Syncing Canvas Notes ===" -ForegroundColor Cyan
     $resolvedWorkspace = Resolve-MaestriWorkspaceId -WorkspaceId $WorkspaceId -RepoRoot $repoRoot
     $notesDir = Join-Path $HOME '.maestri' 'workspaces' $resolvedWorkspace 'notes'
+    $rosterHeaderPattern = '(?ms)\| Seat \| Codename \| Agent \+ model \((?:head|active)\) \| Pool \|.+?\n\n'
+    $launchHeaderPattern = '(?ms)\| Seat \| Launch command \|.+?\n\n'
     if (-not (Test-Path -LiteralPath $notesDir)) {
+        $syncMisses.Add("Notes directory not found at: $notesDir")
         Write-Warning "Notes directory not found at: $notesDir"
     } else {
         $charterPath = Join-Path $notesDir 'harness-team-charter.md'
-        if (Test-Path -LiteralPath $charterPath) {
+        if (-not (Test-Path -LiteralPath $charterPath)) {
+            $syncMisses.Add("harness-team-charter.md not found at: $charterPath")
+            Write-Warning "  harness-team-charter.md not found"
+        } else {
             $charterContent = Get-Content -LiteralPath $charterPath -Raw
             $rosterTable = @(
-                '| Seat | Codename | Agent + model (head) | Pool |',
+                '| Seat | Codename | Agent + model (active) | Pool |',
                 '|---|---|---|---|'
             )
             foreach ($s in @($seatMap.seats)) {
@@ -182,17 +194,22 @@ if ($SyncNotes -or $All) {
                 $rosterTable += "| $($s.name) | $($s.codename) | $($activeCell.launch) | $($activeCell.pool) |"
             }
             $newRoster = ($rosterTable -join "`n")
-            if ($charterContent -match '(?ms)\| Seat \| Codename \| Agent \+ model \(head\) \| Pool \|.+?\n\n') {
-                $charterContent = Replace-LiteralRegex -InputText $charterContent -Pattern '(?ms)\| Seat \| Codename \| Agent \+ model \(head\) \| Pool \|.+?\n\n' -Replacement "$newRoster`n`n"
+            if ($charterContent -match $rosterHeaderPattern) {
+                $charterContent = Replace-LiteralRegex -InputText $charterContent -Pattern $rosterHeaderPattern -Replacement "$newRoster`n`n"
                 Save-Utf8NoBom -Path $charterPath -Content $charterContent
                 Write-Host '  Updated Roster table in harness-team-charter.md' -ForegroundColor Green
             } else {
-                Write-Warning '  Could not find Roster table in harness-team-charter.md'
+                $msg = 'Could not find Roster table in harness-team-charter.md'
+                $syncMisses.Add($msg)
+                Write-Warning "  $msg"
             }
         }
 
         $restartPath = Join-Path $notesDir 'team-restart.md'
-        if (Test-Path -LiteralPath $restartPath) {
+        if (-not (Test-Path -LiteralPath $restartPath)) {
+            $syncMisses.Add("team-restart.md not found at: $restartPath")
+            Write-Warning "  team-restart.md not found"
+        } else {
             $restartContent = Get-Content -LiteralPath $restartPath -Raw
             $launchTable = @(
                 '| Seat | Launch command |',
@@ -204,12 +221,14 @@ if ($SyncNotes -or $All) {
                 $launchTable += "| $($s.codename) | ``$($activeCell.launch)`` |"
             }
             $newLaunch = ($launchTable -join "`n")
-            if ($restartContent -match '(?ms)\| Seat \| Launch command \|.+?\n\n') {
-                $restartContent = Replace-LiteralRegex -InputText $restartContent -Pattern '(?ms)\| Seat \| Launch command \|.+?\n\n' -Replacement "$newLaunch`n`n"
+            if ($restartContent -match $launchHeaderPattern) {
+                $restartContent = Replace-LiteralRegex -InputText $restartContent -Pattern $launchHeaderPattern -Replacement "$newLaunch`n`n"
                 Save-Utf8NoBom -Path $restartPath -Content $restartContent
                 Write-Host '  Updated Launch commands table in team-restart.md' -ForegroundColor Green
             } else {
-                Write-Warning '  Could not find Launch commands table in team-restart.md'
+                $msg = 'Could not find Launch commands table in team-restart.md'
+                $syncMisses.Add($msg)
+                Write-Warning "  $msg"
             }
         }
     }
@@ -257,6 +276,10 @@ if ($Verify -or $All) {
             Write-Warning "Found $driftCount seats with drift between seat-map.json and workspace.json."
         }
     }
+}
+
+if ($syncMisses.Count -gt 0) {
+    Write-ViolationsAndExit -Violations @($syncMisses)
 }
 
 exit 0
