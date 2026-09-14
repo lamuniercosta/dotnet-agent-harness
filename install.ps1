@@ -160,6 +160,297 @@ function Copy-Tree {
     Add-Result $Label 'SYNCED' "$count files"
 }
 
+function Write-InstallWarning {
+    param([Parameter(Mandatory)][string]$Message)
+    # Console.Out bypasses the success stream so assignment capture of
+    # Merge-HarnessJsonFile cannot swallow AC4 WARNING lines.
+    [Console]::Out.WriteLine($Message)
+}
+
+function Test-MergeSucceeded {
+    param($Result)
+    $flag = @($Result)[-1]
+    return ($flag -eq $true)
+}
+
+function ConvertTo-NormalizedHookCommand {
+    param([string]$Command)
+    if ([string]::IsNullOrEmpty($Command)) { return $Command }
+    return $Command.Replace('\', '/')
+}
+
+function Test-JsonMap {
+    param($Value)
+    return $null -ne $Value -and $Value -is [System.Collections.IDictionary]
+}
+
+function Get-HookCommandSet {
+    param($Nodes)
+    $set = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    Add-HookCommandsToSet -Nodes $Nodes -Set $set
+    return $set
+}
+
+function Add-HookCommandsToSet {
+    param($Nodes, [System.Collections.Generic.HashSet[string]]$Set)
+    foreach ($node in @($Nodes)) {
+        if (Test-JsonMap $node) {
+            foreach ($field in @('command', 'commandWindows')) {
+                if ($node.Contains($field) -and -not [string]::IsNullOrEmpty([string]$node[$field])) {
+                    [void]$Set.Add((ConvertTo-NormalizedHookCommand ([string]$node[$field])))
+                }
+            }
+            if ($node.Contains('hooks')) {
+                Add-HookCommandsToSet -Nodes $node['hooks'] -Set $Set
+            }
+        }
+        elseif ($null -ne $node -and $node -is [System.Collections.IEnumerable] -and $node -isnot [string]) {
+            Add-HookCommandsToSet -Nodes $node -Set $Set
+        }
+    }
+}
+
+function Test-HarnessOwnedHookEntry {
+    param($Entry, [System.Collections.Generic.HashSet[string]]$TemplateCommands)
+    if (-not (Test-JsonMap $Entry)) { return $false }
+    foreach ($field in @('command', 'commandWindows')) {
+        if ($Entry.Contains($field) -and -not [string]::IsNullOrEmpty([string]$Entry[$field])) {
+            $norm = ConvertTo-NormalizedHookCommand ([string]$Entry[$field])
+            if ($TemplateCommands.Contains($norm)) { return $true }
+        }
+    }
+    return $false
+}
+
+function Select-ConsumerHookEntry {
+    param($Entry, [System.Collections.Generic.HashSet[string]]$TemplateCommands)
+    if (-not (Test-JsonMap $Entry)) { return $Entry }
+    $hasNested = $Entry.Contains('hooks') -and $null -ne $Entry['hooks']
+    if ($hasNested) {
+        $kept = [System.Collections.Generic.List[object]]::new()
+        foreach ($child in @($Entry['hooks'])) {
+            $filtered = Select-ConsumerHookEntry -Entry $child -TemplateCommands $TemplateCommands
+            if ($null -ne $filtered) { $kept.Add($filtered) }
+        }
+        if ($kept.Count -eq 0) { return $null }
+        $clone = [ordered]@{}
+        foreach ($key in $Entry.Keys) { $clone[$key] = $Entry[$key] }
+        $clone['hooks'] = [object[]]$kept.ToArray()
+        return $clone
+    }
+    if (Test-HarnessOwnedHookEntry -Entry $Entry -TemplateCommands $TemplateCommands) {
+        return $null
+    }
+    return $Entry
+}
+
+function Merge-HarnessHooks {
+    param($ConsumerHooks, $TemplateHooks)
+    $result = [ordered]@{}
+    $eventKeys = [System.Collections.Generic.List[string]]::new()
+    if (Test-JsonMap $ConsumerHooks) {
+        foreach ($key in $ConsumerHooks.Keys) { $eventKeys.Add([string]$key) }
+    }
+    if (Test-JsonMap $TemplateHooks) {
+        foreach ($key in $TemplateHooks.Keys) {
+            if (-not $eventKeys.Contains([string]$key)) { $eventKeys.Add([string]$key) }
+        }
+    }
+    foreach ($event in $eventKeys) {
+        $templateEntries = @()
+        if ((Test-JsonMap $TemplateHooks) -and $TemplateHooks.Contains($event)) {
+            $templateEntries = @($TemplateHooks[$event])
+        }
+        $consumerEntries = @()
+        if ((Test-JsonMap $ConsumerHooks) -and $ConsumerHooks.Contains($event)) {
+            $consumerEntries = @($ConsumerHooks[$event])
+        }
+        $templateCommands = Get-HookCommandSet $templateEntries
+        $preserved = [System.Collections.Generic.List[object]]::new()
+        foreach ($entry in $consumerEntries) {
+            $kept = Select-ConsumerHookEntry -Entry $entry -TemplateCommands $templateCommands
+            if ($null -ne $kept) { $preserved.Add($kept) }
+        }
+        foreach ($entry in $templateEntries) { $preserved.Add($entry) }
+        $result[$event] = [object[]]$preserved.ToArray()
+    }
+    return $result
+}
+
+function Write-PermissionConflictWarning {
+    param($ConsumerPerms, $TemplatePerms, [string]$DisplayName)
+    $consumerAllow = @()
+    $consumerDeny = @()
+    $templateAllow = @()
+    $templateDeny = @()
+    if (Test-JsonMap $ConsumerPerms) {
+        if ($ConsumerPerms.Contains('allow')) { $consumerAllow = @($ConsumerPerms['allow']) }
+        if ($ConsumerPerms.Contains('deny')) { $consumerDeny = @($ConsumerPerms['deny']) }
+    }
+    if (Test-JsonMap $TemplatePerms) {
+        if ($TemplatePerms.Contains('allow')) { $templateAllow = @($TemplatePerms['allow']) }
+        if ($TemplatePerms.Contains('deny')) { $templateDeny = @($TemplatePerms['deny']) }
+    }
+    $named = [System.Collections.Generic.List[string]]::new()
+    foreach ($entry in $consumerAllow) {
+        $s = [string]$entry
+        if ($templateDeny -contains $s) { $named.Add($s) }
+    }
+    foreach ($entry in $consumerDeny) {
+        $s = [string]$entry
+        if ($templateAllow -contains $s) { $named.Add($s) }
+    }
+    if ($named.Count -eq 0) { return }
+    $names = ($named | Select-Object -Unique) -join ', '
+    Write-InstallWarning "WARNING: $DisplayName permission conflict on: $names. Both entries kept; this installer assumes the host resolves deny-over-allow."
+}
+
+function Merge-HarnessPermissions {
+    param($ConsumerPerms, $TemplatePerms, [string]$DisplayName)
+    $result = [ordered]@{}
+    if (Test-JsonMap $ConsumerPerms) {
+        foreach ($key in $ConsumerPerms.Keys) { $result[$key] = $ConsumerPerms[$key] }
+    }
+    if (Test-JsonMap $TemplatePerms) {
+        foreach ($key in $TemplatePerms.Keys) {
+            $templateVal = $TemplatePerms[$key]
+            $isList = $null -ne $templateVal -and $templateVal -is [System.Collections.IEnumerable] -and $templateVal -isnot [string]
+            if ($isList) {
+                $merged = [System.Collections.Generic.List[object]]::new()
+                $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+                $consumerVal = $null
+                if ($result.Contains($key)) { $consumerVal = $result[$key] }
+                foreach ($item in @($consumerVal)) {
+                    if ($null -eq $item) { continue }
+                    $s = [string]$item
+                    if ($seen.Add($s)) { $merged.Add($item) }
+                }
+                foreach ($item in @($templateVal)) {
+                    if ($null -eq $item) { continue }
+                    $s = [string]$item
+                    if ($seen.Add($s)) { $merged.Add($item) }
+                }
+                $result[$key] = [object[]]$merged.ToArray()
+            }
+            elseif (-not $result.Contains($key)) {
+                $result[$key] = $templateVal
+            }
+        }
+    }
+    Write-PermissionConflictWarning -ConsumerPerms $ConsumerPerms -TemplatePerms $TemplatePerms -DisplayName $DisplayName
+    return $result
+}
+
+function Merge-HarnessJsonDocuments {
+    param($Consumer, $Template, [string]$DisplayName)
+    $result = [ordered]@{}
+    if (Test-JsonMap $Consumer) {
+        foreach ($key in $Consumer.Keys) { $result[$key] = $Consumer[$key] }
+    }
+    if (Test-JsonMap $Template) {
+        foreach ($key in $Template.Keys) {
+            if ($key -eq 'permissions') {
+                $consumerPerms = $null
+                if ($result.Contains('permissions')) { $consumerPerms = $result['permissions'] }
+                $result['permissions'] = Merge-HarnessPermissions -ConsumerPerms $consumerPerms -TemplatePerms $Template[$key] -DisplayName $DisplayName
+            }
+            elseif ($key -eq 'hooks') {
+                $consumerHooks = $null
+                if ($result.Contains('hooks')) { $consumerHooks = $result['hooks'] }
+                $result['hooks'] = Merge-HarnessHooks -ConsumerHooks $consumerHooks -TemplateHooks $Template[$key]
+            }
+            elseif (-not $result.Contains($key)) {
+                $result[$key] = $Template[$key]
+            }
+        }
+    }
+    return $result
+}
+
+function Merge-HarnessJsonFile {
+    param(
+        [Parameter(Mandatory)][string]$TargetPath,
+        [Parameter(Mandatory)][string]$TemplatePath,
+        [Parameter(Mandatory)][string]$DisplayName
+    )
+
+    $bakPath = "${TargetPath}.pre-harness.bak"
+    $targetExists = Test-Path -LiteralPath $TargetPath
+    $nonEmpty = $false
+    if ($targetExists) {
+        $nonEmpty = (Get-Item -LiteralPath $TargetPath).Length -gt 0
+    }
+
+    if ($nonEmpty) {
+        if (-not $PSCmdlet.ShouldProcess($bakPath, "backup $DisplayName")) {
+            return $true
+        }
+        [System.IO.File]::Copy($TargetPath, $bakPath, $true)
+    }
+
+    $consumerRaw = $null
+    if ($targetExists) {
+        $consumerRaw = [System.IO.File]::ReadAllText($TargetPath)
+    }
+
+    $consumer = $null
+    if ([string]::IsNullOrWhiteSpace($consumerRaw)) {
+        $consumer = [ordered]@{}
+    }
+    else {
+        try {
+            $consumer = $consumerRaw | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+            if ($null -eq $consumer) { $consumer = [ordered]@{} }
+            elseif (-not (Test-JsonMap $consumer)) {
+                throw 'JSON root is not an object'
+            }
+        }
+        catch {
+            Write-InstallWarning "WARNING: malformed JSON in $DisplayName - merge aborted; live file and .bak left intact."
+            return $false
+        }
+    }
+
+    $template = (Get-Content -LiteralPath $TemplatePath -Raw) | ConvertFrom-Json -AsHashtable -ErrorAction Stop
+    $merged = Merge-HarnessJsonDocuments -Consumer $consumer -Template $template -DisplayName $DisplayName
+    $json = $merged | ConvertTo-Json -Depth 100
+    $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+    $targetDir = Split-Path -Parent $TargetPath
+    $tempPath = Join-Path $targetDir ("{0}.harness-merge.tmp" -f [System.IO.Path]::GetRandomFileName())
+
+    if (-not $PSCmdlet.ShouldProcess($tempPath, "write merged $DisplayName")) {
+        return $true
+    }
+    [System.IO.File]::WriteAllText($tempPath, $json, $utf8NoBom)
+
+    if (-not $PSCmdlet.ShouldProcess($TargetPath, "replace $DisplayName")) {
+        if (Test-Path -LiteralPath $tempPath) { Remove-Item -LiteralPath $tempPath -Force }
+        return $true
+    }
+
+    try {
+        Move-Item -LiteralPath $tempPath -Destination $TargetPath -Force
+    }
+    catch {
+        if (Test-Path -LiteralPath $tempPath) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
+        throw "Failed to replace $DisplayName with merged JSON: $_"
+    }
+
+    try {
+        $null = [System.IO.File]::ReadAllText($TargetPath) | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        if (Test-Path -LiteralPath $bakPath) {
+            if ($PSCmdlet.ShouldProcess($TargetPath, "restore $DisplayName from .bak")) {
+                [System.IO.File]::Copy($bakPath, $TargetPath, $true)
+            }
+        }
+        throw "Merged $DisplayName failed round-trip parse; restored from .bak if present. $_"
+    }
+
+    return $true
+}
+
 function Read-CanonicalAgentProfile {
     param([Parameter(Mandatory)][string]$Path)
 
@@ -509,11 +800,17 @@ if ($PSCmdlet.ShouldProcess((Join-Path $TargetRepo '.cursor/rules/README.md'), '
 
 # ── 3. Per-platform adapters — the only genuinely divergent files ────────────
 if ($Platform -in @('cursor', 'both', 'all')) {
+    $cursorHooksMerged = $true
     if ($PSCmdlet.ShouldProcess((Join-Path $TargetRepo '.cursor'), 'install cursor adapter')) {
         New-Item -ItemType Directory -Force -Path (Join-Path $TargetRepo '.cursor') | Out-Null
-        Copy-Item (Join-Path $harnessRoot 'adapters/cursor/hooks.json') (Join-Path $TargetRepo '.cursor/hooks.json') -Force
+        $cursorHooksMerged = Test-MergeSucceeded (Merge-HarnessJsonFile -TargetPath (Join-Path $TargetRepo '.cursor/hooks.json') -TemplatePath (Join-Path $harnessRoot 'adapters/cursor/hooks.json') -DisplayName '.cursor/hooks.json')
     }
-    Add-Result '.cursor/hooks.json' 'SYNCED' 'hook wiring'
+    if ($cursorHooksMerged) {
+        Add-Result '.cursor/hooks.json' 'SYNCED' 'hook wiring (merged)'
+    }
+    else {
+        Add-Result '.cursor/hooks.json' 'MANUAL' 'malformed JSON - merge aborted; live file and .bak intact'
+    }
 
     $cursorMcp = Join-Path $TargetRepo '.cursor/mcp.json'
     if (Test-Path $cursorMcp) {
@@ -528,11 +825,17 @@ if ($Platform -in @('cursor', 'both', 'all')) {
 }
 
 if ($Platform -in @('claude', 'both', 'all')) {
+    $claudeSettingsMerged = $true
     if ($PSCmdlet.ShouldProcess((Join-Path $TargetRepo '.claude/settings.json'), 'install claude settings')) {
         New-Item -ItemType Directory -Force -Path (Join-Path $TargetRepo '.claude') | Out-Null
-        Copy-Item (Join-Path $harnessRoot 'adapters/claude/settings.json') (Join-Path $TargetRepo '.claude/settings.json') -Force
+        $claudeSettingsMerged = Test-MergeSucceeded (Merge-HarnessJsonFile -TargetPath (Join-Path $TargetRepo '.claude/settings.json') -TemplatePath (Join-Path $harnessRoot 'adapters/claude/settings.json') -DisplayName '.claude/settings.json')
     }
-    Add-Result '.claude/settings.json' 'SYNCED' 'permissions + hook wiring'
+    if ($claudeSettingsMerged) {
+        Add-Result '.claude/settings.json' 'SYNCED' 'permissions + hook wiring (merged)'
+    }
+    else {
+        Add-Result '.claude/settings.json' 'MANUAL' 'malformed JSON - merge aborted; live file and .bak intact'
+    }
 
     # CLAUDE.md is the repo's own front page - never clobber it. But skipping it
     # entirely is not harmless either: rules live in .cursor/rules because only
@@ -593,11 +896,17 @@ if ($Platform -in @('codex', 'all')) {
     # own integration point and remains a skip-if-present file below.
     $codexDir = Join-Path $TargetRepo '.codex'
     $codexHooks = Join-Path $codexDir 'hooks.json'
+    $codexHooksMerged = $true
     if ($PSCmdlet.ShouldProcess($codexHooks, 'install Codex hook wiring')) {
         New-Item -ItemType Directory -Force -Path $codexDir | Out-Null
-        Copy-Item (Join-Path $harnessRoot 'adapters/codex/hooks.json') $codexHooks -Force
+        $codexHooksMerged = Test-MergeSucceeded (Merge-HarnessJsonFile -TargetPath $codexHooks -TemplatePath (Join-Path $harnessRoot 'adapters/codex/hooks.json') -DisplayName '.codex/hooks.json')
     }
-    Add-Result '.codex/hooks.json' 'SYNCED' 'hook wiring'
+    if ($codexHooksMerged) {
+        Add-Result '.codex/hooks.json' 'SYNCED' 'hook wiring (merged)'
+    }
+    else {
+        Add-Result '.codex/hooks.json' 'MANUAL' 'malformed JSON - merge aborted; live file and .bak intact'
+    }
 
     # Codex reads AGENTS.md from the repo ROOT and has no @import, so unlike
     # CLAUDE.md this adapter is a self-contained distillation of the three
@@ -986,6 +1295,8 @@ Write-Output ''
 Write-Output "dotnet-agent-harness v$harnessVersion -> $TargetRepo   (platform: $Platform)"
 Write-Output ''
 $results | Format-Table -AutoSize Item, Status, Note | Out-String | Write-Output
+Write-Output '.pre-harness.bak files are created beside merged JSON; add them to .gitignore if you commit the config directory.'
+Write-Output ''
 
 $needsAttention = @($results | Where-Object { $_.Status -in @('SKIPPED', 'MANUAL', 'MISSING') })
 if ($needsAttention.Count -gt 0) {
