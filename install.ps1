@@ -1,4 +1,5 @@
 #!/usr/bin/env pwsh
+#requires -Version 7.0
 <#
 .SYNOPSIS
   Installs dotnet-agent-harness into an existing repository.
@@ -70,6 +71,7 @@ if ($TargetRepo -eq $harnessRoot) {
 }
 
 $results = @()
+$script:mergeFailure = $false
 function Add-Result {
     param([string]$Item, [string]$Status, [string]$Note = '')
     $script:results += [PSCustomObject]@{ Item = $Item; Status = $Status; Note = $Note }
@@ -167,10 +169,39 @@ function Write-InstallWarning {
     [Console]::Out.WriteLine($Message)
 }
 
-function Test-MergeSucceeded {
+function ConvertFrom-MergeOutcome {
     param($Result)
-    $flag = @($Result)[-1]
-    return ($flag -eq $true)
+    $code = @($Result)[-1]
+    if ($code -eq 'declined') { return 'declined' }
+    if ($code -eq 'failed' -or $code -eq $false) { return 'failed' }
+    return 'merged'
+}
+
+function Add-MergeFileResult {
+    param(
+        [Parameter(Mandatory)][string]$Item,
+        $Outcome,
+        [Parameter(Mandatory)][string]$SyncedNote,
+        [Parameter(Mandatory)][string]$FailedNote
+    )
+    $code = ConvertFrom-MergeOutcome $Outcome
+    switch ($code) {
+        'failed' {
+            $script:mergeFailure = $true
+            Add-Result $Item 'MANUAL' $FailedNote
+        }
+        'declined' {
+            if ($WhatIfPreference) {
+                Add-Result $Item 'WHATIF' 'dry run - no write'
+            }
+            else {
+                Add-Result $Item 'SKIPPED' 'declined'
+            }
+        }
+        default {
+            Add-Result $Item 'SYNCED' $SyncedNote
+        }
+    }
 }
 
 function ConvertTo-NormalizedHookCommand {
@@ -292,13 +323,21 @@ function Write-PermissionConflictWarning {
         if ($TemplatePerms.Contains('deny')) { $templateDeny = @($TemplatePerms['deny']) }
     }
     $named = [System.Collections.Generic.List[string]]::new()
+    $templateDenySet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $templateDeny) {
+        if ($null -ne $entry) { [void]$templateDenySet.Add([string]$entry) }
+    }
+    $templateAllowSet = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+    foreach ($entry in $templateAllow) {
+        if ($null -ne $entry) { [void]$templateAllowSet.Add([string]$entry) }
+    }
     foreach ($entry in $consumerAllow) {
         $s = [string]$entry
-        if ($templateDeny -contains $s) { $named.Add($s) }
+        if ($templateDenySet.Contains($s)) { $named.Add($s) }
     }
     foreach ($entry in $consumerDeny) {
         $s = [string]$entry
-        if ($templateAllow -contains $s) { $named.Add($s) }
+        if ($templateAllowSet.Contains($s)) { $named.Add($s) }
     }
     if ($named.Count -eq 0) { return }
     $names = ($named | Select-Object -Unique) -join ', '
@@ -317,7 +356,7 @@ function Merge-HarnessPermissions {
             $isList = $null -ne $templateVal -and $templateVal -is [System.Collections.IEnumerable] -and $templateVal -isnot [string]
             if ($isList) {
                 $merged = [System.Collections.Generic.List[object]]::new()
-                $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+                $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
                 $consumerVal = $null
                 if ($result.Contains($key)) { $consumerVal = $result[$key] }
                 foreach ($item in @($consumerVal)) {
@@ -376,17 +415,6 @@ function Merge-HarnessJsonFile {
 
     $bakPath = "${TargetPath}.pre-harness.bak"
     $targetExists = Test-Path -LiteralPath $TargetPath
-    $nonEmpty = $false
-    if ($targetExists) {
-        $nonEmpty = (Get-Item -LiteralPath $TargetPath).Length -gt 0
-    }
-
-    if ($nonEmpty) {
-        if (-not $PSCmdlet.ShouldProcess($bakPath, "backup $DisplayName")) {
-            return $true
-        }
-        [System.IO.File]::Copy($TargetPath, $bakPath, $true)
-    }
 
     $consumerRaw = $null
     if ($targetExists) {
@@ -407,48 +435,75 @@ function Merge-HarnessJsonFile {
         }
         catch {
             Write-InstallWarning "WARNING: malformed JSON in $DisplayName - merge aborted; live file and .bak left intact."
-            return $false
+            return 'failed'
         }
+    }
+
+    # Backup after a successful parse. Guards a bad WRITE (including zero-byte
+    # files), not a bad PARSE - parse failure must not overwrite a good .bak.
+    if ($targetExists) {
+        if (-not $PSCmdlet.ShouldProcess($bakPath, "backup $DisplayName")) {
+            return 'declined'
+        }
+        [System.IO.File]::Copy($TargetPath, $bakPath, $true)
     }
 
     $template = (Get-Content -LiteralPath $TemplatePath -Raw) | ConvertFrom-Json -AsHashtable -ErrorAction Stop
     $merged = Merge-HarnessJsonDocuments -Consumer $consumer -Template $template -DisplayName $DisplayName
+    # Practical limit: ConvertTo-Json -Depth 100 truncates deeper nesting.
+    # No realistic consumer settings/hooks file reaches that depth.
     $json = $merged | ConvertTo-Json -Depth 100
     $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
     $targetDir = Split-Path -Parent $TargetPath
     $tempPath = Join-Path $targetDir ("{0}.harness-merge.tmp" -f [System.IO.Path]::GetRandomFileName())
-
-    if (-not $PSCmdlet.ShouldProcess($tempPath, "write merged $DisplayName")) {
-        return $true
-    }
-    [System.IO.File]::WriteAllText($tempPath, $json, $utf8NoBom)
-
-    if (-not $PSCmdlet.ShouldProcess($TargetPath, "replace $DisplayName")) {
-        if (Test-Path -LiteralPath $tempPath) { Remove-Item -LiteralPath $tempPath -Force }
-        return $true
-    }
-
+    $moved = $false
     try {
-        Move-Item -LiteralPath $tempPath -Destination $TargetPath -Force
-    }
-    catch {
-        if (Test-Path -LiteralPath $tempPath) { Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue }
-        throw "Failed to replace $DisplayName with merged JSON: $_"
-    }
-
-    try {
-        $null = [System.IO.File]::ReadAllText($TargetPath) | ConvertFrom-Json -ErrorAction Stop
-    }
-    catch {
-        if (Test-Path -LiteralPath $bakPath) {
-            if ($PSCmdlet.ShouldProcess($TargetPath, "restore $DisplayName from .bak")) {
-                [System.IO.File]::Copy($bakPath, $TargetPath, $true)
-            }
+        if (-not $PSCmdlet.ShouldProcess($tempPath, "write merged $DisplayName")) {
+            return 'declined'
         }
-        throw "Merged $DisplayName failed round-trip parse; restored from .bak if present. $_"
-    }
+        [System.IO.File]::WriteAllText($tempPath, $json, $utf8NoBom)
 
-    return $true
+        if (-not $PSCmdlet.ShouldProcess($TargetPath, "replace $DisplayName")) {
+            return 'declined'
+        }
+
+        try {
+            Move-Item -LiteralPath $tempPath -Destination $TargetPath -Force
+            $moved = $true
+        }
+        catch {
+            throw "Failed to replace $DisplayName with merged JSON: $_"
+        }
+
+        try {
+            $null = [System.IO.File]::ReadAllText($TargetPath) | ConvertFrom-Json -ErrorAction Stop
+        }
+        catch {
+            $parseError = $_
+            $restoreError = $null
+            if (Test-Path -LiteralPath $bakPath) {
+                try {
+                    if ($PSCmdlet.ShouldProcess($TargetPath, "restore $DisplayName from .bak")) {
+                        [System.IO.File]::Copy($bakPath, $TargetPath, $true)
+                    }
+                }
+                catch {
+                    $restoreError = $_
+                }
+            }
+            if ($restoreError) {
+                throw "Merged $DisplayName failed round-trip parse: $parseError Restore from .bak also failed: $restoreError"
+            }
+            throw "Merged $DisplayName failed round-trip parse; restored from .bak if present. $parseError"
+        }
+
+        return 'merged'
+    }
+    finally {
+        if (-not $moved -and $tempPath -and (Test-Path -LiteralPath $tempPath)) {
+            Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Read-CanonicalAgentProfile {
@@ -800,16 +855,12 @@ if ($PSCmdlet.ShouldProcess((Join-Path $TargetRepo '.cursor/rules/README.md'), '
 
 # ── 3. Per-platform adapters — the only genuinely divergent files ────────────
 if ($Platform -in @('cursor', 'both', 'all')) {
-    $cursorHooksMerged = $true
     if ($PSCmdlet.ShouldProcess((Join-Path $TargetRepo '.cursor'), 'install cursor adapter')) {
         New-Item -ItemType Directory -Force -Path (Join-Path $TargetRepo '.cursor') | Out-Null
-        $cursorHooksMerged = Test-MergeSucceeded (Merge-HarnessJsonFile -TargetPath (Join-Path $TargetRepo '.cursor/hooks.json') -TemplatePath (Join-Path $harnessRoot 'adapters/cursor/hooks.json') -DisplayName '.cursor/hooks.json')
-    }
-    if ($cursorHooksMerged) {
-        Add-Result '.cursor/hooks.json' 'SYNCED' 'hook wiring (merged)'
+        Add-MergeFileResult -Item '.cursor/hooks.json' -Outcome (Merge-HarnessJsonFile -TargetPath (Join-Path $TargetRepo '.cursor/hooks.json') -TemplatePath (Join-Path $harnessRoot 'adapters/cursor/hooks.json') -DisplayName '.cursor/hooks.json') -SyncedNote 'hook wiring (merged)' -FailedNote 'malformed JSON - merge aborted; live file and .bak intact'
     }
     else {
-        Add-Result '.cursor/hooks.json' 'MANUAL' 'malformed JSON - merge aborted; live file and .bak intact'
+        Add-MergeFileResult -Item '.cursor/hooks.json' -Outcome 'declined' -SyncedNote 'hook wiring (merged)' -FailedNote 'malformed JSON - merge aborted; live file and .bak intact'
     }
 
     $cursorMcp = Join-Path $TargetRepo '.cursor/mcp.json'
@@ -825,16 +876,12 @@ if ($Platform -in @('cursor', 'both', 'all')) {
 }
 
 if ($Platform -in @('claude', 'both', 'all')) {
-    $claudeSettingsMerged = $true
     if ($PSCmdlet.ShouldProcess((Join-Path $TargetRepo '.claude/settings.json'), 'install claude settings')) {
         New-Item -ItemType Directory -Force -Path (Join-Path $TargetRepo '.claude') | Out-Null
-        $claudeSettingsMerged = Test-MergeSucceeded (Merge-HarnessJsonFile -TargetPath (Join-Path $TargetRepo '.claude/settings.json') -TemplatePath (Join-Path $harnessRoot 'adapters/claude/settings.json') -DisplayName '.claude/settings.json')
-    }
-    if ($claudeSettingsMerged) {
-        Add-Result '.claude/settings.json' 'SYNCED' 'permissions + hook wiring (merged)'
+        Add-MergeFileResult -Item '.claude/settings.json' -Outcome (Merge-HarnessJsonFile -TargetPath (Join-Path $TargetRepo '.claude/settings.json') -TemplatePath (Join-Path $harnessRoot 'adapters/claude/settings.json') -DisplayName '.claude/settings.json') -SyncedNote 'permissions + hook wiring (merged)' -FailedNote 'malformed JSON - merge aborted; live file and .bak intact'
     }
     else {
-        Add-Result '.claude/settings.json' 'MANUAL' 'malformed JSON - merge aborted; live file and .bak intact'
+        Add-MergeFileResult -Item '.claude/settings.json' -Outcome 'declined' -SyncedNote 'permissions + hook wiring (merged)' -FailedNote 'malformed JSON - merge aborted; live file and .bak intact'
     }
 
     # CLAUDE.md is the repo's own front page - never clobber it. But skipping it
@@ -896,16 +943,12 @@ if ($Platform -in @('codex', 'all')) {
     # own integration point and remains a skip-if-present file below.
     $codexDir = Join-Path $TargetRepo '.codex'
     $codexHooks = Join-Path $codexDir 'hooks.json'
-    $codexHooksMerged = $true
     if ($PSCmdlet.ShouldProcess($codexHooks, 'install Codex hook wiring')) {
         New-Item -ItemType Directory -Force -Path $codexDir | Out-Null
-        $codexHooksMerged = Test-MergeSucceeded (Merge-HarnessJsonFile -TargetPath $codexHooks -TemplatePath (Join-Path $harnessRoot 'adapters/codex/hooks.json') -DisplayName '.codex/hooks.json')
-    }
-    if ($codexHooksMerged) {
-        Add-Result '.codex/hooks.json' 'SYNCED' 'hook wiring (merged)'
+        Add-MergeFileResult -Item '.codex/hooks.json' -Outcome (Merge-HarnessJsonFile -TargetPath $codexHooks -TemplatePath (Join-Path $harnessRoot 'adapters/codex/hooks.json') -DisplayName '.codex/hooks.json') -SyncedNote 'hook wiring (merged)' -FailedNote 'malformed JSON - merge aborted; live file and .bak intact'
     }
     else {
-        Add-Result '.codex/hooks.json' 'MANUAL' 'malformed JSON - merge aborted; live file and .bak intact'
+        Add-MergeFileResult -Item '.codex/hooks.json' -Outcome 'declined' -SyncedNote 'hook wiring (merged)' -FailedNote 'malformed JSON - merge aborted; live file and .bak intact'
     }
 
     # Codex reads AGENTS.md from the repo ROOT and has no @import, so unlike
@@ -1296,6 +1339,7 @@ Write-Output "dotnet-agent-harness v$harnessVersion -> $TargetRepo   (platform: 
 Write-Output ''
 $results | Format-Table -AutoSize Item, Status, Note | Out-String | Write-Output
 Write-Output '.pre-harness.bak files are created beside merged JSON; add them to .gitignore if you commit the config directory.'
+Write-Output 'Merge WARNINGs are written to the console (not the PowerShell pipeline), so in-process callers that only capture success-stream output will not see them.'
 Write-Output ''
 
 $needsAttention = @($results | Where-Object { $_.Status -in @('SKIPPED', 'MANUAL', 'MISSING') })
@@ -1353,4 +1397,7 @@ Write-Output 'Run them once with -All to get a baseline on the code that is alre
 # and a script with no explicit exit inherits it - so a completely successful
 # install reported failure to its caller. It printed every success line first,
 # which made it look like a CI flake rather than an exit-code bug.
+if ($script:mergeFailure) {
+    exit 1
+}
 exit 0
