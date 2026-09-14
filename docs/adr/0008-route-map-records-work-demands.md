@@ -1,3 +1,5 @@
+Superseded by ADR 0025
+
 # Route map records work demands, not model capabilities
 
 Subscription quota is the binding constraint, and it runs out mid-week with work

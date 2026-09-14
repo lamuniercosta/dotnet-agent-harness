@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="seat-map-token" content="__SEAT_MAP_TOKEN__">
+  <title>Maestri Seat Map</title>
+  <style>
+    :root {
+      --bg: #090d16;
+      --card: #131d2e;
+      --border: #1e2e4a;
+      --fg: #f1f5f9;
+      --muted: #94a3b8;
+      --ok: #34d399;
+      --warn: #fbbf24;
+      --bad: #f87171;
+      --accent: #38bdf8;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      padding: 1.25rem;
+    }
+    h1 { font-size: 1.25rem; margin: 0 0 0.25rem; }
+    .sub { color: var(--muted); font-size: 0.8rem; margin-bottom: 1rem; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+    .stat, .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.9rem;
+    }
+    .stat .label, .muted { color: var(--muted); font-size: 0.75rem; }
+    .stat .n { font-size: 1.25rem; font-weight: 700; color: var(--accent); }
+    .ok { color: var(--ok); }
+    .bad { color: var(--bad); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 0.9rem; }
+    .codename { font-weight: 700; }
+    .rung {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.5rem;
+      align-items: flex-start;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 0.5rem 0.6rem;
+      margin-top: 0.4rem;
+      cursor: pointer;
+      background: #0b1220;
+    }
+    .rung.active { border-color: var(--accent); background: #0f2744; }
+    .rung code { font-size: 0.7rem; color: var(--muted); display: block; margin-top: 0.2rem; word-break: break-all; }
+    .badge { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.04em; padding: 0.1rem 0.4rem; border: 1px solid var(--border); border-radius: 999px; }
+    #toast { min-height: 1.2rem; font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Maestri Seat Map</h1>
+  <p class="sub">Three rungs per seat (head → then → floor). Selecting a rung POSTs <code>activeRung</code> with the session token.</p>
+  <div class="stats">
+    <div class="stat"><div class="label">CURSOR heads</div><div class="n" id="cCursor">–</div><div id="bCursor" class="muted"></div></div>
+    <div class="stat"><div class="label">AGY-G heads</div><div class="n" id="cAgy">–</div><div id="bAgy" class="muted"></div></div>
+    <div class="stat"><div class="label">GEMINI heads</div><div class="n" id="cGem">–</div><div id="bGem" class="muted"></div></div>
+    <div class="stat"><div class="label">ZEN floors</div><div class="n" id="cZen">–</div><div id="bZen" class="muted"></div></div>
+  </div>
+  <div id="toast"></div>
+  <main id="grid" class="grid"></main>
+  <script>
+    const token = document.querySelector('meta[name="seat-map-token"]').getAttribute('content');
+    const RUNGS = ['head', 'then', 'floor'];
+
+    function toast(msg, cls) {
+      const el = document.getElementById('toast');
+      el.textContent = msg;
+      el.className = cls || '';
+    }
+
+    function poolOf(seat, rung) {
+      return seat.rungs && seat.rungs[rung] ? seat.rungs[rung].pool : '';
+    }
+
+    function updateStats(seats) {
+      const inv = { cursor: 0, agy: 0, gem: 0, zen: 0 };
+      seats.forEach(s => {
+        if (poolOf(s, 'head') === 'CURSOR') inv.cursor++;
+        if (poolOf(s, 'head') === 'AGY-G') inv.agy++;
+        if (poolOf(s, 'head') === 'GEMINI') inv.gem++;
+        if (poolOf(s, 'floor') === 'ZEN') inv.zen++;
+      });
+      document.getElementById('cCursor').textContent = inv.cursor;
+      document.getElementById('cAgy').textContent = inv.agy;
+      document.getElementById('cGem').textContent = inv.gem;
+      document.getElementById('cZen').textContent = inv.zen;
+      const set = (id, ok, okText, badText) => {
+        const el = document.getElementById(id);
+        el.textContent = ok ? okText : badText;
+        el.className = ok ? 'ok' : 'bad';
+      };
+      set('bCursor', inv.cursor <= 2, '≤2 OK', 'over 2');
+      set('bAgy', inv.agy <= 1, '≤1 OK', 'over 1');
+      set('bGem', inv.gem >= 1, '≥1 OK', 'need ≥1');
+      set('bZen', inv.zen <= 1, 'Quill excepted', 'too many ZEN floors');
+    }
+
+    function render(map) {
+      const grid = document.getElementById('grid');
+      grid.innerHTML = '';
+      (map.seats || []).forEach(seat => {
+        const active = seat.activeRung || 'head';
+        const card = document.createElement('article');
+        card.className = 'card';
+        const rungs = RUNGS.map(r => {
+          const cell = (seat.rungs || {})[r] || {};
+          const selected = r === active ? ' active' : '';
+          const floor = r === 'floor' ? ' <span class="badge">FLOOR</span>' : '';
+          return `<div class="rung${selected}" data-seat="${seat.id}" data-rung="${r}">
+            <div>
+              <strong>${r}</strong>${floor}
+              <code>${cell.launch || ''}</code>
+            </div>
+            <span class="badge">${cell.pool || ''} · t${cell.tier || '?'}</span>
+          </div>`;
+        }).join('');
+        card.innerHTML = `<div><span class="codename">${seat.codename}</span>
+          <span class="muted"> · ${seat.name}</span></div>
+          <div class="muted">${seat.preset || ''} · activeRung=${active}</div>
+          ${rungs}`;
+        grid.appendChild(card);
+      });
+      updateStats(map.seats || []);
+      grid.querySelectorAll('.rung').forEach(el => {
+        el.addEventListener('click', () => selectRung(el.dataset.seat, el.dataset.rung));
+      });
+    }
+
+    async function load() {
+      const res = await fetch('/api/seats');
+      if (!res.ok) throw new Error('GET /api/seats failed');
+      render(await res.json());
+    }
+
+    async function selectRung(seatId, rung) {
+      toast(`Setting ${seatId} activeRung=${rung}…`);
+      const res = await fetch('/api/seats/set', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Seat-Map-Token': token
+        },
+        body: JSON.stringify({ seatId, rung, activeRung: rung })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        toast(data.error || 'swap failed', 'bad');
+        return;
+      }
+      toast(`activeRung ${data.seat} → ${data.activeRung}`, 'ok');
+      await load();
+    }
+
+    load().catch(err => toast(String(err), 'bad'));
+  </script>
+</body>
+</html>

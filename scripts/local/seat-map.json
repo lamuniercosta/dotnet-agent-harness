@@ -7,6 +7,7 @@
     "maxAgyGHeads": 1,
     "minGeminiHeads": 1,
     "disallowedFloorPools": ["ZEN"],
+    "zenFloorExceptions": ["Quill"],
     "distinctPoolsPerSeat": true
   },
   "seats": [
@@ -23,21 +24,24 @@
           "pool": "ZEN",
           "evidence": "unmeasured",
           "host": "opencode",
-          "model": "opencode/muse-spark-1.3-contributor-free"
+          "model": "opencode/muse-spark-1.3-contributor-free",
+          "tier": 1
         },
         "then": {
           "launch": "codex --model gpt-5.6-luna --effort xhigh",
           "pool": "CODEX",
           "evidence": "unmeasured",
           "host": "codex",
-          "model": "gpt-5.6-luna"
+          "model": "gpt-5.6-luna",
+          "tier": 3
         },
         "floor": {
           "launch": "agent --model composer-2.5",
           "pool": "CURSOR",
           "evidence": "unmeasured",
           "host": "cursor",
-          "model": "composer-2.5"
+          "model": "composer-2.5",
+          "tier": 3
         }
       }
     },
@@ -54,21 +58,24 @@
           "pool": "CLAUDE",
           "evidence": "measured",
           "host": "claude",
-          "model": "claude-opus-4-6"
+          "model": "claude-opus-4-6",
+          "tier": 3
         },
         "then": {
           "launch": "codex --model gpt-5.5 --effort high",
           "pool": "CODEX",
           "evidence": "unmeasured",
           "host": "codex",
-          "model": "gpt-5.5"
+          "model": "gpt-5.5",
+          "tier": 3
         },
         "floor": {
           "launch": "opencode --model openrouter/deepseek/deepseek-v4.1-flash",
           "pool": "OPENROUTER",
           "evidence": "measured",
           "host": "opencode",
-          "model": "openrouter/deepseek/deepseek-v4.1-flash"
+          "model": "openrouter/deepseek/deepseek-v4.1-flash",
+          "tier": 4
         }
       }
     },
@@ -85,21 +92,24 @@
           "pool": "CURSOR",
           "evidence": "unmeasured",
           "host": "cursor",
-          "model": "cursor-grok-4.6-high"
+          "model": "cursor-grok-4.6-high",
+          "tier": 3
         },
         "then": {
           "launch": "agy --model gemini-3.7-flash-low",
           "pool": "AGY-G",
           "evidence": "measured",
           "host": "agy",
-          "model": "gemini-3.7-flash-low"
+          "model": "gemini-3.7-flash-low",
+          "tier": 2
         },
         "floor": {
           "launch": "gemini -m gemini-3.5-flash-lite --yolo",
           "pool": "GEMINI",
           "evidence": "cleared",
           "host": "gemini",
-          "model": "gemini-3.5-flash-lite"
+          "model": "gemini-3.5-flash-lite",
+          "tier": 4
         }
       }
     },
@@ -116,21 +126,24 @@
           "pool": "JETBRAINS",
           "evidence": "measured",
           "host": "junie",
-          "model": "gemini-3.1-flash-lite"
+          "model": "gemini-3.1-flash-lite",
+          "tier": 2
         },
         "then": {
           "launch": "gemini -m gemini-3.5-flash-lite --yolo",
           "pool": "GEMINI",
           "evidence": "cleared",
           "host": "gemini",
-          "model": "gemini-3.5-flash-lite"
+          "model": "gemini-3.5-flash-lite",
+          "tier": 4
         },
         "floor": {
           "launch": "agy --model gemini-3.6-flash-low",
           "pool": "AGY-G",
           "evidence": "measured",
           "host": "agy",
-          "model": "gemini-3.6-flash-low"
+          "model": "gemini-3.6-flash-low",
+          "tier": 2
         }
       }
     },
@@ -147,21 +160,24 @@
           "pool": "GEMINI",
           "evidence": "cleared",
           "host": "gemini",
-          "model": "gemini-3.5-flash-lite"
+          "model": "gemini-3.5-flash-lite",
+          "tier": 4
         },
         "then": {
           "launch": "opencode --model opencode/muse-spark-1.3-contributor-free",
           "pool": "ZEN",
           "evidence": "measured",
           "host": "opencode",
-          "model": "opencode/muse-spark-1.3-contributor-free"
+          "model": "opencode/muse-spark-1.3-contributor-free",
+          "tier": 1
         },
         "floor": {
           "launch": "opencode --model openrouter/thinkingmachines/inkling:free",
           "pool": "OPENROUTER",
           "evidence": "measured",
           "host": "opencode",
-          "model": "openrouter/thinkingmachines/inkling:free"
+          "model": "openrouter/thinkingmachines/inkling:free",
+          "tier": 1
         }
       }
     },
@@ -178,21 +194,24 @@
           "pool": "CURSOR",
           "evidence": "unmeasured",
           "host": "cursor",
-          "model": "composer-2.5"
+          "model": "composer-2.5",
+          "tier": 3
         },
         "then": {
           "launch": "opencode --model opencode/muse-spark-1.3-contributor-free",
           "pool": "ZEN",
           "evidence": "measured",
           "host": "opencode",
-          "model": "opencode/muse-spark-1.3-contributor-free"
+          "model": "opencode/muse-spark-1.3-contributor-free",
+          "tier": 1
         },
         "floor": {
           "launch": "gemini -m gemini-3.1-flash-lite --yolo",
           "pool": "GEMINI",
           "evidence": "cleared",
           "host": "gemini",
-          "model": "gemini-3.1-flash-lite"
+          "model": "gemini-3.1-flash-lite",
+          "tier": 4
         }
       }
     },
@@ -209,21 +228,24 @@
           "pool": "OPENROUTER",
           "evidence": "measured",
           "host": "opencode",
-          "model": "openrouter/z-ai/glm-5.3-flash"
+          "model": "openrouter/z-ai/glm-5.3-flash",
+          "tier": 4
         },
         "then": {
           "launch": "junie grok-4.3",
           "pool": "JETBRAINS",
           "evidence": "probed",
           "host": "junie",
-          "model": "grok-4.3"
+          "model": "grok-4.3",
+          "tier": 2
         },
         "floor": {
           "launch": "agy --model gemini-3.7-flash-low",
           "pool": "AGY-G",
           "evidence": "measured",
           "host": "agy",
-          "model": "gemini-3.7-flash-low"
+          "model": "gemini-3.7-flash-low",
+          "tier": 2
         }
       }
     },
@@ -240,21 +262,24 @@
           "pool": "CODEX",
           "evidence": "probed",
           "host": "codex",
-          "model": "gpt-5.6-luna"
+          "model": "gpt-5.6-luna",
+          "tier": 3
         },
         "then": {
           "launch": "agy --model gemini-3.7-flash-medium",
           "pool": "AGY-G",
           "evidence": "measured",
           "host": "agy",
-          "model": "gemini-3.7-flash-medium"
+          "model": "gemini-3.7-flash-medium",
+          "tier": 2
         },
         "floor": {
           "launch": "gemini -m gemini-3.1-flash-lite --yolo",
           "pool": "GEMINI",
           "evidence": "cleared",
           "host": "gemini",
-          "model": "gemini-3.1-flash-lite"
+          "model": "gemini-3.1-flash-lite",
+          "tier": 4
         }
       }
     },
@@ -271,21 +296,24 @@
           "pool": "AGY-G",
           "evidence": "measured",
           "host": "agy",
-          "model": "gemini-3.8-flash-high"
+          "model": "gemini-3.8-flash-high",
+          "tier": 2
         },
         "then": {
           "launch": "agent --model muse-spark-1.3-high --trust",
           "pool": "CURSOR",
           "evidence": "probed",
           "host": "cursor",
-          "model": "muse-spark-1.3-high"
+          "model": "muse-spark-1.3-high",
+          "tier": 3
         },
         "floor": {
           "launch": "agy --model claude-sonnet-4-6",
           "pool": "AGY-C",
           "evidence": "measured",
           "host": "agy",
-          "model": "claude-sonnet-4-6"
+          "model": "claude-sonnet-4-6",
+          "tier": 2
         }
       }
     },
@@ -302,21 +330,24 @@
           "pool": "AGY-C",
           "evidence": "measured",
           "host": "agy",
-          "model": "claude-sonnet-4-6"
+          "model": "claude-sonnet-4-6",
+          "tier": 2
         },
         "then": {
           "launch": "claude --model claude-sonnet-4-6",
           "pool": "CLAUDE",
           "evidence": "unmeasured",
           "host": "claude",
-          "model": "claude-sonnet-4-6"
+          "model": "claude-sonnet-4-6",
+          "tier": 3
         },
         "floor": {
           "launch": "opencode --model opencode/muse-spark-1.3-contributor-free",
           "pool": "ZEN",
           "evidence": "measured",
           "host": "opencode",
-          "model": "opencode/muse-spark-1.3-contributor-free"
+          "model": "opencode/muse-spark-1.3-contributor-free",
+          "tier": 1
         }
       }
     },
@@ -333,21 +364,24 @@
           "pool": "OPENROUTER",
           "evidence": "unmeasured",
           "host": "opencode",
-          "model": "openrouter/z-ai/glm-5.3-flash"
+          "model": "openrouter/z-ai/glm-5.3-flash",
+          "tier": 4
         },
         "then": {
           "launch": "opencode --model opencode/muse-spark-1.2-contributor-free",
           "pool": "ZEN",
           "evidence": "measured",
           "host": "opencode",
-          "model": "opencode/muse-spark-1.2-contributor-free"
+          "model": "opencode/muse-spark-1.2-contributor-free",
+          "tier": 1
         },
         "floor": {
           "launch": "agent --model cursor-grok-4.5-low --trust",
           "pool": "CURSOR",
           "evidence": "unmeasured",
           "host": "cursor",
-          "model": "cursor-grok-4.5-low"
+          "model": "cursor-grok-4.5-low",
+          "tier": 3
         }
       }
     }

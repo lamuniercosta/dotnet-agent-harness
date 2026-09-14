@@ -1,3 +1,5 @@
+Superseded by ADR 0025
+
 # A cheap metered lane precedes the flat-rate floor
 
 The route map orders hosts by billing, not by quality: flat-rate subscription
