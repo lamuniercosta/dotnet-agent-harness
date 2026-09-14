@@ -105,8 +105,8 @@ The deviation log is retired. `Add-RouteDeviation.ps1` and its `route-log.jsonl`
 remain on disk but are no longer part of the routine. The trial they served
 concluded on 2026-09-08 (DEV-106), and its finding was that hand-annotated
 logging does not survive contact with real work: two entries and no deviations in
-a month. Routing corrections land in ADRs and in this file instead — ADR 0010 and
-the per-tier model split below are both examples. Any future spend tracking has to
+a month. Routing corrections land in ADRs and in this file instead — ADR 0010 is an
+example. Any future spend tracking has to
 be cheaper to write than to skip, which is the constraint DEV-63 inherits.
 
 See `docs/adr/0008-route-map-records-work-demands.md` for why the map records what
@@ -116,67 +116,18 @@ row that spends metered capacity ahead of flat-rate, and
 `specs/046-route-map-advisor/` for the reasoning behind each row. Neither script
 is shipped by `install.ps1`.
 
-## OpenRouter via Junie
+## OpenRouter via OpenCode
 
-`openrouter` is the first route for `/code-review` and `/ship-review` in this
-checkout, and sits mid-chain as a cheap `fast` lane on the four mechanical
+`openrouter` remains the first route for `/code-review` and `/ship-review` in
+this checkout, and sits mid-chain as a cheap `fast` lane on the four mechanical
 commands (`/task`, `/speckit-specify`, `/speckit-tasks`, `/gherkin`) — above the
 flat-rate floor, for the reason argued in
 `docs/adr/0010-cheap-metered-lane-precedes-the-flat-rate-floor.md`. Every other
-stage keeps its existing route. The launcher uses `OPENROUTER_API_KEY` only in
-the environment and resolves its model from the tier (table below); it does not
-write the key to `.junie/`, the command line, or a repository file:
+stage keeps its existing route.
 
-```powershell
-pwsh ./scripts/local/Invoke-OpenRouterTask.ps1 -Tier deep -Task 'Review the current diff on the Risk, Standards, and Spec axes.'
-```
+Since 2026-09-14 OpenRouter is called through **OpenCode**, with Maestri
+orchestrating the seats. See
+[ADR 0024](docs/adr/0024-retire-junie-openrouter-launcher-for-opencode.md).
 
-That example uses `-Tier deep`, matching `route-map.json`'s `/code-review`
-entry. `/ship-review` routes to `-Tier balanced` instead:
-
-```powershell
-pwsh ./scripts/local/Invoke-OpenRouterTask.ps1 -Tier balanced -Task 'Ship-review the current diff.'
-```
-
-Junie's `--model` accepts only built-in aliases or `custom:<profile-id>`; raw
-OpenRouter ids are rejected client-side. The launcher therefore maintains a
-custom profile per model under `~/.junie/models/openrouter-<model>.json` and
-invokes Junie with `--model custom:<derived-name>`. The profile holds an
-environment reference (`${OPENROUTER_API_KEY}`), never the key itself.
-The task text is piped to Junie as JSON on stdin (`--input-format=json`) —
-both to keep it off the command line and because Junie's `readPipedInput`
-path crashes with `ERROR_INVALID_FUNCTION` ("Função incorreta") on Windows
-when stdin is redirected without piped input. Still, do not put secrets in
-`-Task`.
-
-`fast`, `balanced`, and `deep` map to Junie's `low`, `medium`, and `high`
-effort respectively, and each tier now resolves to its own default model
-rather than all three sharing GLM 5.2. Prices below were verified live
-against OpenRouter on 2026-08-25:
-
-| Tier | Junie effort | Default model | Price per 1M in/out |
-| --- | --- | --- | --- |
-| fast | low | `deepseek/deepseek-v4-flash` | $0.077 / $0.154 |
-| balanced | medium | `deepseek/deepseek-v4-pro` | $0.556 / $1.112 |
-| deep | high | `z-ai/glm-5.2` | $1.190 / $3.740 |
-
-`-Model` still overrides the tier default for a single run:
-
-```powershell
-pwsh ./scripts/local/Invoke-OpenRouterTask.ps1 -Tier balanced -Model qwen/qwen3-coder -Task 'Review this diff for regressions.'
-```
-
-`deep` stays on GLM 5.2, so the existing `/code-review` route is unchanged.
-Escalate from the cheap `fast` lane to `deep`, or off OpenRouter entirely to a
-flat-rate host, when the work needs judgment rather than mechanical edits.
-
-The generated profile now carries `extraBody.provider.sort = "price"` so
-OpenRouter picks the cheapest endpoint for the slug. `provider.max_price` is
-not set as a default: it fails closed with an HTTP 404 when the cap is below
-every endpoint's price.
-
-Run the documented dry-run test without spending credits:
-
-```powershell
-pwsh ./scripts/local/Test-OpenRouterTask.ps1
-```
+Configuration details to be documented when the operator confirms the current
+OpenCode setup.
