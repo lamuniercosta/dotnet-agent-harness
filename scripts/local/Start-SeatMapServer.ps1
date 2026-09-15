@@ -4,7 +4,7 @@
 .DESCRIPTION
     Serves artifacts/seat-map-selector.html and applies rung selections:
     writes activeRung on seat-map.json (same contract as Sync-SeatMap.ps1),
-    rewrites role chains (head -> then -> floor), updates canvas notes, and
+    rewrites role chains (array order, one terminal (FLOOR). marker), updates canvas notes, and
     optionally runs `maestri recruit --replace`. POST endpoints require the
     per-session token printed at startup. CORS is restricted to localhost.
     Writes are validated against the same charter invariants as Test-SeatMap.
@@ -49,6 +49,13 @@ if (-not $resolvedMap.Ok) {
 }
 if (-not (Test-Path -LiteralPath $seatMapPath)) {
     Write-SeatMapMissingMessage -Path $seatMapPath
+    exit 1
+}
+
+$mapObj = Get-Content -LiteralPath $seatMapPath -Raw | ConvertFrom-Json
+$mapViolations = @(Get-SeatMapViolations -Map $mapObj)
+if ($mapViolations.Count -gt 0) {
+    $mapViolations | ForEach-Object { Write-Error $_ -ErrorAction Continue }
     exit 1
 }
 
@@ -114,33 +121,28 @@ function Apply-SeatRung {
         [string]$RungName
     )
 
-    if ($RungName -notin @('head', 'then', 'floor')) {
-        return @{ success = $false; error = "Rung '$RungName' is not head|then|floor" }
+    $map = Get-Content -LiteralPath $seatMapPath -Raw | ConvertFrom-Json
+    $preViolations = @(Get-SeatMapViolations -Map $map)
+    if ($preViolations.Count -gt 0) {
+        return @{ success = $false; error = [string]$preViolations[0]; violations = $preViolations }
     }
 
-    $map = Get-Content -LiteralPath $seatMapPath -Raw | ConvertFrom-Json
-    $target = $null
-    foreach ($s in @($map.seats)) {
-        if ($s.id -eq $SeatId -or $s.codename -eq $SeatId) {
-            $target = $s
-            break
-        }
-    }
+    $target = Find-SeatMapSeat -Map $map -Name $SeatId
     if ($null -eq $target) {
         return @{ success = $false; error = "Seat '$SeatId' not found" }
     }
-    if (-not (Test-JsonProperty -Object $target.rungs -Name $RungName)) {
+
+    $cell = Get-SeatMapRungByName -Seat $target -Name $RungName
+    if ($null -eq $cell) {
         return @{ success = $false; error = "Seat '$SeatId' has no '$RungName' rung" }
     }
 
-    $previousRung = 'head'
-    if ((Test-JsonProperty -Object $target -Name 'activeRung') -and -not [string]::IsNullOrWhiteSpace([string]$target.activeRung)) {
-        $previousRung = [string]$target.activeRung
-    }
+    $previousRung = Get-SeatMapActiveRungName -Seat $target
+    if ([string]::IsNullOrWhiteSpace($previousRung)) { $previousRung = '' }
     $previousLaunch = ''
     $previousPool = ''
-    if (Test-JsonProperty -Object $target.rungs -Name $previousRung) {
-        $prevCell = $target.rungs.$previousRung
+    $prevCell = Get-SeatMapRungByName -Seat $target -Name $previousRung
+    if ($null -ne $prevCell) {
         if (Test-JsonProperty -Object $prevCell -Name 'launch') { $previousLaunch = [string]$prevCell.launch }
         if (Test-JsonProperty -Object $prevCell -Name 'pool') { $previousPool = [string]$prevCell.pool }
     }
@@ -150,6 +152,8 @@ function Apply-SeatRung {
     if ($violations.Count -gt 0) {
         return @{ success = $false; error = 'Invariant check failed'; violations = $violations }
     }
+    $mapJson = $map | ConvertTo-Json -Depth 12
+    Save-SeatMapFile -Path $seatMapPath -Content ($mapJson + [Environment]::NewLine)
 
     $syncScript = Join-Path $PSScriptRoot 'Sync-SeatMap.ps1'
     $syncArgs = @{
@@ -165,8 +169,8 @@ function Apply-SeatRung {
     & $syncScript @syncArgs
     $syncExit = $LASTEXITCODE
     if ($syncExit -ne 0) {
-        $failLaunch = [string]$target.rungs.$RungName.launch
-        $failPool = [string]$target.rungs.$RungName.pool
+        $failLaunch = if (Test-JsonProperty -Object $cell -Name 'launch') { [string]$cell.launch } else { '' }
+        $failPool = if (Test-JsonProperty -Object $cell -Name 'pool') { [string]$cell.pool } else { '' }
         Write-SeatMapSwapLog -Seat $target.codename -Rung $RungName -Launch $failLaunch -Pool $failPool -PreviousActiveRung $previousRung -PreviousLaunch $previousLaunch -PreviousPool $previousPool -LiveSwapped $false -Detail "partialSync exit $syncExit" -WorkspaceId $workspaceIdForLog
         return @{
             success     = $false
@@ -177,9 +181,11 @@ function Apply-SeatRung {
         }
     }
 
-    $launch = [string]$target.rungs.$RungName.launch
-    $pool = [string]$target.rungs.$RungName.pool
-    $recruitCmd = "maestri recruit `"$($target.codename)`" --preset `"$($target.preset)`" --command `"$launch`" --replace `"$($target.codename)`""
+    $launch = if (Test-JsonProperty -Object $cell -Name 'launch') { [string]$cell.launch } else { '' }
+    $pool = if (Test-JsonProperty -Object $cell -Name 'pool') { [string]$cell.pool } else { '' }
+    $codeName = if (Test-JsonProperty -Object $target -Name 'codename') { [string]$target.codename } else { '' }
+    $preset = if (Test-JsonProperty -Object $target -Name 'preset') { [string]$target.preset } else { '' }
+    $recruitCmd = Get-SeatMapRecruitCommand -Codename $codeName -Preset $preset -Launch $launch
     $liveSwapped = $false
     $detail = 'map+roles+notes'
     if ($env:MAESTRI_PIPE) {
@@ -234,6 +240,13 @@ try {
         }
         elseif ($urlPath -eq '/api/seats' -and $req.HttpMethod -eq 'GET') {
             $json = Get-Content -LiteralPath $seatMapPath -Raw
+            $currentMap = $json | ConvertFrom-Json
+            $getViolations = @(Get-SeatMapViolations -Map $currentMap)
+            if ($getViolations.Count -gt 0) {
+                $errBody = @{ error = [string]$getViolations[0]; violations = $getViolations } | ConvertTo-Json -Depth 4
+                Send-HttpResponse -Context $context -Content $errBody -ContentType 'application/json' -StatusCode 400 -Origin $origin
+                continue
+            }
             Send-HttpResponse -Context $context -Content $json -ContentType 'application/json' -Origin $origin
         }
         elseif ($urlPath -eq '/api/seats/set' -and $req.HttpMethod -eq 'POST') {

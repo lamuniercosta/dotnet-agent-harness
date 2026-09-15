@@ -12,6 +12,14 @@
   command, checks a -Seat/-Rung target when given, enforces the GPT-OSS
   blocklist, and exits without executing. No billable launch.
 
+  Set SEAT_MAP_PROBE_FAKE_LAUNCH=1 to write/read back a seat-map cell without
+  a billable launch (isolated tests only). Requires an explicit -SeatMapPath;
+  the seam refuses the default discovered live map so an ambient env var cannot
+  poison workspace state. The fake write uses the same cell fields as a real
+  probe write (it does not change activeRung) and stamps metadata.fakeLaunch.
+  Evidence is the isolated-test literal `probed` with cost.source `unknown`;
+  it is not ambient probe evidence. -WhatIf still wins and does not write.
+
   OpenCode probes should not run while live OpenCode seats are active: this
   script records ambient reasoning.effort and never edits opencode.jsonc.
 
@@ -36,7 +44,7 @@
   Seat id or codename. Required with -Rung. Writes that seat-map cell.
 
 .PARAMETER Rung
-  head | then | floor. Required with -Seat.
+  Declared rung name from that seat's rungs array. Required with -Seat.
 
 .PARAMETER WhatIf
   Validate, resolve, construct; do not launch.
@@ -579,21 +587,11 @@ function Resolve-SeatCell {
         exit 1
     }
     $map = Get-Content -LiteralPath $MapPath -Raw | ConvertFrom-Json
-    $seatObj = $null
-    foreach ($candidate in @($map.seats)) {
-        $id = if (Test-JsonProperty $candidate 'id') { [string]$candidate.id } else { '' }
-        $code = if (Test-JsonProperty $candidate 'codename') { [string]$candidate.codename } else { '' }
-        $name = if (Test-JsonProperty $candidate 'name') { [string]$candidate.name } else { '' }
-        if ($id -eq $SeatName -or $code -eq $SeatName -or $name -eq $SeatName) {
-            $seatObj = $candidate
-            break
-        }
-    }
+    $seatObj = Find-SeatMapSeat -Map $map -Name $SeatName
     if ($null -eq $seatObj) {
         Write-ProbeError "Seat '$SeatName' not found in seat-map.json."
     }
-    $rungs = Get-JsonPath -Object $seatObj -Path @('rungs')
-    $cell = Get-JsonPath -Object $rungs -Path @($RungName)
+    $cell = Get-SeatMapRungByName -Seat $seatObj -Name $RungName
     if ($null -eq $cell) {
         Write-ProbeError "Seat '$SeatName' has no '$RungName' rung."
     }
@@ -861,8 +859,8 @@ $hasRung = -not [string]::IsNullOrWhiteSpace($Rung)
 if ($hasSeat -ne $hasRung) {
     Write-ProbeError '-Seat and -Rung must be passed together.'
 }
-if ($hasRung -and $Rung -notin @('head', 'then', 'floor')) {
-    Write-ProbeError "-Rung must be head, then, or floor (got '$Rung')."
+if ($hasRung -and -not (Test-SeatMapRungName -Name $Rung)) {
+    Write-ProbeError "-Rung '$Rung' is not a valid rung name (expected ^[a-z][a-z0-9-]{0,30}$)."
 }
 
 foreach ($blocked in $BlockedModels) {
@@ -886,6 +884,12 @@ if ($hasSeat) {
     }
     if (-not (Test-Path -LiteralPath $SeatMapPath)) {
         Write-SeatMapMissingMessage -Path $SeatMapPath
+        exit 1
+    }
+    $mapObj = Get-Content -LiteralPath $SeatMapPath -Raw | ConvertFrom-Json
+    $mapViolations = @(Get-SeatMapViolations -Map $mapObj)
+    if ($mapViolations.Count -gt 0) {
+        $mapViolations | ForEach-Object { Write-Error $_ -ErrorAction Continue }
         exit 1
     }
 }
@@ -940,6 +944,33 @@ if ($Test -eq 'Timeout') {
 if ($WhatIf) {
     Write-Host 'WhatIf:   validate+resolve+construct complete; launch will not execute.'
     exit 0
+}
+
+$fakeLaunch = [string]$env:SEAT_MAP_PROBE_FAKE_LAUNCH -eq '1'
+if ($fakeLaunch) {
+    if (-not $hasSeat) {
+        Write-ProbeError 'SEAT_MAP_PROBE_FAKE_LAUNCH requires -Seat and -Rung.'
+    }
+    if (-not $resolvedMap.Explicit) {
+        Write-ProbeError 'SEAT_MAP_PROBE_FAKE_LAUNCH requires an explicit -SeatMapPath; it will not write the default live map.'
+    }
+    $locked = $false
+    try {
+        Enter-SeatMapLock
+        $locked = $true
+        $cost = New-CostRecord -Source 'unknown'
+        $evidence = 'probed'
+        $metadata = [pscustomobject]@{
+            test       = $Test
+            fakeLaunch = $true
+        }
+        Write-SeatCell -Resolved $resolvedSeat -MapPath $SeatMapPath -HostName $ProbeHost -ModelName $Model -Pool $pool -Launch $launch.Command -Evidence $evidence -Cost $cost -Metadata $metadata
+        Write-Host "Wrote cell $Seat/$Rung evidence=$evidence cost.source=$($cost.source) (fake launch)"
+        exit 0
+    }
+    finally {
+        if ($locked) { Exit-SeatMapLock }
+    }
 }
 
 if ($kitWarning) {

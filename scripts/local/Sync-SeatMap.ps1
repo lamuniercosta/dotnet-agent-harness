@@ -4,12 +4,12 @@
 .DESCRIPTION
     Propagates the active rung from the live workspace seat map
     (~/.maestri/workspaces/<id>/seat-map.json) across:
-    1. Role prompts (.maestri/roles/*/role.json) — all three rungs
+    1. Role prompts (.maestri/roles/*/role.json) — ordered rung array, floor marked (FLOOR).
     2. Canvas Note 1 (harness-team-charter.md roster table)
     3. Canvas Note 2 (team-restart.md launch commands)
     4. Printed `maestri recruit --replace` commands (-GenerateCommands)
 
-    Runtime contract is `activeRung` (head|then|floor), the same field the
+    Runtime contract is `activeRung` (a declared rung name), the same field the
     portal writes. Invariant violations always exit 1 (Quill ZEN-floor
     exception matches Test-SeatMap.ps1). An explicit -SeatMapPath overrides
     workspace discovery. Path resolution is lazy (after helpers are
@@ -19,7 +19,7 @@
 .PARAMETER Seat
     Seat id or codename to update.
 .PARAMETER Rung
-    Active rung to set: head, then, floor.
+    Active rung to set: a declared rung name from that seat's rungs array.
 .PARAMETER WorkspaceId
     Maestri workspace UUID. Auto-discovered from ~/.maestri/workspaces when omitted.
 .PARAMETER SyncRoles
@@ -42,7 +42,6 @@
 param(
     [string]$SeatMapPath,
     [string]$Seat,
-    [ValidateSet('head', 'then', 'floor')]
     [string]$Rung,
     [string]$WorkspaceId,
     [switch]$SyncRoles,
@@ -103,27 +102,17 @@ $syncMisses = [System.Collections.Generic.List[string]]::new()
 
 function Write-ViolationsAndExit {
     param([object[]]$Violations)
-    if (@($Violations).Count -eq 0) { return }
-    $Violations | ForEach-Object { Write-Error $_ -ErrorAction Continue }
-    exit 1
+    Write-SeatMapViolationsAndExit -Violations $Violations
 }
 
 function Get-SeatByName {
     param($Map, [string]$Name)
-    foreach ($s in @($Map.seats)) {
-        if ($s.id -eq $Name -or $s.codename -eq $Name -or $s.name -eq $Name) {
-            return $s
-        }
-    }
-    return $null
+    return (Find-SeatMapSeat -Map $Map -Name $Name)
 }
 
 function Get-ActiveRungName {
     param($SeatObj)
-    if ((Test-JsonProperty -Object $SeatObj -Name 'activeRung') -and -not [string]::IsNullOrWhiteSpace([string]$SeatObj.activeRung)) {
-        return [string]$SeatObj.activeRung
-    }
-    return 'head'
+    return (Get-SeatMapActiveRungName -Seat $SeatObj)
 }
 
 function Save-SeatMap {
@@ -147,7 +136,7 @@ if ($Validate -or $All -or $noAction) {
     Write-Host '  [OK] At most 1 AGY-G head'
     Write-Host '  [OK] At least 1 Gemini API head'
     Write-Host '  [OK] Zen floor = 0 (Quill excepted)'
-    Write-Host '  [OK] 3 distinct pools per seat'
+    Write-Host '  [OK] Distinct pools across all declared rungs'
     if ($Validate -and -not $All -and -not $Seat -and -not $SyncRoles -and -not $SyncNotes -and -not $Verify -and -not $GenerateCommands) {
         exit 0
     }
@@ -167,6 +156,9 @@ if ($Seat -and $Rung) {
     if ($null -eq $target) {
         throw "Seat '$Seat' not found in seat map."
     }
+    if ($null -eq (Get-SeatMapRungByName -Seat $target -Name $Rung)) {
+        throw "Seat '$Seat' has no declared rung '$Rung'."
+    }
     $target.activeRung = $Rung
     $after = @(Get-SeatMapViolations -Map $seatMap)
     Write-ViolationsAndExit -Violations $after
@@ -178,8 +170,11 @@ if ($GenerateCommands -or $All) {
     Write-Host "`n=== Maestri Replacement Commands (maestri recruit --replace) ===" -ForegroundColor Cyan
     foreach ($s in @($seatMap.seats)) {
         $activeKey = Get-ActiveRungName -SeatObj $s
-        $activeCell = $s.rungs.$activeKey
-        Write-Host "maestri recruit `"$($s.codename)`" --preset `"$($s.preset)`" --command `"$($activeCell.launch)`" --replace `"$($s.codename)`""
+        $activeCell = Get-SeatMapRungByName -Seat $s -Name $activeKey
+        $codeName = if (Test-JsonProperty -Object $s -Name 'codename') { [string]$s.codename } else { '' }
+        $preset = if (Test-JsonProperty -Object $s -Name 'preset') { [string]$s.preset } else { '' }
+        $launch = if ($null -ne $activeCell -and (Test-JsonProperty -Object $activeCell -Name 'launch')) { [string]$activeCell.launch } else { '' }
+        Write-Host (Get-SeatMapRecruitCommand -Codename $codeName -Preset $preset -Launch $launch)
     }
 }
 
@@ -235,7 +230,7 @@ if ($SyncNotes -or $All) {
             )
             foreach ($s in @($seatMap.seats)) {
                 $activeKey = Get-ActiveRungName -SeatObj $s
-                $activeCell = $s.rungs.$activeKey
+                $activeCell = Get-SeatMapRungByName -Seat $s -Name $activeKey
                 $rosterTable += "| $($s.name) | $($s.codename) | $($activeCell.launch) | $($activeCell.pool) |"
             }
             $newRoster = ($rosterTable -join "`n")
@@ -262,7 +257,7 @@ if ($SyncNotes -or $All) {
             )
             foreach ($s in @($seatMap.seats)) {
                 $activeKey = Get-ActiveRungName -SeatObj $s
-                $activeCell = $s.rungs.$activeKey
+                $activeCell = Get-SeatMapRungByName -Seat $s -Name $activeKey
                 $launchTable += "| $($s.codename) | ``$($activeCell.launch)`` |"
             }
             $newLaunch = ($launchTable -join "`n")
@@ -298,7 +293,7 @@ if ($Verify -or $All) {
         $driftCount = 0
         foreach ($s in @($seatMap.seats)) {
             $activeKey = Get-ActiveRungName -SeatObj $s
-            $activeCell = $s.rungs.$activeKey
+            $activeCell = Get-SeatMapRungByName -Seat $s -Name $activeKey
             $t = @(
                 $terminals | Where-Object {
                     (Test-JsonProperty -Object $_ -Name 'assignedRoleId') -and $_.assignedRoleId -eq $s.roleId
