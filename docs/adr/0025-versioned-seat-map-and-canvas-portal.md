@@ -31,12 +31,17 @@ Verifier ran a model outside its chain because a restart note was stale.
 
 The live seat map at `~/.maestri/workspaces/<workspaceId>/seat-map.json` is
 keyed by seat, not by command. `scripts/local/seat-map.example.json` is the
-schema, the invariants block, and the CI contract. Each seat
-carries a set of rungs (`head`, `then`, `floor`) — each a complete launch
-specification:
+schema, the invariants block, and the CI contract. `schemaVersion` is 2.
+Each seat carries an ordered `rungs` array (best first, at least four
+entries). Exactly one rung has `role: "head"` and is the first element;
+exactly one has `role: "floor"` and is the last. `activeRung` stores a
+declared rung `name`. Lookup is by that name, never by PowerShell object
+member names. Each rung is a complete launch specification:
 
 ```json
 {
+  "name": "head",
+  "role": "head",
   "launch": "claude --model claude-opus-4-6 --effort high --permission-mode auto",
   "pool": "CLAUDE",
   "tier": 3,
@@ -45,6 +50,15 @@ specification:
   "model": "claude-opus-4-6"
 }
 ```
+
+Rung names match `^[a-z][a-z0-9-]{0,30}$` and are unique per seat. Optional
+fields are `tier`, `evidenceDate`, `cost`, and `role` (`role` is required
+only on the head and floor rungs). Model-chain rendering walks array order
+and ends with exactly one terminal `(FLOOR).` marker on the floor rung.
+
+`schemaVersion` 1 fixed-object maps (`rungs.head` / `rungs.then` /
+`rungs.floor`) fail closed with a diagnostic that names schemaVersion 2
+and the migration requirement. DEV-235 does not migrate in place.
 
 The `tier` field (1–4) records marginal cost:
 
@@ -70,9 +84,12 @@ and is not a CI artefact:
 - At most 1 AGY-G-pool head.
 - At least 1 Gemini-API-pool head.
 - ZEN is never a floor pool (Quill is the documented exception).
-- Every seat's three rungs use distinct pools.
+- When `distinctPoolsPerSeat` is true, every declared rung in a seat has a
+  distinct pool.
 - Every OpenCode launch line contains `-m` or `--model` (the shared-config trap).
 - Tier values, when present, are integers 1–4.
+- Rung arrays are ordered, length ≥ 4, with role-backed head first and floor last.
+- `activeRung` names a declared rung; unsafe or duplicate names are rejected.
 
 This gate runs in `lint-harness.yml` on both Windows and Ubuntu. It replaces the
 `Test-RouteMap.ps1` gate.
@@ -124,7 +141,8 @@ The log is untracked and machine-local.
 
 ### The floor is the cheapest capable model in each seat's pool
 
-Each seat's `floor` rung is the lowest-tier model that has passed that seat's
+Each seat's floor rung (`role: "floor"`, last in array order) is the
+lowest-tier model that has passed that seat's
 evidence bar (`measured` or `cleared`). This is a structural property of the data
 today — the floor rung always has the lowest tier value in each seat — but
 **runtime floor anchoring** (logic that automatically re-selects the floor
@@ -165,15 +183,19 @@ the CI gate — would need to be taught that the seat map supersedes it for any
 seat-based work, and the two would diverge within a week. One source of truth
 or none.
 
-**Model the seat map as an extensible array of rungs instead of a fixed
-head/then/floor object.** The ticket asks for ≥4 candidate options per seat.
-An array schema would accommodate that directly. But the current charter defines
-exactly three rungs with distinct semantics (head is the target, then is the
-first fallback, floor is the cheapest capable), and `Test-SeatMap.ps1` validates
-all three by name. An array loses named semantics and requires index-based
-reasoning about which rung is which. The fixed object is extended to ≥4 when the
-charter defines the semantics of a fourth rung, not before. This is a data +
-schema change, not a data-only task (correcting the prior plan's claim).
+**Keep a fixed head/then/floor object and grow it with extra named
+properties.** The charter now requires ≥4 candidates per seat. Extra named
+properties still hard-code rung identity in every consumer (`ValidateSet`,
+portal `RUNGS`, `$rungs.head`) and cannot express an ordered chain without a
+parallel name list. DEV-235 accepts the ordered array with explicit
+`role: "head"|"floor"` so head/floor stay role-backed (not position-only,
+name-only, or regex-only) while additional rungs are just more array
+elements.
+
+**Migrate schemaVersion 1 maps in place, or silently normalize object
+rungs into arrays.** A guessed conversion would drop or rename cells. v1
+maps fail closed with an exact diagnostic naming schemaVersion 2 and the
+migration requirement; operators rewrite the file.
 
 **Run the portal on a non-localhost interface for remote team access.** The
 portal executes `maestri recruit --replace` on the host machine. Exposing that
@@ -203,10 +225,12 @@ requests from the developer's own browser, not network-level attackers. The
 per-session token is sufficient for that threat and avoids the complexity of
 certificate management for a developer tool.
 
-`Test-SeatMap.ps1` hardcodes the three rung names. Adding a fourth rung requires
-editing the test, which means the test is a gate against accidental schema
-expansion — a feature, not a bug, until the charter defines what a fourth rung
-means.
+Shared helpers in `_seat-map.ps1` own enumeration, name lookup, head/floor
+role detection, all-rung distinct-pool counting, schemaVersion diagnostics,
+and model-chain rendering. Consumers that still assume exactly `head` /
+`then` / `floor` are defects except for the tested schemaVersion 1
+fail-closed diagnostic. Portal HTML escapes rung names and launch text;
+existing localhost CORS and session-token checks stay the trust boundary.
 
 ## Deferred follow-ups
 
@@ -219,9 +243,6 @@ PR body.
 - **Workspace verification** — `Sync-SeatMap.ps1 -Verify` drift check against
   `workspace.json`. Included as a switch in the shipped script but not in the
   merge bar (machine-local state).
-- **Candidate pool ≥4 expansion** — requires schema change from fixed object to
-  named-rung array (or additional named properties), plus test and synchronizer
-  updates.
 - **Runtime floor anchoring** — logic that re-anchors the floor to the
   lowest-tier capable model after a swap or pool change. The tier field makes
   this mechanically checkable; the logic is deferred until test fixtures exist.

@@ -72,7 +72,7 @@ mode the team exists to prevent.
 
 ## Which host and model to run a command on
 
-The live seat map is Maestri workspace state at `~/.maestri/workspaces/<workspaceId>/seat-map.json` (resolved lazily from the active workspace; an explicit `-SeatMapPath` still overrides). It defines host and tier allocation for team seats, ordered best first (`head`, `then`, `floor`), with a **floor** marking the lowest option that still does the work without losing quality. `scripts/local/seat-map.example.json` is the schema, the invariants block, and the CI contract.
+The live seat map is Maestri workspace state at `~/.maestri/workspaces/<workspaceId>/seat-map.json` (resolved lazily from the active workspace; an explicit `-SeatMapPath` still overrides). It defines host and tier allocation for team seats via an ordered extensible `rungs` array (best first, head role first, floor role last), with a **floor** marking the lowest option that still does the work without losing quality. `scripts/local/seat-map.example.json` is the schema, the invariants block, and the CI contract.
 
 ```powershell
 pwsh ./scripts/local/Sync-SeatMap.ps1 -Validate

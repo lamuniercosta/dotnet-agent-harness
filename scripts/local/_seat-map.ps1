@@ -5,6 +5,204 @@
 
 . (Join-Path $PSScriptRoot '_json-property.ps1')
 
+function Get-SeatMapRequiredSchemaVersion {
+    return 2
+}
+
+function Get-SeatMapV1FailClosedDiagnostic {
+    return 'Seat map schemaVersion 1 is not supported; schemaVersion 2 is required. In-place migration is not implemented.'
+}
+
+function Format-SeatMapSchemaVersionGot {
+    param($Got)
+    if ($null -eq $Got) { return '' }
+    $invariant = [System.Globalization.CultureInfo]::InvariantCulture
+    if ($Got -is [double] -or $Got -is [float] -or $Got -is [single] -or $Got -is [decimal]) {
+        return ([decimal]$Got).ToString($invariant)
+    }
+    return [string]$Got
+}
+
+function Test-SeatMapIsExactSchemaVersion2 {
+    param($Raw)
+    if ($null -eq $Raw) { return $false }
+    # Integral CLR integer types only. Decimal/double 2.5 must not truncate to 2;
+    # JSON 2.0 is also rejected so schemaVersion is an integer token, not a float.
+    if ($Raw -is [byte] -or $Raw -is [sbyte] -or
+        $Raw -is [int16] -or $Raw -is [uint16] -or
+        $Raw -is [int] -or $Raw -is [uint32] -or
+        $Raw -is [long] -or $Raw -is [uint64] -or
+        $Raw -is [int64]) {
+        return ([int64]$Raw -eq [int64]2)
+    }
+    return $false
+}
+
+function Test-SeatMapIsSchemaVersion1 {
+    param($Raw)
+    if ($null -eq $Raw) { return $false }
+    if ($Raw -is [byte] -or $Raw -is [sbyte] -or
+        $Raw -is [int16] -or $Raw -is [uint16] -or
+        $Raw -is [int] -or $Raw -is [uint32] -or
+        $Raw -is [long] -or $Raw -is [uint64] -or
+        $Raw -is [int64]) {
+        return ([int64]$Raw -eq [int64]1)
+    }
+    return ([string]$Raw -eq '1')
+}
+
+function Get-SeatMapSchemaVersionDiagnostic {
+    param($Got)
+    if (Test-SeatMapIsSchemaVersion1 -Raw $Got) {
+        return Get-SeatMapV1FailClosedDiagnostic
+    }
+    $shown = Format-SeatMapSchemaVersionGot -Got $Got
+    return "Seat map schemaVersion must be the integer 2 (got $shown); schemaVersion 1 maps fail closed and in-place migration is not implemented."
+}
+
+function ConvertTo-SeatMapQuotedArgument {
+    param(
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Text
+    )
+    if ($null -eq $Text) { $Text = '' }
+    return "'" + $Text.Replace("'", "''") + "'"
+}
+
+function Get-SeatMapRecruitCommand {
+    param(
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Codename,
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Preset,
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Launch
+    )
+    $c = ConvertTo-SeatMapQuotedArgument -Text $Codename
+    $p = ConvertTo-SeatMapQuotedArgument -Text $Preset
+    $l = ConvertTo-SeatMapQuotedArgument -Text $Launch
+    return "maestri recruit $c --preset $p --command $l --replace $c"
+}
+
+function Write-SeatMapViolationsAndExit {
+    param([object[]]$Violations)
+    if (@($Violations).Count -eq 0) { return }
+    foreach ($v in @($Violations)) {
+        [Console]::Error.WriteLine([string]$v)
+    }
+    exit 1
+}
+
+function Test-SeatMapRungName {
+    param(
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Name
+    )
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $false }
+    return [bool]($Name -cmatch '^[a-z][a-z0-9-]{0,30}$')
+}
+
+function Escape-SeatMapHtml {
+    param(
+        [AllowNull()]
+        [AllowEmptyString()]
+        [string]$Text
+    )
+    if ($null -eq $Text) { return '' }
+    return [System.Net.WebUtility]::HtmlEncode($Text)
+}
+
+function Get-SeatMapRungList {
+    param($Seat)
+    if ($null -eq $Seat) { return $null }
+    if (-not (Test-JsonProperty -Object $Seat -Name 'rungs')) { return $null }
+    $rungs = $Seat.rungs
+    if ($null -eq $rungs) { return $null }
+
+    if ($rungs -is [string]) { return $null }
+
+    if ($rungs -is [System.Collections.IList] -or $rungs -is [System.Array]) {
+        return @($rungs)
+    }
+
+    # ConvertFrom-Json unwrap of a one-element array: a single rung object with name.
+    if (($rungs -is [System.Management.Automation.PSCustomObject]) -and
+        (Test-JsonProperty -Object $rungs -Name 'name') -and
+        -not (Test-JsonProperty -Object $rungs -Name 'head')) {
+        return @($rungs)
+    }
+
+    return $null
+}
+
+function Get-SeatMapRungByName {
+    param(
+        $Seat,
+        [string]$Name
+    )
+    if ([string]::IsNullOrWhiteSpace($Name)) { return $null }
+    $list = Get-SeatMapRungList -Seat $Seat
+    if ($null -eq $list) { return $null }
+    foreach ($cell in $list) {
+        if ($null -eq $cell) { continue }
+        $n = if (Test-JsonProperty -Object $cell -Name 'name') { [string]$cell.name } else { '' }
+        if ($n -ceq $Name) { return $cell }
+    }
+    return $null
+}
+
+function Get-SeatMapRungByRole {
+    param(
+        $Seat,
+        [string]$Role
+    )
+    if ([string]::IsNullOrWhiteSpace($Role)) { return $null }
+    $list = Get-SeatMapRungList -Seat $Seat
+    if ($null -eq $list) { return $null }
+    foreach ($cell in $list) {
+        if ($null -eq $cell) { continue }
+        if ((Test-JsonProperty -Object $cell -Name 'role') -and ([string]$cell.role -ceq $Role)) {
+            return $cell
+        }
+    }
+    return $null
+}
+
+function Get-SeatMapActiveRungName {
+    param($Seat)
+    if ((Test-JsonProperty -Object $Seat -Name 'activeRung') -and -not [string]::IsNullOrWhiteSpace([string]$Seat.activeRung)) {
+        return [string]$Seat.activeRung
+    }
+    $head = Get-SeatMapRungByRole -Seat $Seat -Role 'head'
+    if ($null -ne $head -and (Test-JsonProperty -Object $head -Name 'name')) {
+        return [string]$head.name
+    }
+    return ''
+}
+
+function Find-SeatMapSeat {
+    param(
+        $Map,
+        [string]$Name
+    )
+    if ($null -eq $Map -or [string]::IsNullOrWhiteSpace($Name)) { return $null }
+    if (-not (Test-JsonProperty -Object $Map -Name 'seats')) { return $null }
+    foreach ($s in @($Map.seats)) {
+        $id = if (Test-JsonProperty -Object $s -Name 'id') { [string]$s.id } else { '' }
+        $code = if (Test-JsonProperty -Object $s -Name 'codename') { [string]$s.codename } else { '' }
+        $seatName = if (Test-JsonProperty -Object $s -Name 'name') { [string]$s.name } else { '' }
+        if ($id -eq $Name -or $code -eq $Name -or $seatName -eq $Name) {
+            return $s
+        }
+    }
+    return $null
+}
+
 function Get-SeatMapViolations {
     param(
         [Parameter(Mandatory = $true)]
@@ -15,7 +213,7 @@ function Get-SeatMapViolations {
     $validEvidence = @('measured', 'cleared', 'probed', 'unmeasured')
     $validPools = @('CLAUDE', 'CODEX', 'CURSOR', 'AGY-G', 'AGY-C', 'JETBRAINS', 'GEMINI', 'OPENROUTER', 'ZEN')
     $validCostSources = @('actual', 'estimated', 'unknown')
-    $rungNames = @('head', 'then', 'floor')
+    $validRoles = @('head', 'floor')
 
     $invariants = $null
     if (Test-JsonProperty -Object $Map -Name 'invariants') {
@@ -43,6 +241,13 @@ function Get-SeatMapViolations {
 
     if (-not (Test-JsonProperty -Object $Map -Name 'schemaVersion') -or $null -eq $Map.schemaVersion -or [string]$Map.schemaVersion -eq '') {
         $failures.Add('Seat map is missing required schemaVersion.')
+        return @($failures)
+    }
+
+    $schemaRaw = $Map.schemaVersion
+    if (-not (Test-SeatMapIsExactSchemaVersion2 -Raw $schemaRaw)) {
+        $failures.Add((Get-SeatMapSchemaVersionDiagnostic -Got $schemaRaw))
+        return @($failures)
     }
 
     $seats = @()
@@ -81,16 +286,59 @@ function Get-SeatMapViolations {
             $failures.Add("Seat '$label' is missing required name.")
         }
 
-        $rungs = $null
-        if (Test-JsonProperty -Object $seat -Name 'rungs') { $rungs = $seat.rungs }
+        $list = Get-SeatMapRungList -Seat $seat
+        if ($null -eq $list) {
+            $failures.Add("Seat '$label' rungs must be a JSON array.")
+            continue
+        }
+        if ($list.Count -eq 0) {
+            $failures.Add("Seat '$label' rungs array is empty.")
+            continue
+        }
+        if ($list.Count -lt 4) {
+            $failures.Add("Seat '$label' rungs array is short (found $($list.Count), required at least 4).")
+        }
 
-        $poolAt = @{}
-        foreach ($r in $rungNames) {
-            $cell = $null
-            if (Test-JsonProperty -Object $rungs -Name $r) { $cell = $rungs.$r }
+        $headIndexes = [System.Collections.Generic.List[int]]::new()
+        $floorIndexes = [System.Collections.Generic.List[int]]::new()
+        $seenNames = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        $namedPools = [System.Collections.Generic.List[string]]::new()
+
+        for ($i = 0; $i -lt $list.Count; $i++) {
+            $cell = $list[$i]
+            $r = ''
+            if ($null -ne $cell -and (Test-JsonProperty -Object $cell -Name 'name')) {
+                $r = [string]$cell.name
+            }
+            if ([string]::IsNullOrWhiteSpace($r)) {
+                $failures.Add("Seat '$label' rung index $i is missing name.")
+                $r = "index-$i"
+            }
+            else {
+                if (-not (Test-SeatMapRungName -Name $r)) {
+                    $failures.Add("Seat '$label' rung name '$r' is unsafe (expected ^[a-z][a-z0-9-]{0,30}$).")
+                }
+                if (-not $seenNames.Add($r)) {
+                    $failures.Add("Seat '$label' has duplicate rung name '$r'.")
+                }
+            }
+
             if ($null -eq $cell) {
-                $failures.Add("Seat '$label' is missing '$r' rung.")
+                $failures.Add("Seat '$label' rung '$r' is null.")
                 continue
+            }
+
+            if ((Test-JsonProperty -Object $cell -Name 'role') -and -not [string]::IsNullOrWhiteSpace([string]$cell.role)) {
+                $role = [string]$cell.role
+                if ($role -ceq 'head') {
+                    $headIndexes.Add($i)
+                }
+                elseif ($role -ceq 'floor') {
+                    $floorIndexes.Add($i)
+                }
+                elseif ($validRoles -cnotcontains $role) {
+                    $failures.Add("Seat '$label' rung '$r' has unknown role '$role' (expected head|floor).")
+                }
             }
 
             if (-not (Test-JsonProperty -Object $cell -Name 'launch') -or [string]::IsNullOrWhiteSpace([string]$cell.launch)) {
@@ -103,8 +351,9 @@ function Get-SeatMapViolations {
                 $failures.Add("Seat '$label' rung '$r' missing pool.")
             } elseif ($validPools -notcontains $pool) {
                 $failures.Add("Seat '$label' rung '$r' has unknown pool '$pool'.")
+            } else {
+                $namedPools.Add($pool)
             }
-            $poolAt[$r] = $pool
 
             if ((Test-JsonProperty -Object $cell -Name 'evidence') -and -not [string]::IsNullOrWhiteSpace([string]$cell.evidence)) {
                 $evidence = [string]$cell.evidence
@@ -173,19 +422,51 @@ function Get-SeatMapViolations {
             }
         }
 
-        if ($poolAt['head'] -eq 'CURSOR') { $cursorHeads++ }
-        if ($poolAt['head'] -eq 'AGY-G') { $agyGHeads++ }
-        if ($poolAt['head'] -eq 'GEMINI') { $geminiHeads++ }
+        if ($headIndexes.Count -eq 0) {
+            $failures.Add("Seat '$label' is missing a rung with role 'head'.")
+        } elseif ($headIndexes.Count -gt 1) {
+            $failures.Add("Seat '$label' has duplicated role 'head'.")
+        } elseif ($headIndexes[0] -ne 0) {
+            $failures.Add("Seat '$label' role 'head' must be the first rung.")
+        }
 
-        if ($disallowedFloorPools -contains $poolAt['floor'] -and $zenFloorExceptions -notcontains $codename -and $zenFloorExceptions -notcontains $seatId) {
-            $failures.Add("Seat '$label' has $($poolAt['floor']) on floor.")
+        if ($floorIndexes.Count -eq 0) {
+            $failures.Add("Seat '$label' is missing a rung with role 'floor'.")
+        } elseif ($floorIndexes.Count -gt 1) {
+            $failures.Add("Seat '$label' has duplicated role 'floor'.")
+        } elseif ($floorIndexes[0] -ne ($list.Count - 1)) {
+            $failures.Add("Seat '$label' role 'floor' must be the last rung.")
+        }
+
+        if (-not (Test-JsonProperty -Object $seat -Name 'activeRung') -or [string]::IsNullOrWhiteSpace([string]$seat.activeRung)) {
+            $failures.Add("Seat '$label' is missing required activeRung.")
+        }
+        else {
+            $active = [string]$seat.activeRung
+            if ($null -eq (Get-SeatMapRungByName -Seat $seat -Name $active)) {
+                $failures.Add("Seat '$label' activeRung '$active' does not match a declared rung name.")
+            }
+        }
+
+        $headCell = Get-SeatMapRungByRole -Seat $seat -Role 'head'
+        $floorCell = Get-SeatMapRungByRole -Seat $seat -Role 'floor'
+        $headPool = $null
+        $floorPool = $null
+        if ($null -ne $headCell -and (Test-JsonProperty -Object $headCell -Name 'pool')) { $headPool = [string]$headCell.pool }
+        if ($null -ne $floorCell -and (Test-JsonProperty -Object $floorCell -Name 'pool')) { $floorPool = [string]$floorCell.pool }
+
+        if ($headPool -eq 'CURSOR') { $cursorHeads++ }
+        if ($headPool -eq 'AGY-G') { $agyGHeads++ }
+        if ($headPool -eq 'GEMINI') { $geminiHeads++ }
+
+        if ($disallowedFloorPools -contains $floorPool -and $zenFloorExceptions -notcontains $codename -and $zenFloorExceptions -notcontains $seatId) {
+            $failures.Add("Seat '$label' has $floorPool on floor.")
         }
 
         if ($distinctPoolsPerSeat) {
-            $pools = @($poolAt['head'], $poolAt['then'], $poolAt['floor'])
-            $unique = @($pools | Where-Object { $_ } | Select-Object -Unique)
-            if ($unique.Count -lt 3) {
-                $failures.Add("Seat '$label' does not have 3 distinct pools (found: $($pools -join ', ')).")
+            $unique = @($namedPools | Select-Object -Unique)
+            if ($unique.Count -lt $namedPools.Count) {
+                $failures.Add("Seat '$label' does not have distinct pools across all declared rungs (found: $($namedPools -join ', ')).")
             }
         }
     }
@@ -414,10 +695,19 @@ function Get-ModelChainLine {
         [Parameter(Mandatory = $true)]
         $Seat
     )
-    $head = [string]$Seat.rungs.head.launch
-    $then = [string]$Seat.rungs.then.launch
-    $floor = [string]$Seat.rungs.floor.launch
-    return "Model chain (best first): $head -> $then -> $floor (FLOOR)."
+    $list = Get-SeatMapRungList -Seat $Seat
+    if ($null -eq $list -or $list.Count -eq 0) {
+        return 'Model chain (best first): (FLOOR).'
+    }
+    $parts = foreach ($cell in $list) {
+        if ($null -ne $cell -and (Test-JsonProperty -Object $cell -Name 'launch')) {
+            [string]$cell.launch
+        }
+        else {
+            ''
+        }
+    }
+    return "Model chain (best first): $($parts -join ' -> ') (FLOOR)."
 }
 
 function Write-SeatMapSwapLog {

@@ -22,6 +22,7 @@ $probeScript = Join-Path $PSScriptRoot 'Test-ModelProbe.ps1'
 $serverScript = Join-Path $PSScriptRoot 'Start-SeatMapServer.ps1'
 $examplePath = Join-Path $PSScriptRoot 'seat-map.example.json'
 $helperPath = Join-Path $PSScriptRoot '_seat-map.ps1'
+. $helperPath
 
 $checks = 0
 $failures = 0
@@ -366,6 +367,151 @@ try {
     Assert-True 'swap-log: file created under isolated HOME' (Test-Path -LiteralPath $swapLogPath) $swapLogPath 'missing'
     $swapLine = (Get-Content -LiteralPath $swapLogPath -Raw)
     Assert-True 'swap-log: entry contains workspaceId' (Test-TextContains $swapLine $wsId) $wsId $swapLine
+
+    # --- DEV-235 B5 & R1 A4: non-WhatIf no-billing probe write & field readback ---
+    [void](Install-RoleFixtures -RepoRoot $repoRoot -ExamplePath $examplePath)
+    $probeFakeWriter = Join-Path $isoHome 'probe-fake-write.ps1'
+    $probeScriptLiteral = $probeScript.Replace("'", "''")
+    $livePathLiteral = $livePath.Replace("'", "''")
+    $probeFakeBody = @(
+        "`$env:SEAT_MAP_PROBE_FAKE_LAUNCH = '1'"
+        "& '$probeScriptLiteral' -Host 'gemini' -Model 'gemini-3.5-flash-lite' -Test 'Verdict' -Seat 'conductor' -Rung 'alt' -SeatMapPath '$livePathLiteral'"
+    ) -join [Environment]::NewLine
+    [System.IO.File]::WriteAllText($probeFakeWriter, $probeFakeBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $probeFakeRes = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeFakeWriter
+    Assert-True 'non-WhatIf probe fake write: exit 0' ($probeFakeRes.ExitCode -eq 0) '0' ("exit=$($probeFakeRes.ExitCode)`n$($probeFakeRes.StdOut)`n$($probeFakeRes.StdErr)")
+    $writtenMap = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
+    $condSeat = @($writtenMap.seats | Where-Object { $_.id -eq 'conductor' })[0]
+    Assert-True 'non-WhatIf probe fake write: activeRung unchanged (real write contract)' ($condSeat.activeRung -eq 'head') 'head' ([string]$condSeat.activeRung)
+    $altCell = Get-SeatMapRungByName -Seat $condSeat -Name 'alt'
+    Assert-True 'fake probe cell readback: host' ([string]$altCell.host -eq 'gemini') 'gemini' ([string]$altCell.host)
+    Assert-True 'fake probe cell readback: model' ([string]$altCell.model -eq 'gemini-3.5-flash-lite') 'gemini-3.5-flash-lite' ([string]$altCell.model)
+    Assert-True 'fake probe cell readback: pool' ([string]$altCell.pool -eq 'GEMINI') 'GEMINI' ([string]$altCell.pool)
+    Assert-True 'fake probe cell readback: evidence' ([string]$altCell.evidence -eq 'probed') 'probed' ([string]$altCell.evidence)
+    Assert-True 'fake probe cell readback: cost.source' ([string]$altCell.cost.source -eq 'unknown') 'unknown' ([string]$altCell.cost.source)
+
+    # --- R1 A1 & A2: Consumer fail-closed tests (schemaVersion 1 & 2.5) ---
+    $v1MapPath = Join-Path $isoHome 'v1-seat-map.json'
+    $v1MapContent = @'
+{
+    "schemaVersion": 1,
+    "seats": [
+        {
+            "id": "conductor",
+            "name": "Conductor",
+            "codename": "Dudamel",
+            "roleId": "0FD7CF98-CCD8-44DF-B78A-957262622A27",
+            "activeRung": "head",
+            "preset": "opencode",
+            "head": { "launch": "codex", "pool": "CODEX", "evidence": "unmeasured", "host": "codex", "model": "gpt-5.6-luna", "tier": 3 },
+            "then": { "launch": "gemini", "pool": "GEMINI", "evidence": "cleared", "host": "gemini", "model": "gemini-3.5-flash-lite", "tier": 4 },
+            "floor": { "launch": "agent", "pool": "CURSOR", "evidence": "unmeasured", "host": "cursor", "model": "composer-2.5", "tier": 3 }
+        }
+    ]
+}
+'@
+    [System.IO.File]::WriteAllText($v1MapPath, $v1MapContent, [System.Text.UTF8Encoding]::new($false))
+    $v1Diagnostic = "Seat map schemaVersion 1 is not supported; schemaVersion 2 is required. In-place migration is not implemented."
+
+    $v1Server = Invoke-IsolatedPwsh -HomeDir $isoHome -File $serverScript -ArgumentList @('-SeatMapPath', $v1MapPath, '-Port', '8790') -TimeoutMs 15000
+    Assert-True 'R1 A1 Start-SeatMapServer v1: exit 1' ($v1Server.ExitCode -eq 1) '1' ([string]$v1Server.ExitCode)
+    Assert-True 'R1 A1 Start-SeatMapServer v1: exact diagnostic' (Test-TextContains "$($v1Server.StdOut)`n$($v1Server.StdErr)" $v1Diagnostic) $v1Diagnostic "$($v1Server.StdOut)`n$($v1Server.StdErr)"
+
+    $v1Probe = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList @('-Host', 'gemini', '-Model', 'gemini-3.5-flash-lite', '-Test', 'Verdict', '-Seat', 'conductor', '-Rung', 'alt', '-SeatMapPath', $v1MapPath, '-WhatIf')
+    Assert-True 'R1 A1 Test-ModelProbe v1: exit 1' ($v1Probe.ExitCode -eq 1) '1' ([string]$v1Probe.ExitCode)
+    Assert-True 'R1 A1 Test-ModelProbe v1: exact diagnostic' (Test-TextContains "$($v1Probe.StdOut)`n$($v1Probe.StdErr)" $v1Diagnostic) $v1Diagnostic "$($v1Probe.StdOut)`n$($v1Probe.StdErr)"
+
+    $v25MapPath = Join-Path $isoHome 'v25-seat-map.json'
+    $v25MapContent = (Get-Content -LiteralPath $examplePath -Raw).Replace('"schemaVersion":  2,', '"schemaVersion": 2.5,')
+    [System.IO.File]::WriteAllText($v25MapPath, $v25MapContent, [System.Text.UTF8Encoding]::new($false))
+    $v25Diagnostic = "Seat map schemaVersion must be the integer 2 (got 2.5); schemaVersion 1 maps fail closed and in-place migration is not implemented."
+
+    $v25Server = Invoke-IsolatedPwsh -HomeDir $isoHome -File $serverScript -ArgumentList @('-SeatMapPath', $v25MapPath, '-Port', '8791') -TimeoutMs 15000
+    Assert-True 'R1 A2 Start-SeatMapServer v2.5: exit 1' ($v25Server.ExitCode -eq 1) '1' ([string]$v25Server.ExitCode)
+    Assert-True 'R1 A2 Start-SeatMapServer v2.5: exact diagnostic' (Test-TextContains "$($v25Server.StdOut)`n$($v25Server.StdErr)" $v25Diagnostic) $v25Diagnostic "$($v25Server.StdOut)`n$($v25Server.StdErr)"
+
+    $v25Probe = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList @('-Host', 'gemini', '-Model', 'gemini-3.5-flash-lite', '-Test', 'Verdict', '-Seat', 'conductor', '-Rung', 'alt', '-SeatMapPath', $v25MapPath, '-WhatIf')
+    Assert-True 'R1 A2 Test-ModelProbe v2.5: exit 1' ($v25Probe.ExitCode -eq 1) '1' ([string]$v25Probe.ExitCode)
+    Assert-True 'R1 A2 Test-ModelProbe v2.5: exact diagnostic' (Test-TextContains "$($v25Probe.StdOut)`n$($v25Probe.StdErr)" $v25Diagnostic) $v25Diagnostic "$($v25Probe.StdOut)`n$($v25Probe.StdErr)"
+
+    # --- R1 A3: Injected quoting fixture test ---
+    $quoteMapPath = Join-Path $isoHome 'quote-seat-map.json'
+    $quoteMapObj = Get-Content -LiteralPath $examplePath -Raw | ConvertFrom-Json
+    $quoteSeat = $quoteMapObj.seats[0]
+    $quoteSeat.id = 'quote-seat'
+    $quoteSeat.codename = 'Quote"Seat'
+    $quoteSeat.preset = 'pre`set&whoami'
+    $quoteSeat.activeRung = 'alt'
+    $quoteSeat.rungs[2].launch = 'pwsh -NoProfile -Command "Write-Output ''hi''; $x=1; Write-Output $x"'
+    $quoteMapJson = $quoteMapObj | ConvertTo-Json -Depth 12
+    [System.IO.File]::WriteAllText($quoteMapPath, $quoteMapJson, [System.Text.UTF8Encoding]::new($false))
+    $expectedRecruitCmd = Get-SeatMapRecruitCommand -Codename $quoteSeat.codename -Preset $quoteSeat.preset -Launch $quoteSeat.rungs[2].launch
+    $expectedRecruitPath = Join-Path $isoHome 'expected-recruit.txt'
+    [System.IO.File]::WriteAllText($expectedRecruitPath, $expectedRecruitCmd, [System.Text.UTF8Encoding]::new($false))
+
+    $syncQuote = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-SeatMapPath', $quoteMapPath, '-GenerateCommands')
+    Assert-True 'R1 A3 Sync-SeatMap -GenerateCommands quoting: exit 0' ($syncQuote.ExitCode -eq 0) '0' ([string]$syncQuote.ExitCode)
+    Assert-True 'R1 A3 Sync-SeatMap -GenerateCommands quoting: exact command' (Test-TextContains $syncQuote.StdOut $expectedRecruitCmd) $expectedRecruitCmd $syncQuote.StdOut
+
+    $portalQuoteScript = Join-Path $isoHome 'test-portal-quote.ps1'
+    $quoteMapPathLiteral = $quoteMapPath.Replace("'", "''")
+    $serverScriptLiteral = $serverScript.Replace("'", "''")
+    $portalQuoteScriptBody = @(
+        "`$serverProc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8792', '-SeatMapPath', '$quoteMapPathLiteral' -PassThru -RedirectStandardOutput (Join-Path '$isoHome' 'server-quote.log')"
+        "Start-Sleep -Seconds 2"
+        "try {"
+        "    `$resp = Invoke-WebRequest -Uri 'http://localhost:8792/' -UseBasicParsing"
+        "    if (`$resp.StatusCode -ne 200) { throw 'GET failed' }"
+        "    `$html = `$resp.Content"
+        "    `$tokenMatch = [regex]::Match(`$html, '<meta name=""seat-map-token"" content=""([^""]+)""')"
+        "    if (-not `$tokenMatch.Success) { throw 'Token missing' }"
+        "    `$token = `$tokenMatch.Groups[1].Value"
+        "    `$body = @{ seatId = 'quote-seat'; rung = 'alt' } | ConvertTo-Json"
+        "    `$headers = @{ 'X-Seat-Map-Token' = `$token }"
+        "    `$postResp = Invoke-WebRequest -Uri 'http://localhost:8792/api/seats/set' -Method POST -Headers `$headers -Body `$body -ContentType 'application/json' -UseBasicParsing"
+        "    if (`$postResp.StatusCode -ne 200) { throw 'POST failed' }"
+        "    `$postJson = `$postResp.Content | ConvertFrom-Json"
+        "    `$expected = [System.IO.File]::ReadAllText((Join-Path '$isoHome' 'expected-recruit.txt'))"
+        "    if (`$postJson.recruitCommand -ne `$expected) { throw ""recruitCommand mismatch: got `$(`$postJson.recruitCommand)"" }"
+        "} finally {"
+        "    Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue"
+        "}"
+    ) -join [Environment]::NewLine
+    [System.IO.File]::WriteAllText($portalQuoteScript, $portalQuoteScriptBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $portalQuoteRes = Invoke-IsolatedPwsh -HomeDir $isoHome -File $portalQuoteScript
+    Assert-True 'R1 A3 Start-SeatMapServer recruitCommand quoting: exit 0' ($portalQuoteRes.ExitCode -eq 0) '0' ("exit=$($portalQuoteRes.ExitCode)`n$($portalQuoteRes.StdOut)`n$($portalQuoteRes.StdErr)")
+
+    # --- DEV-235 B4: Portal HTTP render + POST + activeRung readback ---
+    $portalScript = Join-Path $isoHome 'test-portal.ps1'
+    $serverScriptLiteral = $serverScript.Replace("'", "''")
+    $portalScriptBody = @(
+        "`$serverProc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8789', '-SeatMapPath', '$livePathLiteral' -PassThru -RedirectStandardOutput (Join-Path '$isoHome' 'server.log')"
+        "Start-Sleep -Seconds 2"
+        "try {"
+        "    `$resp = Invoke-WebRequest -Uri 'http://localhost:8789/' -UseBasicParsing"
+        "    if (`$resp.StatusCode -ne 200) { throw 'GET failed' }"
+        "    `$html = `$resp.Content"
+        "    if (-not `$html.Contains('seat-map-token')) { throw 'HTML missing token meta' }"
+        "    `$apiResp = Invoke-WebRequest -Uri 'http://localhost:8789/api/seats' -UseBasicParsing"
+        "    if (`$apiResp.StatusCode -ne 200 -or -not `$apiResp.Content.Contains('alt')) { throw 'API seats missing alt' }"
+        "    `$tokenMatch = [regex]::Match(`$html, '<meta name=""seat-map-token"" content=""([^""]+)""')"
+        "    if (-not `$tokenMatch.Success) { throw 'Token missing' }"
+        "    `$token = `$tokenMatch.Groups[1].Value"
+        "    `$body = @{ seatId = 'conductor'; rung = 'alt' } | ConvertTo-Json"
+        "    `$headers = @{ 'X-Seat-Map-Token' = `$token }"
+        "    `$postResp = Invoke-WebRequest -Uri 'http://localhost:8789/api/seats/set' -Method POST -Headers `$headers -Body `$body -ContentType 'application/json' -UseBasicParsing"
+        "    if (`$postResp.StatusCode -ne 200) { throw 'POST failed' }"
+        "} finally {"
+        "    Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue"
+        "}"
+    ) -join [Environment]::NewLine
+    [System.IO.File]::WriteAllText($portalScript, $portalScriptBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $portalRes = Invoke-IsolatedPwsh -HomeDir $isoHome -File $portalScript
+    Assert-True 'portal HTTP render+POST: exit 0' ($portalRes.ExitCode -eq 0) '0' ("exit=$($portalRes.ExitCode)`n$($portalRes.StdOut)`n$($portalRes.StdErr)")
+    $portalReadbackMap = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
+    $portalCondSeat = @($portalReadbackMap.seats | Where-Object { $_.id -eq 'conductor' })[0]
+    Assert-True 'portal HTTP POST: activeRung readback confirmed alt' ($portalCondSeat.activeRung -eq 'alt') 'alt' ([string]$portalCondSeat.activeRung)
+
 }
 finally {
     if (Test-Path -LiteralPath $isoHome) {

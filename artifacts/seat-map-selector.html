@@ -85,7 +85,7 @@
 </head>
 <body>
   <h1>Maestri Seat Map</h1>
-  <p class="sub">Three rungs per seat (head → then → floor). Selecting a rung POSTs <code>activeRung</code> with the session token.</p>
+  <p class="sub">Ordered rungs per seat (head first, floor last). Selecting a rung POSTs <code>activeRung</code> with the session token.</p>
   <div class="stats">
     <div class="stat"><div class="label">CURSOR heads</div><div class="n" id="cCursor">–</div><div id="bCursor" class="muted"></div></div>
     <div class="stat"><div class="label">AGY-G heads</div><div class="n" id="cAgy">–</div><div id="bAgy" class="muted"></div></div>
@@ -103,7 +103,24 @@
   <main id="grid" class="grid"></main>
   <script>
     const token = document.querySelector('meta[name="seat-map-token"]').getAttribute('content');
-    const RUNGS = ['head', 'then', 'floor'];
+
+    function escapeHtml(value) {
+      return String(value ?? '').replace(/[&<>"']/g, ch => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      })[ch]);
+    }
+
+    function seatRungs(seat) {
+      return Array.isArray(seat && seat.rungs) ? seat.rungs : [];
+    }
+
+    function rungByName(seat, name) {
+      return seatRungs(seat).find(r => r && r.name === name) || {};
+    }
+
+    function rungByRole(seat, role) {
+      return seatRungs(seat).find(r => r && r.role === role) || null;
+    }
 
     function toast(msg, cls) {
       const el = document.getElementById('toast');
@@ -111,9 +128,16 @@
       el.className = cls || '';
     }
 
+    function quotePsArg(value) {
+      return "'" + String(value ?? '').replace(/'/g, "''") + "'";
+    }
+
     function recruitCommand(seat, rung) {
-      const cell = (seat.rungs || {})[rung] || {};
-      return `maestri recruit "${seat.codename}" --preset "${seat.preset || ''}" --command "${cell.launch || ''}" --replace "${seat.codename}"`;
+      const cell = rungByName(seat, rung);
+      const code = quotePsArg(seat.codename);
+      const preset = quotePsArg(seat.preset || '');
+      const launch = quotePsArg(cell.launch || '');
+      return 'maestri recruit ' + code + ' --preset ' + preset + ' --command ' + launch + ' --replace ' + code;
     }
 
     async function copyText(text, input) {
@@ -133,8 +157,9 @@
       panel.classList.add('show');
     }
 
-    function poolOf(seat, rung) {
-      return seat.rungs && seat.rungs[rung] ? seat.rungs[rung].pool : '';
+    function poolOfRole(seat, role) {
+      const cell = rungByRole(seat, role);
+      return cell && cell.pool ? cell.pool : '';
     }
 
     function updateStats(seats, limits) {
@@ -143,10 +168,10 @@
       const minGem = limits.minGeminiHeads ?? 1;
       const inv = { cursor: 0, agy: 0, gem: 0, zen: 0 };
       seats.forEach(s => {
-        if (poolOf(s, 'head') === 'CURSOR') inv.cursor++;
-        if (poolOf(s, 'head') === 'AGY-G') inv.agy++;
-        if (poolOf(s, 'head') === 'GEMINI') inv.gem++;
-        if (poolOf(s, 'floor') === 'ZEN') inv.zen++;
+        if (poolOfRole(s, 'head') === 'CURSOR') inv.cursor++;
+        if (poolOfRole(s, 'head') === 'AGY-G') inv.agy++;
+        if (poolOfRole(s, 'head') === 'GEMINI') inv.gem++;
+        if (poolOfRole(s, 'floor') === 'ZEN') inv.zen++;
       });
       document.getElementById('cCursor').textContent = inv.cursor;
       document.getElementById('cAgy').textContent = inv.agy;
@@ -165,35 +190,71 @@
 
     function render(map) {
       const grid = document.getElementById('grid');
-      grid.innerHTML = '';
+      grid.replaceChildren();
       (map.seats || []).forEach(seat => {
-        const active = seat.activeRung || 'head';
+        const active = seat.activeRung || (rungByRole(seat, 'head') || {}).name || '';
         const card = document.createElement('article');
         card.className = 'card';
-        const rungs = RUNGS.map(r => {
-          const cell = (seat.rungs || {})[r] || {};
-          const selected = r === active ? ' active' : '';
-          const floor = r === 'floor' ? ' <span class="badge">FLOOR</span>' : '';
-          return `<div class="rung${selected}" data-seat="${seat.id}" data-rung="${r}">
-            <div>
-              <strong>${r}</strong>${floor}
-              <code>${cell.launch || ''}</code>
-            </div>
-            <span class="badge">${cell.pool || ''} · t${cell.tier || '?'}</span>
-          </div>`;
-        }).join('');
-        card.innerHTML = `<div><span class="codename">${seat.codename}</span>
-          <span class="muted"> · ${seat.name}</span></div>
-          <div class="muted">${seat.preset || ''} · activeRung=${active}</div>
-          ${rungs}
-          <div class="cmd">
-            <input type="text" readonly spellcheck="false" value="${recruitCommand(seat, active).replace(/"/g, '&quot;')}">
-            <button type="button" data-copy="${seat.id}">Copy</button>
-          </div>`;
-        card.querySelector('button[data-copy]').addEventListener('click', ev => {
-          const input = ev.currentTarget.parentElement.querySelector('input');
-          copyText(input.value, input);
+
+        const title = document.createElement('div');
+        const codeName = document.createElement('span');
+        codeName.className = 'codename';
+        codeName.textContent = seat.codename || '';
+        const seatName = document.createElement('span');
+        seatName.className = 'muted';
+        seatName.textContent = ' · ' + (seat.name || '');
+        title.append(codeName, seatName);
+        card.appendChild(title);
+
+        const meta = document.createElement('div');
+        meta.className = 'muted';
+        meta.textContent = `${seat.preset || ''} · activeRung=${active}`;
+        card.appendChild(meta);
+
+        seatRungs(seat).forEach(cell => {
+          const name = cell && cell.name ? String(cell.name) : '';
+          const el = document.createElement('div');
+          el.className = 'rung' + (name === active ? ' active' : '');
+          el.dataset.seat = seat.id || '';
+          el.dataset.rung = name;
+          const left = document.createElement('div');
+          const strong = document.createElement('strong');
+          strong.textContent = name;
+          left.appendChild(strong);
+          if (cell && cell.role === 'floor') {
+            left.appendChild(document.createTextNode(' '));
+            const badge = document.createElement('span');
+            badge.className = 'badge';
+            badge.textContent = 'FLOOR';
+            left.appendChild(badge);
+          }
+          const code = document.createElement('code');
+          code.textContent = (cell && cell.launch) || '';
+          left.appendChild(code);
+          const right = document.createElement('span');
+          right.className = 'badge';
+          right.textContent = `${(cell && cell.pool) || ''} · t${(cell && cell.tier) || '?'}`;
+          el.append(left, right);
+          card.appendChild(el);
         });
+
+        const cmd = document.createElement('div');
+        cmd.className = 'cmd';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.readOnly = true;
+        input.spellcheck = false;
+        input.value = recruitCommand(seat, active);
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.copy = seat.id || '';
+        button.textContent = 'Copy';
+        button.addEventListener('click', ev => {
+          const field = ev.currentTarget.parentElement.querySelector('input');
+          copyText(field.value, field);
+        });
+        cmd.append(input, button);
+        card.appendChild(cmd);
         grid.appendChild(card);
       });
       updateStats(map.seats || [], map.invariants || {});
@@ -227,7 +288,7 @@
       const note = data.liveSwapped
         ? `${data.seat}: recruit --replace ran from this terminal. Command kept here in case you need to rerun it.`
         : `${data.seat}: map, roles and notes updated. The terminal was not replaced; paste this in the Maestro terminal.`;
-      showApply(data.recruitCommand || recruitCommand({ codename: data.seat, preset: '', rungs: { [data.activeRung]: { launch: data.launch } } }, data.activeRung), note);
+      showApply(data.recruitCommand || recruitCommand({ codename: data.seat, preset: '', rungs: [{ name: data.activeRung, launch: data.launch }] }, data.activeRung), note);
       await load();
     }
 
