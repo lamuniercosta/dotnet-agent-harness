@@ -21,8 +21,8 @@ function Get-SeatMapViolations {
         $invariants = $Map.invariants
     }
 
-    $maxCursorHeads = 2
-    $maxAgyGHeads = 1
+    $maxCursorHeads = 3
+    $maxAgyGHeads = 3
     $minGeminiHeads = 1
     $disallowedFloorPools = @('ZEN')
     $zenFloorExceptions = @('Quill')

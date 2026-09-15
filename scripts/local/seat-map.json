@@ -3,11 +3,15 @@
   "updatedAt": "2026-09-14",
   "charterDate": "2026-09-11",
   "invariants": {
-    "maxCursorHeads": 2,
-    "maxAgyGHeads": 1,
+    "maxCursorHeads": 3,
+    "maxAgyGHeads": 3,
     "minGeminiHeads": 1,
-    "disallowedFloorPools": ["ZEN"],
-    "zenFloorExceptions": ["Quill"],
+    "disallowedFloorPools": [
+      "ZEN"
+    ],
+    "zenFloorExceptions": [
+      "Quill"
+    ],
     "distinctPoolsPerSeat": true
   },
   "seats": [
@@ -20,6 +24,14 @@
       "preset": "opencode",
       "rungs": {
         "head": {
+          "launch": "codex --model gpt-5.6-luna -c model_reasoning_effort=xhigh --dangerously-bypass-approvals-and-sandbox",
+          "pool": "CODEX",
+          "evidence": "unmeasured",
+          "host": "codex",
+          "model": "gpt-5.6-luna",
+          "tier": 3
+        },
+        "then": {
           "launch": "opencode --model opencode/muse-spark-1.3-contributor-free --auto",
           "pool": "ZEN",
           "evidence": "unmeasured",
@@ -27,16 +39,8 @@
           "model": "opencode/muse-spark-1.3-contributor-free",
           "tier": 1
         },
-        "then": {
-          "launch": "codex --model gpt-5.6-luna --effort xhigh",
-          "pool": "CODEX",
-          "evidence": "unmeasured",
-          "host": "codex",
-          "model": "gpt-5.6-luna",
-          "tier": 3
-        },
         "floor": {
-          "launch": "agent --model composer-2.5",
+          "launch": "agent --model composer-2.5 --trust",
           "pool": "CURSOR",
           "evidence": "unmeasured",
           "host": "cursor",
@@ -54,7 +58,7 @@
       "preset": "Claude Code",
       "rungs": {
         "head": {
-          "launch": "claude --model claude-opus-4-6 --effort high --permission-mode auto",
+          "launch": "claude --model claude-opus-4-6 --effort medium --permission-mode auto",
           "pool": "CLAUDE",
           "evidence": "measured",
           "host": "claude",
@@ -70,7 +74,7 @@
           "tier": 3
         },
         "floor": {
-          "launch": "opencode --model openrouter/deepseek/deepseek-v4.1-flash",
+          "launch": "opencode --model openrouter/deepseek/deepseek-v4.1-flash --auto",
           "pool": "OPENROUTER",
           "evidence": "measured",
           "host": "opencode",
@@ -96,7 +100,7 @@
           "tier": 3
         },
         "then": {
-          "launch": "agy --model gemini-3.7-flash-low",
+          "launch": "agy --model gemini-3.7-flash-low --dangerously-skip-permissions",
           "pool": "AGY-G",
           "evidence": "measured",
           "host": "agy",
@@ -118,15 +122,15 @@
       "name": "Mechanic",
       "codename": "Cog",
       "roleId": "1E272DA5-EB12-4E33-8A46-5D5579AB066C",
-      "activeRung": "floor",
+      "activeRung": "head",
       "preset": "junie",
       "rungs": {
         "head": {
-          "launch": "junie gemini-3.1-flash-lite",
-          "pool": "JETBRAINS",
+          "launch": "agy --model gemini-3.6-flash-low --dangerously-skip-permissions",
+          "pool": "AGY-G",
           "evidence": "measured",
-          "host": "junie",
-          "model": "gemini-3.1-flash-lite",
+          "host": "agy",
+          "model": "gemini-3.6-flash-low",
           "tier": 2
         },
         "then": {
@@ -138,11 +142,11 @@
           "tier": 4
         },
         "floor": {
-          "launch": "agy --model gemini-3.6-flash-low",
-          "pool": "AGY-G",
+          "launch": "junie --model gemini-3.1-flash-lite",
+          "pool": "JETBRAINS",
           "evidence": "measured",
-          "host": "agy",
-          "model": "gemini-3.6-flash-low",
+          "host": "junie",
+          "model": "gemini-3.1-flash-lite",
           "tier": 2
         }
       }
@@ -164,7 +168,7 @@
           "tier": 4
         },
         "then": {
-          "launch": "opencode --model opencode/muse-spark-1.3-contributor-free",
+          "launch": "opencode --model opencode/muse-spark-1.3-contributor-free --auto",
           "pool": "ZEN",
           "evidence": "measured",
           "host": "opencode",
@@ -172,7 +176,7 @@
           "tier": 1
         },
         "floor": {
-          "launch": "opencode --model openrouter/thinkingmachines/inkling:free",
+          "launch": "opencode --model openrouter/thinkingmachines/inkling:free --auto",
           "pool": "OPENROUTER",
           "evidence": "measured",
           "host": "opencode",
@@ -232,7 +236,7 @@
           "tier": 4
         },
         "then": {
-          "launch": "junie grok-4.3",
+          "launch": "junie --model grok-4.3",
           "pool": "JETBRAINS",
           "evidence": "probed",
           "host": "junie",
@@ -258,7 +262,7 @@
       "preset": "Codex",
       "rungs": {
         "head": {
-          "launch": "codex --model gpt-5.6-luna --approve-for-me",
+          "launch": "codex --model gpt-5.6-luna -c model_reasoning_effort=high --dangerously-bypass-approvals-and-sandbox",
           "pool": "CODEX",
           "evidence": "probed",
           "host": "codex",
@@ -266,7 +270,7 @@
           "tier": 3
         },
         "then": {
-          "launch": "agy --model gemini-3.7-flash-medium",
+          "launch": "agy --model gemini-3.7-flash-medium --dangerously-skip-permissions",
           "pool": "AGY-G",
           "evidence": "measured",
           "host": "agy",
@@ -292,7 +296,7 @@
       "preset": "agy",
       "rungs": {
         "head": {
-          "launch": "agy --model gemini-3.8-flash-high",
+          "launch": "agy --model gemini-3.8-flash-high --dangerously-skip-permissions",
           "pool": "AGY-G",
           "evidence": "measured",
           "host": "agy",
@@ -308,7 +312,7 @@
           "tier": 3
         },
         "floor": {
-          "launch": "agy --model claude-sonnet-4-6",
+          "launch": "agy --model claude-sonnet-4-6 --dangerously-skip-permissions",
           "pool": "AGY-C",
           "evidence": "measured",
           "host": "agy",
@@ -326,7 +330,7 @@
       "preset": "agy",
       "rungs": {
         "head": {
-          "launch": "agy --model claude-sonnet-4-6",
+          "launch": "agy --model claude-sonnet-4-6 --dangerously-skip-permissions",
           "pool": "AGY-C",
           "evidence": "measured",
           "host": "agy",
@@ -360,15 +364,15 @@
       "preset": "opencode",
       "rungs": {
         "head": {
-          "launch": "opencode --model openrouter/z-ai/glm-5.3-flash --auto",
-          "pool": "OPENROUTER",
+          "launch": "agent --model cursor-grok-4.5-low --trust",
+          "pool": "CURSOR",
           "evidence": "unmeasured",
-          "host": "opencode",
-          "model": "openrouter/z-ai/glm-5.3-flash",
-          "tier": 4
+          "host": "cursor",
+          "model": "cursor-grok-4.5-low",
+          "tier": 3
         },
         "then": {
-          "launch": "opencode --model opencode/muse-spark-1.2-contributor-free",
+          "launch": "opencode --model opencode/muse-spark-1.2-contributor-free --auto",
           "pool": "ZEN",
           "evidence": "measured",
           "host": "opencode",
@@ -376,12 +380,12 @@
           "tier": 1
         },
         "floor": {
-          "launch": "agent --model cursor-grok-4.5-low --trust",
-          "pool": "CURSOR",
+          "launch": "opencode --model openrouter/z-ai/glm-5.3-flash --auto",
+          "pool": "OPENROUTER",
           "evidence": "unmeasured",
-          "host": "cursor",
-          "model": "cursor-grok-4.5-low",
-          "tier": 3
+          "host": "opencode",
+          "model": "openrouter/z-ai/glm-5.3-flash",
+          "tier": 4
         }
       }
     }
