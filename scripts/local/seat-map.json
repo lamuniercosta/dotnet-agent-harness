@@ -3,7 +3,7 @@
   "updatedAt": "2026-09-14",
   "charterDate": "2026-09-11",
   "invariants": {
-    "maxCursorHeads": 3,
+    "maxCursorHeads": 4,
     "maxAgyGHeads": 3,
     "minGeminiHeads": 1,
     "disallowedFloorPools": [
@@ -58,13 +58,13 @@
       "preset": "Claude Code",
       "rungs": {
         "head": {
-          "launch": "claude --model claude-opus-4-6 --effort medium --permission-mode auto",
-          "pool": "CLAUDE",
-          "evidence": "measured",
-          "host": "claude",
-          "model": "claude-opus-4-6",
-          "tier": 3
-        },
+	  "launch": "agent --model glm-5.2-high --trust",
+	  "pool": "CURSOR",
+	  "evidence": "measured",
+	  "host": "cursor",
+	  "model": "glm-5.2-high",
+	  "tier": 3
+	},
         "then": {
           "launch": "codex --model gpt-5.5 --effort high",
           "pool": "CODEX",
