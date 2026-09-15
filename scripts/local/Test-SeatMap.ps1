@@ -1,19 +1,26 @@
 <#
 .SYNOPSIS
-    Pester / CI test for seat-map.json schema and its declared invariants.
+    Pester / CI test for seat-map schema and its declared invariants.
+.PARAMETER SeatMapPath
+    Path to a seat map. Empty (default) resolves the live workspace path
+    lazily after helpers are loaded. CI passes scripts/local/seat-map.example.json.
 #>
 [CmdletBinding()]
 param(
-    [string]$SeatMapPath = (Join-Path $PSScriptRoot 'seat-map.json')
+    [string]$SeatMapPath
 )
 
 $ErrorActionPreference = 'Stop'
 
-if (-not (Test-Path -LiteralPath $SeatMapPath)) {
-    throw "Seat map file not found: $SeatMapPath"
-}
-
 . (Join-Path $PSScriptRoot '_seat-map.ps1')
+
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
+$resolvedMap = Resolve-LiveSeatMapPath -SeatMapPath $SeatMapPath -RepoRoot $repoRoot
+$SeatMapPath = $resolvedMap.Path
+if (-not $resolvedMap.Ok -or -not (Test-Path -LiteralPath $SeatMapPath)) {
+    Write-SeatMapMissingMessage -Path $SeatMapPath
+    exit 1
+}
 
 $seatMap = Get-Content -LiteralPath $SeatMapPath -Raw | ConvertFrom-Json
 

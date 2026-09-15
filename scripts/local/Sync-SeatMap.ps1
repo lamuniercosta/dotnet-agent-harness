@@ -1,8 +1,9 @@
 <#
 .SYNOPSIS
-    Four-way synchronizer for Maestri seat assignments (seat-map.json).
+    Four-way synchronizer for Maestri seat assignments (live workspace seat-map.json).
 .DESCRIPTION
-    Propagates the active rung from scripts/local/seat-map.json across:
+    Propagates the active rung from the live workspace seat map
+    (~/.maestri/workspaces/<id>/seat-map.json) across:
     1. Role prompts (.maestri/roles/*/role.json) — all three rungs
     2. Canvas Note 1 (harness-team-charter.md roster table)
     3. Canvas Note 2 (team-restart.md launch commands)
@@ -10,9 +11,11 @@
 
     Runtime contract is `activeRung` (head|then|floor), the same field the
     portal writes. Invariant violations always exit 1 (Quill ZEN-floor
-    exception matches Test-SeatMap.ps1).
+    exception matches Test-SeatMap.ps1). An explicit -SeatMapPath overrides
+    workspace discovery. Path resolution is lazy (after helpers are
+    dot-sourced) so a missing workspace never throws at bind time.
 .PARAMETER SeatMapPath
-    Path to seat-map.json.
+    Path to seat-map.json. Empty (default) resolves the live workspace path.
 .PARAMETER Seat
     Seat id or codename to update.
 .PARAMETER Rung
@@ -29,12 +32,15 @@
     Print maestri recruit --replace commands.
 .PARAMETER Validate
     Validate schema and charter invariants, then exit.
+.PARAMETER Init
+    Copy scripts/local/seat-map.example.json to the resolved target. Refuses
+    an existing target (no -Force). Not a restore from the swap log.
 .PARAMETER All
     Validate, print recruit commands, and sync roles and notes.
 #>
 [CmdletBinding()]
 param(
-    [string]$SeatMapPath = (Join-Path $PSScriptRoot 'seat-map.json'),
+    [string]$SeatMapPath,
     [string]$Seat,
     [ValidateSet('head', 'then', 'floor')]
     [string]$Rung,
@@ -44,6 +50,7 @@ param(
     [switch]$Verify,
     [switch]$GenerateCommands,
     [switch]$Validate,
+    [switch]$Init,
     [switch]$All
 )
 
@@ -52,11 +59,43 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot '_seat-map.ps1')
 
-if (-not (Test-Path -LiteralPath $SeatMapPath)) {
-    throw "Seat map file not found at: $SeatMapPath"
+$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
+$resolvedMap = Resolve-LiveSeatMapPath -SeatMapPath $SeatMapPath -WorkspaceId $WorkspaceId -RepoRoot $repoRoot
+$SeatMapPath = $resolvedMap.Path
+$resolvedWorkspaceId = [string]$resolvedMap.WorkspaceId
+
+if ($Init) {
+    if (-not $resolvedMap.Ok) {
+        Write-SeatMapMissingMessage -Path $SeatMapPath
+        exit 1
+    }
+    if (Test-Path -LiteralPath $SeatMapPath) {
+        Write-Error "Refusing -Init: target already exists at: $SeatMapPath" -ErrorAction Continue
+        exit 1
+    }
+    Write-Host 'Creating from example; not restoring previous state. Swap log: ~/.maestri/seat-map-swaps.jsonl'
+    $swapLogPath = Join-Path $HOME '.maestri' 'seat-map-swaps.jsonl'
+    if ((Test-Path -LiteralPath $swapLogPath) -and ((Get-Item -LiteralPath $swapLogPath).Length -gt 0)) {
+        Write-Warning "Swap log is non-empty at $swapLogPath; -Init copies the example and does not restore previous state."
+    }
+    $examplePath = Get-SeatMapExamplePath
+    if (-not (Test-Path -LiteralPath $examplePath)) {
+        Write-Error "Seat map example not found at: $examplePath" -ErrorAction Continue
+        exit 1
+    }
+    $destDir = [System.IO.Path]::GetDirectoryName($SeatMapPath)
+    if (-not [string]::IsNullOrWhiteSpace($destDir) -and -not (Test-Path -LiteralPath $destDir)) {
+        New-Item -ItemType Directory -Path $destDir -Force | Out-Null
+    }
+    Copy-Item -LiteralPath $examplePath -Destination $SeatMapPath
+    exit 0
 }
 
-$repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
+if (-not $resolvedMap.Ok -or -not (Test-Path -LiteralPath $SeatMapPath)) {
+    Write-SeatMapMissingMessage -Path $SeatMapPath
+    exit 1
+}
+
 $seatMap = Get-Content -LiteralPath $SeatMapPath -Raw | ConvertFrom-Json
 $syncMisses = [System.Collections.Generic.List[string]]::new()
 
@@ -89,12 +128,16 @@ function Save-SeatMap {
     param($Map, [string]$Path)
     $json = $Map | ConvertTo-Json -Depth 12
     if (-not $json.EndsWith("`n")) { $json += "`n" }
-    Save-Utf8NoBom -Path $Path -Content $json
+    Save-SeatMapFile -Path $Path -Content $json
 }
 
 $violations = @(Get-SeatMapViolations -Map $seatMap)
 $noAction = -not ($Seat -or $SyncRoles -or $SyncNotes -or $Verify -or $GenerateCommands -or $All)
 if ($Validate -or $All -or $noAction) {
+    Write-Host "Validating seat map at: $SeatMapPath"
+    if (-not [string]::IsNullOrWhiteSpace($resolvedWorkspaceId)) {
+        Write-Host "Workspace id: $resolvedWorkspaceId"
+    }
     Write-Host '=== Validating Seat Map Invariants ===' -ForegroundColor Cyan
     Write-ViolationsAndExit -Violations $violations
     Write-Host 'All charter invariants PASSED:' -ForegroundColor Green

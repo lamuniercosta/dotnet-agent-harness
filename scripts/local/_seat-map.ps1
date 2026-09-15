@@ -1,6 +1,7 @@
-# Shared seat-map helpers. Dot-sourced by Test-SeatMap, Sync-SeatMap, and
-# Start-SeatMapServer so charter invariants (including the Quill ZEN-floor
-# exception) cannot drift between the CI gate, the synchronizer, and the portal.
+# Shared seat-map helpers. Dot-sourced by Test-SeatMap, Sync-SeatMap,
+# Start-SeatMapServer, and Test-ModelProbe so charter invariants (including the
+# Quill ZEN-floor exception) cannot drift between the CI gate, the
+# synchronizer, the portal, and the probe writer.
 
 . (Join-Path $PSScriptRoot '_json-property.ps1')
 
@@ -241,9 +242,99 @@ function Resolve-MaestriWorkspaceId {
     if ($matched.Count -gt 1) {
         throw "Multiple Maestri workspaces match this repo. Pass -WorkspaceId. Candidates: $($matched -join ', ')"
     }
-    # Hint matched nothing.
+    # Hint matched nothing: do not silently fall back to a sole workspace.
+    if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
+        throw "Repo-root hint matched no Maestri workspace. Pass -WorkspaceId. Found: $($dirs.Name -join ', ')"
+    }
     if ($dirs.Count -eq 1) { return $dirs[0].Name }
     throw "Repo-root hint matched no Maestri workspace and $($dirs.Count) workspaces exist. Pass -WorkspaceId. Found: $($dirs.Name -join ', ')"
+}
+
+function Get-SeatMapExamplePath {
+    return Join-Path $PSScriptRoot 'seat-map.example.json'
+}
+
+function Get-LiveSeatMapPath {
+    param([string]$WorkspaceId)
+    $id = if ([string]::IsNullOrWhiteSpace($WorkspaceId)) { '<id>' } else { $WorkspaceId }
+    return Join-Path $HOME '.maestri' 'workspaces' $id 'seat-map.json'
+}
+
+function Resolve-LiveSeatMapPath {
+    param(
+        [string]$SeatMapPath,
+        [string]$WorkspaceId,
+        [string]$RepoRoot
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($SeatMapPath)) {
+        $id = $WorkspaceId
+        if ([string]::IsNullOrWhiteSpace($id) -and -not [string]::IsNullOrWhiteSpace($RepoRoot)) {
+            try {
+                $id = Resolve-MaestriWorkspaceId -WorkspaceId $WorkspaceId -RepoRoot $RepoRoot
+            }
+            catch {
+                $id = ''
+            }
+        }
+        return [pscustomobject]@{
+            Ok          = $true
+            Path        = $SeatMapPath
+            WorkspaceId = $id
+            Explicit    = $true
+        }
+    }
+
+    try {
+        $id = Resolve-MaestriWorkspaceId -WorkspaceId $WorkspaceId -RepoRoot $RepoRoot
+        return [pscustomobject]@{
+            Ok          = $true
+            Path        = Get-LiveSeatMapPath -WorkspaceId $id
+            WorkspaceId = $id
+            Explicit    = $false
+        }
+    }
+    catch {
+        return [pscustomobject]@{
+            Ok          = $false
+            Path        = Get-LiveSeatMapPath -WorkspaceId $WorkspaceId
+            WorkspaceId = $WorkspaceId
+            Explicit    = $false
+            Error       = $_.Exception.Message
+        }
+    }
+}
+
+function Write-SeatMapMissingMessage {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+    [Console]::Error.WriteLine("Seat map file not found at: $Path. Pass -Init to copy the example into place.")
+}
+
+function Save-SeatMapFile {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path,
+        [Parameter(Mandatory = $true)]
+        [string]$Content
+    )
+    $dir = [System.IO.Path]::GetDirectoryName($Path)
+    if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $temp = $Path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    try {
+        [System.IO.File]::WriteAllText($temp, $Content, $utf8)
+        [System.IO.File]::Move($temp, $Path, $true)
+    }
+    finally {
+        if (Test-Path -LiteralPath $temp) {
+            Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 function Save-Utf8NoBom {
@@ -253,7 +344,7 @@ function Save-Utf8NoBom {
         [Parameter(Mandatory = $true)]
         [string]$Content
     )
-    [System.IO.File]::WriteAllText($Path, $Content, [System.Text.UTF8Encoding]::new($false))
+    Save-SeatMapFile -Path $Path -Content $Content
 }
 
 function Replace-LiteralRegex {
@@ -295,7 +386,8 @@ function Write-SeatMapSwapLog {
         [string]$PreviousLaunch,
         [string]$PreviousPool,
         [bool]$LiveSwapped,
-        [string]$Detail
+        [string]$Detail,
+        [string]$WorkspaceId
     )
     $dir = Join-Path $HOME '.maestri'
     if (-not (Test-Path -LiteralPath $dir)) {
@@ -304,6 +396,7 @@ function Write-SeatMapSwapLog {
     $logPath = Join-Path $dir 'seat-map-swaps.jsonl'
     $entry = [ordered]@{
         at                  = (Get-Date).ToString('o')
+        workspaceId         = $WorkspaceId
         seat                = $Seat
         previousActiveRung  = $PreviousActiveRung
         previousLaunch      = $PreviousLaunch

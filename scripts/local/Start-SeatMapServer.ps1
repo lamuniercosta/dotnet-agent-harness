@@ -15,12 +15,16 @@
 .PARAMETER UiPath
     Path to the HTML artifact. Defaults to artifacts/seat-map-selector.html
     under the repo root. Missing artifact is a hard error.
+.PARAMETER SeatMapPath
+    Path to seat-map.json. Empty (default) resolves the live workspace path
+    lazily after helpers are loaded. Explicit -SeatMapPath beats discovery.
 #>
 [CmdletBinding()]
 param(
     [int]$Port = 8765,
     [string]$WorkspaceId,
-    [string]$UiPath
+    [string]$UiPath,
+    [string]$SeatMapPath
 )
 
 Set-StrictMode -Version Latest
@@ -29,7 +33,9 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot '_seat-map.ps1')
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
-$seatMapPath = Join-Path $PSScriptRoot 'seat-map.json'
+$resolvedMap = Resolve-LiveSeatMapPath -SeatMapPath $SeatMapPath -WorkspaceId $WorkspaceId -RepoRoot $repoRoot
+$seatMapPath = $resolvedMap.Path
+$workspaceIdForLog = [string]$resolvedMap.WorkspaceId
 if ([string]::IsNullOrWhiteSpace($UiPath)) {
     $UiPath = Join-Path $repoRoot 'artifacts' 'seat-map-selector.html'
 }
@@ -37,8 +43,9 @@ if ([string]::IsNullOrWhiteSpace($UiPath)) {
 if (-not (Test-Path -LiteralPath $UiPath)) {
     throw "Seat map UI artifact missing: $UiPath"
 }
-if (-not (Test-Path -LiteralPath $seatMapPath)) {
-    throw "Seat map file not found: $seatMapPath"
+if (-not $resolvedMap.Ok -or -not (Test-Path -LiteralPath $seatMapPath)) {
+    Write-SeatMapMissingMessage -Path $seatMapPath
+    exit 1
 }
 
 $sessionToken = [guid]::NewGuid().ToString('N')
@@ -156,7 +163,7 @@ function Apply-SeatRung {
     if ($syncExit -ne 0) {
         $failLaunch = [string]$target.rungs.$RungName.launch
         $failPool = [string]$target.rungs.$RungName.pool
-        Write-SeatMapSwapLog -Seat $target.codename -Rung $RungName -Launch $failLaunch -Pool $failPool -PreviousActiveRung $previousRung -PreviousLaunch $previousLaunch -PreviousPool $previousPool -LiveSwapped $false -Detail "partialSync exit $syncExit"
+        Write-SeatMapSwapLog -Seat $target.codename -Rung $RungName -Launch $failLaunch -Pool $failPool -PreviousActiveRung $previousRung -PreviousLaunch $previousLaunch -PreviousPool $previousPool -LiveSwapped $false -Detail "partialSync exit $syncExit" -WorkspaceId $workspaceIdForLog
         return @{
             success     = $false
             error       = "Partial sync failure: Sync-SeatMap.ps1 exited $syncExit"
@@ -182,7 +189,7 @@ function Apply-SeatRung {
             Write-Warning $detail
         }
     }
-    Write-SeatMapSwapLog -Seat $target.codename -Rung $RungName -Launch $launch -Pool $pool -PreviousActiveRung $previousRung -PreviousLaunch $previousLaunch -PreviousPool $previousPool -LiveSwapped $liveSwapped -Detail $detail
+    Write-SeatMapSwapLog -Seat $target.codename -Rung $RungName -Launch $launch -Pool $pool -PreviousActiveRung $previousRung -PreviousLaunch $previousLaunch -PreviousPool $previousPool -LiveSwapped $liveSwapped -Detail $detail -WorkspaceId $workspaceIdForLog
 
     return @{
         success        = $true
