@@ -169,6 +169,8 @@ $insideAbsolute = Join-Path $PSScriptRoot 'guard.ps1'
 Assert-Blocked 'absolute path outside git toplevel' (Edit $outside -Cwd $sessionCwd)
 Assert-Blocked 'apply_patch outside git toplevel' (Apply-Patch "*** Begin Patch`n*** Add File: $outside`n*** End Patch" -Cwd $sessionCwd)
 Assert-Blocked 'relative ../../ escape' (Edit '../../outside.cs' -Cwd $sessionCwd)
+$rootedTraversal = if ($IsWindows) { Join-Path $PSScriptRoot '..\..\outside.cs' } else { Join-Path $PSScriptRoot '/../../outside.cs' }
+Assert-Blocked 'rooted path with .. traversal' (Edit $rootedTraversal -Cwd $sessionCwd)
 Assert-Allowed 'path inside git toplevel' (Edit $insideAbsolute -Cwd $sessionCwd)
 Assert-Allowed 'relative path inside git toplevel' (Edit 'guard.ps1' -Cwd $sessionCwd)
 Assert-Allowed 'outside path without CWD' (Edit $outside)
