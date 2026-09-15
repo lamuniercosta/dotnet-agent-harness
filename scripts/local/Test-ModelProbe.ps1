@@ -40,6 +40,9 @@
 
 .PARAMETER WhatIf
   Validate, resolve, construct; do not launch.
+.PARAMETER SeatMapPath
+  Path to seat-map.json. Empty (default) resolves the live workspace path
+  lazily after helpers are loaded. Explicit -SeatMapPath beats discovery.
 #>
 [CmdletBinding()]
 param(
@@ -59,19 +62,21 @@ param(
 
     [string]$Rung = '',
 
-    [switch]$WhatIf
+    [switch]$WhatIf,
+
+    [string]$SeatMapPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 
-. (Join-Path $PSScriptRoot '_json-property.ps1')
+. (Join-Path $PSScriptRoot '_seat-map.ps1')
 
 $BlockedModels = @('openai/gpt-oss-120b')
 $TimeoutSeconds = 600
 $JunieProbeEffort = 'high'
-$SeatMapPath = Join-Path $PSScriptRoot 'seat-map.json'
+# $SeatMapPath is a param; live path is resolved lazily after _seat-map.ps1.
 # Lock is under GetTempPath so scripts/local/ stays clean of runtime files.
 # Enter-SeatMapLock is Test-Path then WriteAllText: a TOCTOU window exists
 # between the stale check and create. Acceptable for a human-operated tool.
@@ -565,7 +570,8 @@ function Set-NoteValue {
 function Resolve-SeatCell {
     param([string]$SeatName, [string]$RungName, [string]$MapPath)
     if (-not (Test-Path -LiteralPath $MapPath)) {
-        Write-ProbeError "Seat map not found: $MapPath"
+        Write-SeatMapMissingMessage -Path $MapPath
+        exit 1
     }
     $map = Get-Content -LiteralPath $MapPath -Raw | ConvertFrom-Json
     $seatObj = $null
@@ -758,7 +764,7 @@ function Write-SeatCell {
     }
     Set-NoteValue $Resolved.Map 'updatedAt' ((Get-Date).ToString('yyyy-MM-dd'))
     $json = $Resolved.Map | ConvertTo-Json -Depth 12
-    [System.IO.File]::WriteAllText($MapPath, $json + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    Save-SeatMapFile -Path $MapPath -Content ($json + [Environment]::NewLine)
 }
 
 function New-StdinFile {
@@ -866,6 +872,12 @@ if ([string]::IsNullOrWhiteSpace($binary)) {
 }
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
+$resolvedMap = Resolve-LiveSeatMapPath -SeatMapPath $SeatMapPath -RepoRoot $repoRoot
+$SeatMapPath = $resolvedMap.Path
+if ($hasSeat -and (-not $resolvedMap.Ok -or -not (Test-Path -LiteralPath $SeatMapPath))) {
+    Write-SeatMapMissingMessage -Path $SeatMapPath
+    exit 1
+}
 $kitRoot = Resolve-ProbeKitRoot
 $taskPath = Get-ProbeTaskPath -TestName $Test -KitRoot $kitRoot
 $kitWarning = $null
@@ -983,7 +995,6 @@ try {
     if ($hasSeat) {
         Write-SeatCell -Resolved $resolvedSeat -MapPath $SeatMapPath -HostName $ProbeHost -ModelName $Model -Pool $pool -Launch $launch.Command -Evidence $evidence -Cost $cost -Metadata $metadata
         Write-Host "Wrote cell $Seat/$Rung evidence=$evidence cost.source=$($cost.source)"
-        Write-Host 'seat-map.json updated — commit or revert.'
     }
     else {
         $result | ConvertTo-Json -Depth 8

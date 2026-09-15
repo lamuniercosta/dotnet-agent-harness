@@ -4,7 +4,7 @@ Supersedes [ADR 0008](0008-route-map-records-work-demands.md) and
 [ADR 0010](0010-cheap-metered-lane-precedes-the-flat-rate-floor.md).
 
 The command-keyed `route-map.json` introduced in ADR 0008 is replaced by a
-seat-keyed `seat-map.json`. The route map ordered pipeline commands by host and
+seat-keyed `seat-map.json` (historical path: `scripts/local/seat-map.json`). The route map ordered pipeline commands by host and
 tier; the seat map orders seats by candidate model, pool, and marginal cost.
 The metered-lane exception argued in ADR 0010 is subsumed by the tier field on
 every rung.
@@ -29,7 +29,9 @@ Verifier ran a model outside its chain because a restart note was stale.
 
 ### A single seat-map replaces the route map
 
-`scripts/local/seat-map.json` is keyed by seat, not by command. Each seat
+The live seat map at `~/.maestri/workspaces/<workspaceId>/seat-map.json` is
+keyed by seat, not by command. `scripts/local/seat-map.example.json` is the
+schema, the invariants block, and the CI contract. Each seat
 carries a set of rungs (`head`, `then`, `floor`) — each a complete launch
 specification:
 
@@ -60,7 +62,9 @@ evidence is partial), or `unmeasured`.
 ### Charter invariants are tested in CI
 
 `Test-SeatMap.ps1` validates the schema and enforces the invariants from the
-seat charter:
+seat charter. CI runs it against `scripts/local/seat-map.example.json` (the
+contract); the live map is workspace state under `~/.maestri/workspaces/<id>/`
+and is not a CI artefact:
 
 - At most 2 Cursor-pool heads.
 - At most 1 AGY-G-pool head.
@@ -75,7 +79,8 @@ This gate runs in `lint-harness.yml` on both Windows and Ubuntu. It replaces the
 
 ### A 4-way synchronizer propagates changes
 
-`Sync-SeatMap.ps1` reads the seat map and writes the four downstream targets:
+`Sync-SeatMap.ps1` reads the live workspace seat map (or an explicit
+`-SeatMapPath`) and writes the four downstream targets:
 
 1. Role prompts (`.maestri/roles/*/role.json` — the model-chain line).
 2. `notes/harness-team-charter.md` (the Roster table).
@@ -84,12 +89,17 @@ This gate runs in `lint-harness.yml` on both Windows and Ubuntu. It replaces the
 
 `-Validate` checks the seat map against the same charter invariants and exits 1
 on any violation, so the merge bar can prove the synchronizer would not propagate
-invalid state.
+invalid state. Path resolution is lazy: an empty `-SeatMapPath` is resolved
+after helpers load, so a missing workspace degrades to a missing-file message
+rather than a bind-time throw.
 
 Targets 2–4 are Maestri canvas notes and terminal state, not tracked files.
 They cannot be CI-proved. The synchronizer writes them at runtime; CI proves
-only that the seat map itself is valid and that `-Validate` enforces the
+only that the example seat map itself is valid and that `-Validate` enforces the
 invariants.
+
+The swap log at `~/.maestri/seat-map-swaps.jsonl` is per-workspace-keyed history
+(`workspaceId` on each entry). git history retains all prior values of scripts/local/seat-map.json; history rewriting is out of scope for DEV-239.
 
 ### A localhost portal enables human swap
 
@@ -180,13 +190,12 @@ checkable); the runtime logic ships when it has tests.
 
 ## Accepted cost
 
-The seat map embeds per-machine state: role UUIDs from `.maestri/roles/` and,
+The live seat map embeds per-machine workspace state: role UUIDs from `.maestri/roles/` and,
 at runtime, the active-rung selection. On any machine other than the author's,
 role-sync and note-sync silently no-op because the UUIDs do not match. This is
-accepted because the seat map is a local development tool, not a CI artefact:
-CI proves the schema and invariants, and synchronization is a convenience for
-the machine that runs the team. A future workspace-discovery mechanism (reading
-the active workspace from `~/.maestri/`) would remove this limitation.
+accepted because the live map is workspace state, not a CI artefact:
+CI proves the schema and invariants against `scripts/local/seat-map.example.json`, and synchronization is a convenience for
+the machine that runs the team. The live path is discovered from `~/.maestri/workspaces/<id>/`.
 
 The portal's security model is session-token authentication over localhost. This
 is weaker than mutual TLS or a Unix socket, but the threat model is cross-origin

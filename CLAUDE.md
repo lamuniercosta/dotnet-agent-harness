@@ -72,7 +72,7 @@ mode the team exists to prevent.
 
 ## Which host and model to run a command on
 
-`scripts/local/seat-map.json` defines host and tier allocation for team seats, ordered best first (`head`, `then`, `floor`), with a **floor** marking the lowest option that still does the work without losing quality:
+The live seat map is Maestri workspace state at `~/.maestri/workspaces/<workspaceId>/seat-map.json` (resolved lazily from the active workspace; an explicit `-SeatMapPath` still overrides). It defines host and tier allocation for team seats, ordered best first (`head`, `then`, `floor`), with a **floor** marking the lowest option that still does the work without losing quality. `scripts/local/seat-map.example.json` is the schema, the invariants block, and the CI contract.
 
 ```powershell
 pwsh ./scripts/local/Sync-SeatMap.ps1 -Validate
@@ -82,13 +82,13 @@ Read down the chain to the first option you still have allowance for. **If that 
 floor, the work waits**; running below it means knowingly accepting reduced
 quality, which is the one thing the seat map exists to make visible.
 
-`scripts/local/Test-ModelProbe.ps1` auditions a candidate model on a named host against the floor-model probe kit (G1 trap, per-seat bars, cost ladder) and writes the resulting cell into `scripts/local/seat-map.json`. `Test-ModelProbe.ps1` launches hosts and can bill; use `-WhatIf` for non-launching validation.
+`scripts/local/Test-ModelProbe.ps1` auditions a candidate model on a named host against the floor-model probe kit (G1 trap, per-seat bars, cost ladder) and writes the resulting cell into the live workspace seat map. `Test-ModelProbe.ps1` launches hosts and can bill; use `-WhatIf` for non-launching validation.
 
 ```powershell
 pwsh ./scripts/local/Test-ModelProbe.ps1 -Host cursor -Model composer-2.5 -Test Verdict -Seat conductor -Rung floor -WhatIf
 ```
 
-Running a probe without `-WhatIf` launches the model host and updates `seat-map.json` (dirtying the worktree state; commit or revert changes after probing):
+Running a probe without `-WhatIf` launches the model host and updates the live workspace seat map:
 
 ```powershell
 pwsh ./scripts/local/Test-ModelProbe.ps1 -Host cursor -Model composer-2.5 -Test Verdict -Seat conductor -Rung floor
@@ -101,11 +101,11 @@ logging does not survive contact with real work: two entries and no deviations i
 a month. Routing corrections land in ADRs (such as ADR 0025) and in this file instead. Any future spend tracking has to
 be cheaper to write than to skip, which is the constraint DEV-63 inherits.
 
-See `docs/adr/0025-versioned-seat-map-and-canvas-portal.md` for seat map versioning details. Script tooling is not shipped by `install.ps1`.
+See `docs/adr/0025-versioned-seat-map-and-canvas-portal.md` for seat map versioning details. Script tooling is not shipped by `install.ps1`. git history retains all prior values of scripts/local/seat-map.json; history rewriting is out of scope for DEV-239.
 
 ## OpenRouter via OpenCode
 
-`openrouter` remains available as an allocation in `scripts/local/seat-map.json` for fast mechanical seats, for the reason argued in [ADR 0025](docs/adr/0025-versioned-seat-map-and-canvas-portal.md). Every other stage keeps its existing route.
+`openrouter` remains available as an allocation in the live workspace seat map for fast mechanical seats, for the reason argued in [ADR 0025](docs/adr/0025-versioned-seat-map-and-canvas-portal.md). Every other stage keeps its existing route.
 
 Since 2026-09-14 OpenRouter is called through **OpenCode**, with Maestri
 orchestrating the seats. See

@@ -394,7 +394,11 @@ jobs:
 
       - name: Seat-map schema and charter invariants
         shell: pwsh
-        run: ./scripts/local/Test-SeatMap.ps1
+        run: ./scripts/local/Test-SeatMap.ps1 -SeatMapPath scripts/local/seat-map.example.json
+
+      - name: Seat-map live path invariants
+        shell: pwsh
+        run: ./scripts/local/Test-SeatMapLive.ps1
 
       # Asserts OPENROUTER_API_KEY does not appear in repo code/scripts.
       # Note: git grep exit 2 (e.g. bad pathspec) is treated as clean by
