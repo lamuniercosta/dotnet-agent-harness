@@ -66,7 +66,7 @@ $resolvedWorkspaceId = [string]$resolvedMap.WorkspaceId
 
 if ($Init) {
     if (-not $resolvedMap.Ok) {
-        Write-SeatMapMissingMessage -Path $SeatMapPath
+        Write-SeatMapResolutionFailureMessage -ResolverError ([string]$resolvedMap.Error)
         exit 1
     }
     if (Test-Path -LiteralPath $SeatMapPath) {
@@ -83,15 +83,17 @@ if ($Init) {
         Write-Error "Seat map example not found at: $examplePath" -ErrorAction Continue
         exit 1
     }
-    $destDir = [System.IO.Path]::GetDirectoryName($SeatMapPath)
-    if (-not [string]::IsNullOrWhiteSpace($destDir) -and -not (Test-Path -LiteralPath $destDir)) {
-        New-Item -ItemType Directory -Path $destDir -Force | Out-Null
-    }
-    Copy-Item -LiteralPath $examplePath -Destination $SeatMapPath
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    $exampleContent = [System.IO.File]::ReadAllText($examplePath, $utf8)
+    Save-SeatMapFile -Path $SeatMapPath -Content $exampleContent
     exit 0
 }
 
-if (-not $resolvedMap.Ok -or -not (Test-Path -LiteralPath $SeatMapPath)) {
+if (-not $resolvedMap.Ok) {
+    Write-SeatMapResolutionFailureMessage -ResolverError ([string]$resolvedMap.Error)
+    exit 1
+}
+if (-not (Test-Path -LiteralPath $SeatMapPath)) {
     Write-SeatMapMissingMessage -Path $SeatMapPath
     exit 1
 }

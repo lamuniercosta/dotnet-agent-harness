@@ -215,39 +215,73 @@ function Resolve-MaestriWorkspaceId {
 
     $wsRoot = Join-Path $HOME '.maestri' 'workspaces'
     if (-not (Test-Path -LiteralPath $wsRoot)) {
-        throw "Maestri workspaces directory not found: $wsRoot. Pass -WorkspaceId."
+        throw "Maestri workspaces directory not found: $wsRoot"
     }
 
     $dirs = @(Get-ChildItem -LiteralPath $wsRoot -Directory -ErrorAction Stop)
     if ($dirs.Count -eq 0) {
-        throw "No Maestri workspaces under $wsRoot. Pass -WorkspaceId."
+        throw "No Maestri workspaces under $wsRoot"
     }
 
     $matched = [System.Collections.Generic.List[string]]::new()
     if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
-        $hintFwd = $RepoRoot.Replace('\', '/')
-        $hintBwd = $RepoRoot.Replace('/', '\')
-        $hintEsc = $hintBwd.Replace('\', '\\')
+        $hints = @(Get-MaestriRepoRootHints -RepoRoot $RepoRoot)
         foreach ($d in $dirs) {
             $wj = Join-Path $d.FullName 'workspace.json'
             if (-not (Test-Path -LiteralPath $wj)) { continue }
             $text = Get-Content -LiteralPath $wj -Raw
-            if ($text.Contains($hintFwd) -or $text.Contains($hintBwd) -or $text.Contains($hintEsc)) {
-                $matched.Add($d.Name)
+            $hit = $false
+            foreach ($h in $hints) {
+                if ($text.Contains($h)) { $hit = $true; break }
             }
+            if ($hit) { $matched.Add($d.Name) }
         }
     }
 
     if ($matched.Count -eq 1) { return $matched[0] }
     if ($matched.Count -gt 1) {
-        throw "Multiple Maestri workspaces match this repo. Pass -WorkspaceId. Candidates: $($matched -join ', ')"
+        throw "Multiple Maestri workspaces match this repo. Candidates: $($matched -join ', ')"
     }
     # Hint matched nothing: do not silently fall back to a sole workspace.
     if (-not [string]::IsNullOrWhiteSpace($RepoRoot)) {
-        throw "Repo-root hint matched no Maestri workspace. Pass -WorkspaceId. Found: $($dirs.Name -join ', ')"
+        throw "Repo-root hint matched no Maestri workspace. Found: $($dirs.Name -join ', ')"
     }
     if ($dirs.Count -eq 1) { return $dirs[0].Name }
-    throw "Repo-root hint matched no Maestri workspace and $($dirs.Count) workspaces exist. Pass -WorkspaceId. Found: $($dirs.Name -join ', ')"
+    throw "Repo-root hint matched no Maestri workspace and $($dirs.Count) workspaces exist. Found: $($dirs.Name -join ', ')"
+}
+
+function Get-MaestriRepoRootHints {
+    param([string]$RepoRoot)
+
+    $hints = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+
+    $addPath = {
+        param([string]$PathValue)
+        if ([string]::IsNullOrWhiteSpace($PathValue)) { return }
+        $trimmed = $PathValue.Trim()
+        $fwd = $trimmed.Replace('\', '/')
+        $bwd = $trimmed.Replace('/', '\')
+        $esc = $bwd.Replace('\', '\\')
+        foreach ($form in @($trimmed, $fwd, $bwd, $esc)) {
+            if ($seen.Add($form)) { $hints.Add($form) }
+        }
+    }
+
+    & $addPath $RepoRoot
+    try {
+        $porcelain = & git -C $RepoRoot worktree list --porcelain 2>$null
+        foreach ($line in @($porcelain)) {
+            if ([string]$line -match '^worktree\s+(.+)$') {
+                & $addPath $Matches[1]
+            }
+        }
+    }
+    catch {
+        # Keep RepoRoot-only hints when git is unavailable.
+    }
+
+    return @($hints)
 }
 
 function Get-SeatMapExamplePath {
@@ -311,6 +345,19 @@ function Write-SeatMapMissingMessage {
         [string]$Path
     )
     [Console]::Error.WriteLine("Seat map file not found at: $Path. Pass -Init to copy the example into place.")
+}
+
+function Write-SeatMapResolutionFailureMessage {
+    param(
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyString()]
+        [string]$ResolverError
+    )
+    $reason = [string]$ResolverError
+    if ($reason.EndsWith('.')) {
+        $reason = $reason.Substring(0, $reason.Length - 1)
+    }
+    [Console]::Error.WriteLine("Seat map workspace could not be resolved: $reason. Pass -WorkspaceId or -SeatMapPath.")
 }
 
 function Save-SeatMapFile {

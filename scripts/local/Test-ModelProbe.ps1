@@ -43,6 +43,9 @@
 .PARAMETER SeatMapPath
   Path to seat-map.json. Empty (default) resolves the live workspace path
   lazily after helpers are loaded. Explicit -SeatMapPath beats discovery.
+.PARAMETER WorkspaceId
+  Maestri workspace UUID. Passed to live-path resolution; explicit -SeatMapPath
+  still overrides discovery.
 #>
 [CmdletBinding()]
 param(
@@ -64,7 +67,9 @@ param(
 
     [switch]$WhatIf,
 
-    [string]$SeatMapPath
+    [string]$SeatMapPath,
+
+    [string]$WorkspaceId
 )
 
 Set-StrictMode -Version Latest
@@ -872,11 +877,17 @@ if ([string]::IsNullOrWhiteSpace($binary)) {
 }
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
-$resolvedMap = Resolve-LiveSeatMapPath -SeatMapPath $SeatMapPath -RepoRoot $repoRoot
+$resolvedMap = Resolve-LiveSeatMapPath -SeatMapPath $SeatMapPath -WorkspaceId $WorkspaceId -RepoRoot $repoRoot
 $SeatMapPath = $resolvedMap.Path
-if ($hasSeat -and (-not $resolvedMap.Ok -or -not (Test-Path -LiteralPath $SeatMapPath))) {
-    Write-SeatMapMissingMessage -Path $SeatMapPath
-    exit 1
+if ($hasSeat) {
+    if (-not $resolvedMap.Ok) {
+        Write-SeatMapResolutionFailureMessage -ResolverError ([string]$resolvedMap.Error)
+        exit 1
+    }
+    if (-not (Test-Path -LiteralPath $SeatMapPath)) {
+        Write-SeatMapMissingMessage -Path $SeatMapPath
+        exit 1
+    }
 }
 $kitRoot = Resolve-ProbeKitRoot
 $taskPath = Get-ProbeTaskPath -TestName $Test -KitRoot $kitRoot

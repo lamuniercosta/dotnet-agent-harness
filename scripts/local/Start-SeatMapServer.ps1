@@ -43,7 +43,11 @@ if ([string]::IsNullOrWhiteSpace($UiPath)) {
 if (-not (Test-Path -LiteralPath $UiPath)) {
     throw "Seat map UI artifact missing: $UiPath"
 }
-if (-not $resolvedMap.Ok -or -not (Test-Path -LiteralPath $seatMapPath)) {
+if (-not $resolvedMap.Ok) {
+    Write-SeatMapResolutionFailureMessage -ResolverError ([string]$resolvedMap.Error)
+    exit 1
+}
+if (-not (Test-Path -LiteralPath $seatMapPath)) {
     Write-SeatMapMissingMessage -Path $seatMapPath
     exit 1
 }

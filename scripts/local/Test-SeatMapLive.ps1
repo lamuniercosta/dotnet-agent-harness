@@ -145,6 +145,38 @@ function Test-BindTimeThrow {
     return [bool]($blob -match 'ParameterBindingException|ParameterBindingValidationException')
 }
 
+function Get-PrimaryWorktreePath {
+    param([string]$RepoRoot)
+    $porcelain = & git -C $RepoRoot worktree list --porcelain 2>$null
+    foreach ($line in @($porcelain)) {
+        if ([string]$line -match '^worktree\s+(.+)$') {
+            return $Matches[1]
+        }
+    }
+    return $RepoRoot
+}
+
+function Install-RoleFixtures {
+    param([string]$RepoRoot, [string]$ExamplePath)
+    $rolesDir = Join-Path $RepoRoot '.maestri' 'roles'
+    New-Item -ItemType Directory -Path $rolesDir -Force | Out-Null
+    $map = Get-Content -LiteralPath $ExamplePath -Raw | ConvertFrom-Json
+    $created = [System.Collections.Generic.List[string]]::new()
+    foreach ($s in @($map.seats)) {
+        $dir = Join-Path $rolesDir $s.roleId
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $file = Join-Path $dir 'role.json'
+        $obj = [ordered]@{
+            prompt = 'Model chain (best first): placeholder -> placeholder -> placeholder (FLOOR).'
+        }
+        $json = $obj | ConvertTo-Json -Depth 4
+        if (-not $json.EndsWith("`n")) { $json += "`n" }
+        [System.IO.File]::WriteAllText($file, $json, [System.Text.UTF8Encoding]::new($false))
+        $created.Add($file)
+    }
+    return $created
+}
+
 $realProfile = [Environment]::GetFolderPath('UserProfile')
 $realMaestri = Join-Path $realProfile '.maestri'
 $realSwapLog = Join-Path $realMaestri 'seat-map-swaps.jsonl'
@@ -162,10 +194,16 @@ if ([string]::Equals((ConvertTo-Fwd $isoHome).TrimEnd('/'), (ConvertTo-Fwd $real
     throw "Refusing to isolate HOME onto the real user profile: $isoHome"
 }
 
+$worktreeMaestri = Join-Path $repoRoot '.maestri'
+$worktreeRoles = Join-Path $worktreeMaestri 'roles'
+$hadWorktreeMaestri = Test-Path -LiteralPath $worktreeMaestri
+$hadWorktreeRoles = Test-Path -LiteralPath $worktreeRoles
+
 Write-Host 'Test-SeatMapLive (isolated HOME)'
 
 try {
     New-Item -ItemType Directory -Path $isoHome -Force | Out-Null
+    [void](Install-RoleFixtures -RepoRoot $repoRoot -ExamplePath $examplePath)
 
     Assert-True 'example file exists' (Test-Path -LiteralPath $examplePath) $examplePath 'missing'
 
@@ -188,6 +226,7 @@ try {
 
     $missingServer = Invoke-IsolatedPwsh -HomeDir $isoHome -File $serverScript -TimeoutMs 15000
     Assert-True 'A5 Start-SeatMapServer missing: exit 1' ($missingServer.ExitCode -eq 1) '1' ([string]$missingServer.ExitCode)
+    Assert-True 'A5 Start-SeatMapServer missing: stderr names expected path' (Test-TextContains $missingServer.StdErr $livePath) $livePath $missingServer.StdErr
     Assert-True 'A5 Start-SeatMapServer missing: stderr names Init' (Test-TextContains $missingServer.StdErr 'Init') 'Init' $missingServer.StdErr
     Assert-True 'A5 Start-SeatMapServer did not hang' (-not $missingServer.TimedOut) 'TimedOut=false' ([string]$missingServer.TimedOut)
 
@@ -213,6 +252,20 @@ try {
     Assert-True 'A1: exit 0' ($a1.ExitCode -eq 0) '0' ([string]$a1.ExitCode)
     Assert-True 'A1: Validating seat map at: <resolved-path>' (Test-TextContains $a1.StdOut $a1At) $a1At $a1.StdOut
     Assert-True 'A1: resolved workspace id' (Test-TextContains $a1.StdOut $wsId) $wsId $a1.StdOut
+
+    # --- positive worktree/default: workspace.json names the primary checkout ---
+    $primaryRoot = Get-PrimaryWorktreePath -RepoRoot $repoRoot
+    $wtHome = Join-Path $isoHome 'worktree-default'
+    $wtWsId = [guid]::NewGuid().ToString()
+    $wtWsDir = New-WorkspaceDir -HomeDir $wtHome -WorkspaceId $wtWsId -RepoRootHint $primaryRoot
+    Write-NoteStubs -WsDir $wtWsDir
+    $wtLivePath = Join-Path $wtWsDir 'seat-map.json'
+    Copy-Item -LiteralPath $examplePath -Destination $wtLivePath
+    $wtDefault = Invoke-IsolatedPwsh -HomeDir $wtHome -File $syncScript -ArgumentList @('-Validate')
+    $wtAt = "Validating seat map at: $wtLivePath"
+    Assert-True 'worktree/default: exit 0' ($wtDefault.ExitCode -eq 0) '0' ([string]$wtDefault.ExitCode)
+    Assert-True 'worktree/default: Validating seat map at: <livePath>' (Test-TextContains $wtDefault.StdOut $wtAt) $wtAt $wtDefault.StdOut
+    Assert-True 'worktree/default: resolved workspace id' (Test-TextContains $wtDefault.StdOut $wtWsId) $wtWsId $wtDefault.StdOut
 
     # --- override: explicit -SeatMapPath beats workspace discovery ---
     Remove-Item -LiteralPath $livePath -Force
@@ -248,6 +301,8 @@ try {
         '-WhatIf'
     )
     $porcelainAfter = Get-Porcelain
+    $allCombined = "$($all.StdOut)`n$($all.StdErr)"
+    Assert-True 'A3: Sync -All exit 0' ($all.ExitCode -eq 0) '0' ("exit=$($all.ExitCode)`n$allCombined")
     Assert-True 'A3: Test-ModelProbe -WhatIf exit 0' ($whatIf.ExitCode -eq 0) '0' ([string]$whatIf.ExitCode)
     Assert-True 'A3: git status --porcelain unchanged by Sync -All and probe -WhatIf' ($porcelainBefore -eq $porcelainAfter) $porcelainBefore $porcelainAfter
     if ([string]::IsNullOrWhiteSpace($porcelainBefore)) {
@@ -258,27 +313,44 @@ try {
     }
     # Portal-swap live-server leg is a post-merge manual step; same write helper.
 
-    # --- zero-workspace resolution -> A5, non-zero, no bind-time throw ---
+    # --- zero-workspace resolution failure (not A5 Init) ---
     $zeroHome = Join-Path $isoHome 'zero-ws'
     New-Item -ItemType Directory -Path (Join-Path $zeroHome '.maestri' 'workspaces') -Force | Out-Null
-    $zeroExpected = Join-Path $zeroHome '.maestri' 'workspaces' '<id>' 'seat-map.json'
     $zero = Invoke-IsolatedPwsh -HomeDir $zeroHome -File $syncScript -ArgumentList @('-Validate')
     Assert-True 'zero-workspace: exit non-zero' ($zero.ExitCode -ne 0) 'non-zero' ([string]$zero.ExitCode)
-    Assert-True 'zero-workspace: stderr names expected path' (Test-TextContains $zero.StdErr $zeroExpected) $zeroExpected $zero.StdErr
-    Assert-True 'zero-workspace: stderr names Init' (Test-TextContains $zero.StdErr 'Init') 'Init' $zero.StdErr
+    Assert-True 'zero-workspace: stderr names resolution failure' (Test-TextContains $zero.StdErr 'Seat map workspace could not be resolved:') 'Seat map workspace could not be resolved:' $zero.StdErr
+    Assert-True 'zero-workspace: stderr names no-workspaces reason' (Test-TextContains $zero.StdErr 'No Maestri workspaces under') 'No Maestri workspaces under' $zero.StdErr
+    Assert-True 'zero-workspace: stderr names WorkspaceId remedy' (Test-TextContains $zero.StdErr '-WorkspaceId') '-WorkspaceId' $zero.StdErr
+    Assert-True 'zero-workspace: stderr names SeatMapPath remedy' (Test-TextContains $zero.StdErr '-SeatMapPath') '-SeatMapPath' $zero.StdErr
+    Assert-True 'zero-workspace: stderr omits Init' (-not (Test-TextContains $zero.StdErr 'Init')) 'no Init' $zero.StdErr
     Assert-True 'zero-workspace: no bind-time throw' (-not (Test-BindTimeThrow $zero.StdOut $zero.StdErr)) 'no ParameterBindingException' "$($zero.StdOut)$($zero.StdErr)"
 
-    # --- two-workspace (both match) resolution -> A5, non-zero, no bind-time throw ---
+    # --- two-workspace (both match) resolution failure (not A5 Init) ---
     $twoHome = Join-Path $isoHome 'two-ws'
     $twoA = New-WorkspaceDir -HomeDir $twoHome -WorkspaceId ([guid]::NewGuid().ToString()) -RepoRootHint $repoRoot
     $twoB = New-WorkspaceDir -HomeDir $twoHome -WorkspaceId ([guid]::NewGuid().ToString()) -RepoRootHint $repoRoot
     $null = $twoA; $null = $twoB
-    $twoExpected = Join-Path $twoHome '.maestri' 'workspaces' '<id>' 'seat-map.json'
     $two = Invoke-IsolatedPwsh -HomeDir $twoHome -File $syncScript -ArgumentList @('-Validate')
     Assert-True 'two-workspace: exit non-zero' ($two.ExitCode -ne 0) 'non-zero' ([string]$two.ExitCode)
-    Assert-True 'two-workspace: stderr names expected path' (Test-TextContains $two.StdErr $twoExpected) $twoExpected $two.StdErr
-    Assert-True 'two-workspace: stderr names Init' (Test-TextContains $two.StdErr 'Init') 'Init' $two.StdErr
+    Assert-True 'two-workspace: stderr names resolution failure' (Test-TextContains $two.StdErr 'Seat map workspace could not be resolved:') 'Seat map workspace could not be resolved:' $two.StdErr
+    Assert-True 'two-workspace: stderr names multiple-workspaces reason' (Test-TextContains $two.StdErr 'Multiple Maestri workspaces match this repo') 'Multiple Maestri workspaces match this repo' $two.StdErr
+    Assert-True 'two-workspace: stderr names WorkspaceId remedy' (Test-TextContains $two.StdErr '-WorkspaceId') '-WorkspaceId' $two.StdErr
+    Assert-True 'two-workspace: stderr names SeatMapPath remedy' (Test-TextContains $two.StdErr '-SeatMapPath') '-SeatMapPath' $two.StdErr
+    Assert-True 'two-workspace: stderr omits Init' (-not (Test-TextContains $two.StdErr 'Init')) 'no Init' $two.StdErr
     Assert-True 'two-workspace: no bind-time throw' (-not (Test-BindTimeThrow $two.StdOut $two.StdErr)) 'no ParameterBindingException' "$($two.StdOut)$($two.StdErr)"
+
+    # --- repo-root-mismatch: one workspace whose hint names a different repo ---
+    $mismatchHome = Join-Path $isoHome 'mismatch-ws'
+    $mismatchWs = New-WorkspaceDir -HomeDir $mismatchHome -WorkspaceId ([guid]::NewGuid().ToString()) -RepoRootHint 'F:/Dev/not-this-harness-repo'
+    $null = $mismatchWs
+    $mismatch = Invoke-IsolatedPwsh -HomeDir $mismatchHome -File $syncScript -ArgumentList @('-Validate')
+    Assert-True 'repo-root-mismatch: exit non-zero' ($mismatch.ExitCode -ne 0) 'non-zero' ([string]$mismatch.ExitCode)
+    Assert-True 'repo-root-mismatch: stderr names resolution failure' (Test-TextContains $mismatch.StdErr 'Seat map workspace could not be resolved:') 'Seat map workspace could not be resolved:' $mismatch.StdErr
+    Assert-True 'repo-root-mismatch: stderr names mismatch reason' (Test-TextContains $mismatch.StdErr 'Repo-root hint matched no Maestri workspace') 'Repo-root hint matched no Maestri workspace' $mismatch.StdErr
+    Assert-True 'repo-root-mismatch: stderr names WorkspaceId remedy' (Test-TextContains $mismatch.StdErr '-WorkspaceId') '-WorkspaceId' $mismatch.StdErr
+    Assert-True 'repo-root-mismatch: stderr names SeatMapPath remedy' (Test-TextContains $mismatch.StdErr '-SeatMapPath') '-SeatMapPath' $mismatch.StdErr
+    Assert-True 'repo-root-mismatch: stderr omits Init' (-not (Test-TextContains $mismatch.StdErr 'Init')) 'no Init' $mismatch.StdErr
+    Assert-True 'repo-root-mismatch: no bind-time throw' (-not (Test-BindTimeThrow $mismatch.StdOut $mismatch.StdErr)) 'no ParameterBindingException' "$($mismatch.StdOut)$($mismatch.StdErr)"
 
     # --- swap-log workspaceId (isolated HOME; helper write) ---
     $swapWriter = Join-Path $isoHome 'write-swap.ps1'
@@ -298,6 +370,16 @@ try {
 finally {
     if (Test-Path -LiteralPath $isoHome) {
         Remove-Item -LiteralPath $isoHome -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    if (-not $hadWorktreeMaestri) {
+        if (Test-Path -LiteralPath $worktreeMaestri) {
+            Remove-Item -LiteralPath $worktreeMaestri -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    elseif (-not $hadWorktreeRoles) {
+        if (Test-Path -LiteralPath $worktreeRoles) {
+            Remove-Item -LiteralPath $worktreeRoles -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
