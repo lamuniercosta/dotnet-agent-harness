@@ -231,8 +231,8 @@ do not have is worse than one you know is missing.
 The harness installs `.codex/hooks.json` with four protections:
 
 - `secret-scan.ps1` warns when a submitted prompt contains a credential shape;
-- `guard.ps1` blocks the narrow set of destructive shell commands and protected
-  file writes listed under [Non-negotiables](#non-negotiables);
+- `guard.ps1` blocks the narrow set of destructive shell commands, writes outside
+  session worktree boundary, and protected file writes listed under [Non-negotiables](#non-negotiables);
 - `format-on-edit.ps1` formats edited C# files; and
 - `gate-nudge.ps1` reminds the agent that analyzer gates remain pending.
 
@@ -265,8 +265,7 @@ The harness generates seven named profiles under `.codex/agents/`: `gate-runner`
 `code-scout`, `edit-applier`, `test-writer`, `mutation-analyst`, `code-reviewer`,
 and `security-reviewer`. Their model and reasoning effort come from the profile's
 tier in `harness.yml`; inherited fields fall back to Codex's configured default.
-`code-scout` overlaps with Codex's built-in `explorer` without replacing it. A
-consumer who prefers the built-in can remove the generated `code-scout` profile.
+`code-scout` overlaps Codex's built-in `explorer`. A consumer can remove `code-scout`.
 
 ### MCP servers need the project trusted
 

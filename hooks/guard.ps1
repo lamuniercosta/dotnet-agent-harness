@@ -12,7 +12,8 @@
                   deletion of a protected branch via push (--delete/-d or a
                   `:dst` refspec), git reset --hard to a remote ref, and
                   `git checkout -- .` over a dirty tree.
-    Edit/Write  - writes inside node_modules, bin, obj, or .git.
+    Edit/Write  - writes outside session worktree boundary or inside node_modules,
+                  bin, obj, or .git.
 
   IMPLEMENTATION NOTE - this is the whole reason the hook is PowerShell rather
   than a shell script. The version this was ported from extracted the command
@@ -106,6 +107,80 @@ function Get-ApplyPatchPaths {
         }
     }
     return $paths
+}
+
+function Resolve-HookPath {
+    param([string]$Path, $Payload, $ToolInput)
+    try {
+        if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+
+        $cwd = Get-Prop $Payload @('cwd', 'working_directory', 'workingDirectory')
+        if (-not $cwd) { $cwd = Get-Prop $ToolInput @('cwd', 'working_directory', 'workingDirectory') }
+
+        if (-not [string]::IsNullOrWhiteSpace($cwd)) {
+            $base = [System.IO.Path]::GetFullPath($cwd)
+            return [System.IO.Path]::GetFullPath($Path, $base)
+        }
+        if ([System.IO.Path]::IsPathRooted($Path)) {
+            return [System.IO.Path]::GetFullPath($Path)
+        }
+        return $null
+    } catch {
+        return $null
+    }
+}
+
+function Get-WorktreeBoundary {
+    param([string]$Cwd)
+    try {
+        if ([string]::IsNullOrWhiteSpace($Cwd)) { return $null }
+
+        $output = & git -C $Cwd rev-parse --show-toplevel 2>$null
+        if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace("$output")) { return $null }
+
+        $full = [System.IO.Path]::GetFullPath("$output".Trim())
+        $normalized = ($full -replace '\\', '/').TrimEnd('/')
+        if ([string]::IsNullOrWhiteSpace($normalized)) { return $null }
+        return $normalized
+    } catch {
+        return $null
+    }
+}
+
+function Get-CachedWorktreeBoundary {
+    param($Payload, $ToolInput)
+    if ($script:WorktreeBoundaryResolved) { return $script:WorktreeBoundary }
+
+    $cwd = Get-Prop $Payload @('cwd', 'working_directory', 'workingDirectory')
+    if (-not $cwd) { $cwd = Get-Prop $ToolInput @('cwd', 'working_directory', 'workingDirectory') }
+    $script:WorktreeBoundary = Get-WorktreeBoundary $cwd
+    $script:WorktreeBoundaryResolved = $true
+    return $script:WorktreeBoundary
+}
+
+function Deny-OutsideBoundary {
+    param([string]$Path, [string]$Boundary, $Payload, $ToolInput)
+    try {
+        if ([string]::IsNullOrWhiteSpace($Boundary)) { return }
+
+        $resolved = Resolve-HookPath $Path $Payload $ToolInput
+        if ([string]::IsNullOrWhiteSpace($resolved)) { return }
+
+        $resolved = ($resolved.Trim() -replace '\\', '/')
+        $comparison = if ($IsWindows) {
+            [StringComparison]::OrdinalIgnoreCase
+        } else {
+            [StringComparison]::Ordinal
+        }
+
+        $isEqual = [string]::Equals($resolved, $Boundary, $comparison)
+        $isInside = $resolved.StartsWith("$Boundary/", $comparison)
+        if (-not $isEqual -and -not $isInside) {
+            Deny "writing outside the session worktree boundary ($Boundary). Edit files inside your working copy."
+        }
+    } catch {
+        return
+    }
 }
 
 function Split-ShellSegments {
@@ -350,6 +425,8 @@ if (-not $tool) { Allow }
 # NB: not $input - that is a reserved automatic variable, and assigning to it
 # silently yields the pipeline enumerator rather than the value assigned.
 $toolInput = Get-Prop $payload @('tool_input', 'toolInput', 'input', 'arguments')
+$script:WorktreeBoundary = $null
+$script:WorktreeBoundaryResolved = $false
 
 switch -Regex ($tool) {
 
@@ -393,13 +470,17 @@ switch -Regex ($tool) {
     '^(Edit|Write|MultiEdit|create_file|edit_file|search_replace)$' {
         $file = Get-Prop $toolInput @('file_path', 'filePath', 'path', 'target_file')
         if ([string]::IsNullOrWhiteSpace($file)) { Allow }
+        $boundary = Get-CachedWorktreeBoundary $payload $toolInput
+        Deny-OutsideBoundary $file $boundary $payload $toolInput
         Deny-ProtectedPath $file
         Allow
     }
 
     '^apply_patch$' {
         $cmd = Get-Prop $toolInput @('command', 'cmd')
+        $boundary = Get-CachedWorktreeBoundary $payload $toolInput
         foreach ($file in (Get-ApplyPatchPaths $cmd)) {
+            Deny-OutsideBoundary $file $boundary $payload $toolInput
             Deny-ProtectedPath $file
         }
         Allow

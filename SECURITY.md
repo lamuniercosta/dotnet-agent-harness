@@ -39,7 +39,7 @@ Read them before running them, as you would any script from the internet.
 **The `guard.ps1` hook is a safety net, not a sandbox.** It blocks a specific
 list of destructive commands — `rm -rf` of a root or home target, force-push to
 a protected branch, deletion of a protected branch via push, `git reset --hard`
-to a remote ref, writes into `.git` or build output. It is deliberately narrow, it is not a security boundary, and it
+to a remote ref, writes outside session worktree boundary, writes into `.git` or build output. It is deliberately narrow, it is not a security boundary, and it
 will not stop a determined or novel command. Do not rely on it as your only
 protection; your editor's own permission controls are the real gate.
 

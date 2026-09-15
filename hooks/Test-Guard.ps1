@@ -36,8 +36,18 @@ function Assert-Allowed {
 }
 
 function Bash { param([string]$Cmd) (@{ tool_name = 'Bash'; tool_input = @{ command = $Cmd } } | ConvertTo-Json -Compress -Depth 5) }
-function Edit { param([string]$Path) (@{ tool_name = 'Edit'; tool_input = @{ file_path = $Path } } | ConvertTo-Json -Compress -Depth 5) }
-function Apply-Patch { param([string]$Command) (@{ tool_name = 'apply_patch'; tool_input = @{ command = $Command } } | ConvertTo-Json -Compress -Depth 5) }
+function Edit {
+    param([string]$Path, [string]$Cwd)
+    $payload = @{ tool_name = 'Edit'; tool_input = @{ file_path = $Path } }
+    if (-not [string]::IsNullOrWhiteSpace($Cwd)) { $payload['cwd'] = $Cwd }
+    $payload | ConvertTo-Json -Compress -Depth 5
+}
+function Apply-Patch {
+    param([string]$Command, [string]$Cwd)
+    $payload = @{ tool_name = 'apply_patch'; tool_input = @{ command = $Command } }
+    if (-not [string]::IsNullOrWhiteSpace($Cwd)) { $payload['cwd'] = $Cwd }
+    $payload | ConvertTo-Json -Compress -Depth 5
+}
 
 Write-Host 'Destructive commands are blocked:'
 Assert-Blocked 'rm -rf /'                (Bash 'rm -rf /')
@@ -149,6 +159,20 @@ Assert-Allowed 'edit source'          (Edit '/repo/src/Api/Program.cs')
 Assert-Allowed 'edit a file named bing.cs' (Edit '/repo/src/bing.cs')
 Assert-Allowed 'patch source'         (Apply-Patch "*** Begin Patch`n*** Update File: src/Api/Program.cs`n*** End Patch")
 Assert-Allowed 'unparseable payload'  'not json at all'
+
+Write-Host ''
+Write-Host 'Worktree CWD boundary:'
+$outside = if ($IsWindows) { 'C:\outside\file.cs' } else { '/outside/file.cs' }
+$nonGitCwd = if ($IsWindows) { $env:TEMP } else { '/tmp' }
+$sessionCwd = $PSScriptRoot
+$insideAbsolute = Join-Path $PSScriptRoot 'guard.ps1'
+Assert-Blocked 'absolute path outside git toplevel' (Edit $outside -Cwd $sessionCwd)
+Assert-Blocked 'apply_patch outside git toplevel' (Apply-Patch "*** Begin Patch`n*** Add File: $outside`n*** End Patch" -Cwd $sessionCwd)
+Assert-Blocked 'relative ../../ escape' (Edit '../../outside.cs' -Cwd $sessionCwd)
+Assert-Allowed 'path inside git toplevel' (Edit $insideAbsolute -Cwd $sessionCwd)
+Assert-Allowed 'relative path inside git toplevel' (Edit 'guard.ps1' -Cwd $sessionCwd)
+Assert-Allowed 'outside path without CWD' (Edit $outside)
+Assert-Allowed 'non-git TEMP or /tmp CWD' (Edit $outside -Cwd $nonGitCwd)
 
 Write-Host ''
 if ($failures -gt 0) {
