@@ -56,6 +56,31 @@
     .rung code { font-size: 0.7rem; color: var(--muted); display: block; margin-top: 0.2rem; word-break: break-all; }
     .badge { font-size: 0.65rem; font-weight: 700; letter-spacing: 0.04em; padding: 0.1rem 0.4rem; border: 1px solid var(--border); border-radius: 999px; }
     #toast { min-height: 1.2rem; font-size: 0.8rem; color: var(--muted); margin: 0.5rem 0 1rem; }
+    .cmd { display: flex; gap: 0.5rem; align-items: center; margin-top: 0.5rem; }
+    .cmd input {
+      flex: 1;
+      min-width: 0;
+      font-family: ui-monospace, monospace;
+      font-size: 0.7rem;
+      color: var(--fg);
+      background: #0b1220;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.35rem 0.5rem;
+    }
+    .cmd button {
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--bg);
+      background: var(--accent);
+      border: 0;
+      border-radius: 6px;
+      padding: 0.35rem 0.7rem;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #apply { display: none; margin-bottom: 1rem; }
+    #apply.show { display: block; }
   </style>
 </head>
 <body>
@@ -68,6 +93,13 @@
     <div class="stat"><div class="label">ZEN floors</div><div class="n" id="cZen">–</div><div id="bZen" class="muted"></div></div>
   </div>
   <div id="toast"></div>
+  <section id="apply" class="card">
+    <div class="muted" id="applyNote"></div>
+    <div class="cmd">
+      <input id="applyCmd" type="text" readonly spellcheck="false">
+      <button type="button" id="applyCopy">Copy</button>
+    </div>
+  </section>
   <main id="grid" class="grid"></main>
   <script>
     const token = document.querySelector('meta[name="seat-map-token"]').getAttribute('content');
@@ -79,11 +111,36 @@
       el.className = cls || '';
     }
 
+    function recruitCommand(seat, rung) {
+      const cell = (seat.rungs || {})[rung] || {};
+      return `maestri recruit "${seat.codename}" --preset "${seat.preset || ''}" --command "${cell.launch || ''}" --replace "${seat.codename}"`;
+    }
+
+    async function copyText(text, input) {
+      try {
+        await navigator.clipboard.writeText(text);
+        toast('Copied. Paste it in the Maestro terminal.', 'ok');
+      } catch (_) {
+        if (input) { input.focus(); input.select(); }
+        toast('Clipboard blocked; the command is selected, press Ctrl+C.', 'bad');
+      }
+    }
+
+    function showApply(cmd, note) {
+      const panel = document.getElementById('apply');
+      document.getElementById('applyCmd').value = cmd;
+      document.getElementById('applyNote').textContent = note;
+      panel.classList.add('show');
+    }
+
     function poolOf(seat, rung) {
       return seat.rungs && seat.rungs[rung] ? seat.rungs[rung].pool : '';
     }
 
-    function updateStats(seats) {
+    function updateStats(seats, limits) {
+      const maxCursor = limits.maxCursorHeads ?? 3;
+      const maxAgy = limits.maxAgyGHeads ?? 3;
+      const minGem = limits.minGeminiHeads ?? 1;
       const inv = { cursor: 0, agy: 0, gem: 0, zen: 0 };
       seats.forEach(s => {
         if (poolOf(s, 'head') === 'CURSOR') inv.cursor++;
@@ -100,9 +157,9 @@
         el.textContent = ok ? okText : badText;
         el.className = ok ? 'ok' : 'bad';
       };
-      set('bCursor', inv.cursor <= 2, '≤2 OK', 'over 2');
-      set('bAgy', inv.agy <= 1, '≤1 OK', 'over 1');
-      set('bGem', inv.gem >= 1, '≥1 OK', 'need ≥1');
+      set('bCursor', inv.cursor <= maxCursor, `≤${maxCursor} OK`, `over ${maxCursor}`);
+      set('bAgy', inv.agy <= maxAgy, `≤${maxAgy} OK`, `over ${maxAgy}`);
+      set('bGem', inv.gem >= minGem, `≥${minGem} OK`, `need ≥${minGem}`);
       set('bZen', inv.zen <= 1, 'Quill excepted', 'too many ZEN floors');
     }
 
@@ -128,10 +185,18 @@
         card.innerHTML = `<div><span class="codename">${seat.codename}</span>
           <span class="muted"> · ${seat.name}</span></div>
           <div class="muted">${seat.preset || ''} · activeRung=${active}</div>
-          ${rungs}`;
+          ${rungs}
+          <div class="cmd">
+            <input type="text" readonly spellcheck="false" value="${recruitCommand(seat, active).replace(/"/g, '&quot;')}">
+            <button type="button" data-copy="${seat.id}">Copy</button>
+          </div>`;
+        card.querySelector('button[data-copy]').addEventListener('click', ev => {
+          const input = ev.currentTarget.parentElement.querySelector('input');
+          copyText(input.value, input);
+        });
         grid.appendChild(card);
       });
-      updateStats(map.seats || []);
+      updateStats(map.seats || [], map.invariants || {});
       grid.querySelectorAll('.rung').forEach(el => {
         el.addEventListener('click', () => selectRung(el.dataset.seat, el.dataset.rung));
       });
@@ -159,8 +224,17 @@
         return;
       }
       toast(`activeRung ${data.seat} → ${data.activeRung}`, 'ok');
+      const note = data.liveSwapped
+        ? `${data.seat}: recruit --replace ran from this terminal. Command kept here in case you need to rerun it.`
+        : `${data.seat}: map, roles and notes updated. The terminal was not replaced; paste this in the Maestro terminal.`;
+      showApply(data.recruitCommand || recruitCommand({ codename: data.seat, preset: '', rungs: { [data.activeRung]: { launch: data.launch } } }, data.activeRung), note);
       await load();
     }
+
+    document.getElementById('applyCopy').addEventListener('click', () => {
+      const input = document.getElementById('applyCmd');
+      copyText(input.value, input);
+    });
 
     load().catch(err => toast(String(err), 'bad'));
   </script>

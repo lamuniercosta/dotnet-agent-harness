@@ -155,8 +155,8 @@ if ($SyncRoles -or $All) {
             }
             $roleJson = Get-Content -LiteralPath $roleFile -Raw | ConvertFrom-Json
             $chainLine = Get-ModelChainLine -Seat $s
-            if ($roleJson.prompt -match 'Model chain \(best first\):.+?\(FLOOR\)\.') {
-                $roleJson.prompt = Replace-LiteralRegex -InputText $roleJson.prompt -Pattern 'Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $chainLine
+            if ($roleJson.prompt -match '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
+                $roleJson.prompt = Replace-LiteralRegex -InputText $roleJson.prompt -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $chainLine
                 Save-SeatMap -Map $roleJson -Path $roleFile
                 Write-Host "  Updated role for $($s.codename) ($($s.name))" -ForegroundColor Green
             } else {

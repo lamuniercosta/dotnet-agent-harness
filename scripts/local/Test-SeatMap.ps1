@@ -18,6 +18,7 @@ if (-not (Test-Path -LiteralPath $SeatMapPath)) {
 $seatMap = Get-Content -LiteralPath $SeatMapPath -Raw | ConvertFrom-Json
 
 # PF1: charter policy is pinned here, not taken from the JSON under test.
+# 2026-09-15: Cursor and AGY-G head quotas raised from 2/1 to 3/3 (operator decision; Anvil, Gauge and Rigger head on Cursor, Cog and Compass on AGY-G).
 # The invariants block stays informational; editing its thresholds must not
 # green the gate.
 $failures = [System.Collections.Generic.List[string]]::new()
@@ -39,11 +40,11 @@ $zenExRaw = Get-InvariantValue -Object $inv -Name 'zenFloorExceptions'
 $zenEx = @()
 if ($null -ne $zenExRaw) { $zenEx = @($zenExRaw) }
 
-if ($null -eq $maxCursor -or [int]$maxCursor -ne 2) {
-    $failures.Add("Charter policy pin: maxCursorHeads must be 2 (JSON has '$maxCursor').")
+if ($null -eq $maxCursor -or [int]$maxCursor -ne 3) {
+    $failures.Add("Charter policy pin: maxCursorHeads must be 3 (JSON has '$maxCursor').")
 }
-if ($null -eq $maxAgy -or [int]$maxAgy -ne 1) {
-    $failures.Add("Charter policy pin: maxAgyGHeads must be 1 (JSON has '$maxAgy').")
+if ($null -eq $maxAgy -or [int]$maxAgy -ne 3) {
+    $failures.Add("Charter policy pin: maxAgyGHeads must be 3 (JSON has '$maxAgy').")
 }
 if ($null -eq $minGemini -or [int]$minGemini -ne 1) {
     $failures.Add("Charter policy pin: minGeminiHeads must be 1 (JSON has '$minGemini').")
