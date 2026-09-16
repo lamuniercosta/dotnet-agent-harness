@@ -1,0 +1,276 @@
+﻿[lines 1-275 of 275]
+1	# team-restart
+2	
+3	Run this when a task is finished and the team is about to start fresh. It
+4	clears every seat's context. The task's notes are already gone — step 9.5 of
+5	`task-pipeline` deletes them. It does **not**
+6	re-recruit and does **not** rewrite roles — terminals, role assignments and
+7	the connections are durable and already correct.
+8	
+9	You must be the Maestro to run this. Confirm with `maestri list`.
+10	
+11	**In a chain** (see `task-chain`) you run this note yourself between tasks,
+12	sections 1 to 4 only. Section 5 waits until the chain ends: you are the
+13	chain's continuity, and clearing yourself mid-chain is how a chain gets lost.
+14	
+15	## 1. Confirm the canvas is clear
+16	
+17	The task's notes should already be gone. Step 9.5 of `task-pipeline` publishes
+18	the plan to the ticket and then deletes every note for the task, before you
+19	get here. Your job is to check that it happened, not to redo it:
+20	
+21	    maestri list
+22	
+23	If the fichário "Task notes" holds anything besides `task-notes-keeper`, or
+24	any `task-DEV-###`, `plan-DEV-###`, `findings-*`, `recon-*`,
+25	`adjudication-*`, `merge-bar-*`, `pr-body-*` or `trust-*` note is loose on
+26	the canvas, step 9.5 did not complete. **Stop and finish it** — publish the plan to the ticket,
+27	verify the comment matches the note byte for byte, then delete. Do not archive
+28	them, and do not restart the team around them. A note that survives a restart
+29	is a note that resurfaces in the next task, and the next task is not entitled
+30	to the last one's context.
+31	
+32	Leave `harness-team-charter`, `task-pipeline`, `team-restart`, `task-chain`,
+33	the fichário "Active notes", `task-notes-keeper` and the fichário "Task
+34	notes" itself alone. They are standing, not task notes; the keeper is what
+35	keeps the seats' wiring to "Task notes" alive between tasks. In a chain,
+36	`chain` is standing too, until the chain's last reap.
+37	
+38	## 2. Clear each seat's context
+39	
+40	There is no `maestri clear`. Clearing means sending the host's own clear
+41	command to the terminal as keystrokes, and the hosts do not agree on what
+42	that is.
+43	
+44	| Seat | Host | What works | What does not (observed 2026-09-11) |
+45	| --- | --- | --- | --- |
+46	| Keel | `codex` | `recruit --replace` with the full launch line | `/clear` and `/new` sent as keystrokes were not consumed |
+47	| Wisp | `gemini` | `recruit --replace` | `/clear` unverified — do not rely on it |
+48	| Anvil, Gauge | cursor `agent` | `recruit --replace` | `/clear` not observed clearing |
+49	| Quill, Compass | `agy` | `recruit --replace` | no `/clear` command exists |
+50	| Cog, Ledger | `junie` | `recruit --replace` | `/new` is read as a task prompt ("The user provided /new but no DEV-### task id") |
+51	| Sentry, Rigger | `opencode` | `recruit --replace` | `/new` is treated as prompt text |
+52	
+53	No host's clear keystroke is verified. Clear every seat with
+54	`maestri recruit "<Seat>" --replace "<Seat>" --command "<full launch line from the table below>"`;
+55	the keystroke path is kept only for the day a host is confirmed to honour it.
+56	
+57	For a host whose clear command is confirmed:
+58	
+59	    maestri ask "Keel" --raw "/clear
+60	"
+61	
+62	Confirm by looking at the terminal: a fresh prompt with no prior turns visible.
+63	If the clear did not take, use the fallback.
+64	
+65	**Use `maestri check "Seat"` to confirm a clear.** It reads the seat's current
+66	terminal output without sending input. Confirm a fresh prompt with no prior
+67	turns visible, and do not treat unsent text in the TUI input area as a completed
+68	clear.
+69	
+70	**Universal fallback.** Works on any host. It kills the agent process and
+71	relaunches it in the same terminal, so the terminal node, its role assignment
+72	and every connection survive untouched:
+73	
+74	    maestri ask "Anvil" --raw "\x03"
+75	    maestri ask "Anvil" --raw "\x03"
+76	    maestri ask "Anvil" --raw "<launch command>
+77	"
+78	
+79	Launch commands, for the fallback. These are the seat **heads** from
+80	`SEAT-CHARTER.md` (2026-09-11); the full chain per seat lives in its role
+81	record:
+82	
+83	| Seat | Launch command |
+84	| --- | --- |
+85	| Dudamel | `codex --model gpt-5.6-luna -c model_reasoning_effort=xhigh --dangerously-bypass-approvals-and-sandbox` |
+86	| Keel | `codex --model gpt-5.5 -c model_reasoning_effort=medium --dangerously-bypass-approvals-and-sandbox` |
+87	| Anvil | `agent --model cursor-grok-4.6-high --trust` |
+88	| Cog | `agent --model composer-2.5 --trust` |
+89	| Wisp | `gemini -m gemini-3.1-flash-lite --yolo` |
+90	| Gauge | `opencode --model opencode/muse-spark-1.3-contributor-free --auto` |
+91	| Sentry | `opencode --model openrouter/z-ai/glm-5.3-flash --auto` |
+92	| Ledger | `codex --model gpt-5.6-luna -c model_reasoning_effort=high --dangerously-bypass-approvals-and-sandbox` |
+93	| Compass | `agy --model gemini-3.8-flash-high --dangerously-skip-permissions` |
+94	| Quill | `agy --model claude-sonnet-4-6 --dangerously-skip-permissions` |
+95	| Rigger | `agent --model gpt-5.4-nano-high --trust` |
+96	
+97	Things that table will not tell you, and that have each cost a run:
+98	
+99	- **Cog carries no `--effort` flag on purpose.** Junie parses it and ignores
+100	  it -- see below. A flag in the launch line that does nothing reads like the
+101	  effort is set when it is not.
+102	- **Both OpenCode seats now run the same model.** `opencode.jsonc` holds a
+103	  single global `model` shared by every OpenCode seat; Sentry and Rigger are
+104	  both on `openrouter/z-ai/glm-5.3-flash`, so nothing differs today. The day
+105	  one of them drops to its replacement, that seat **must** carry `--model` or
+106	  it silently comes up on the other's model. `-m` is the short form and is a
+107	  global flag on the TUI command, not just on `run`.
+108	- **`agy` has no `--auto` and no `--trust`.** There is no flag that grants
+109	  Quill or Compass permission; grants live in
+110	  `~/.gemini/antigravity-cli/settings.json` under `permissions.allow`, as
+111	  directory-form `read_file(<abs dir>)` / `write_file(<abs dir>)` pairs.
+112	  Containment is real, not string-prefix: the repo grant does **not** cover
+113	  the sibling `F:\Dev\dotnet-agent-harness.worktrees`, which needs its own
+114	  pair and is why Quill used to halt mid-task on a permission prompt. Both
+115	  pairs are in place as of 2026-09-08. Compass is read-only and needs only the
+116	  read pair, which it already has. If an agy seat still prompts, `--mode
+117	  accept-edits` exists on the launch line, but fix the grant first.
+118	- **Ledger's effort is in Junie's settings, not on the launch line.** Junie
+119	  ignores `--effort`; `~/.junie/settings.json` -> `effortPerModel` maps
+120	  `gpt-5.6-luna` to `high`. Verify `high` in the status bar after every
+121	  relaunch. Ledger is on Junie to keep the Codex pool for Keel; if Junie's
+122	  credits run dry, its chain falls to `codex -m gpt-5.6-luna` and Keel's
+123	  weekly bar has to carry both.
+124	- **Wisp's `--yolo` is not a licence.** The Scout is read-only by role, and
+125	  the role prompt is what enforces it; the flag exists so the seat does not
+126	  stall on an approval prompt for a `maestri` command. Gemini's
+127	  `--approval-mode plan` blocks shell too, which is why it is not used.
+128	
+129	**Never change a seat's model by keystroke.** Maestri keeps each terminal's
+130	original command in `workspace.json`; interrupting the agent and typing a new
+131	launch line changes what is running but not what is stored, so the seat
+132	silently reverts the next time Maestri starts that terminal. Use:
+133	
+134	    maestri recruit "Seat" --command "<new launch command>" --replace "Seat"
+135	
+136	It restarts the process in the same node and keeps the role assignment,
+137	connections, canvas position and routines. Chat history does not carry over --
+138	which is exactly what you want here. Verify afterwards by reading the model off
+139	the seat's status bar, and confirm the stored command changed in
+140	`workspace.json`.
+141	
+142	**`--replace` without `--command` reuses the stored command, and the stored
+143	command is whatever the last recruit passed** -- not this table. Always pass
+144	`--command` with the full launch line from the table above. After every
+145	recruit, `maestri check "<Seat>"` must show the host's own prompt and the
+146	status-bar model must match the table before the seat receives any ask; if it
+147	does not, recruit again. This table is the source of truth for seating: when
+148	the user re-seats a host by hand, the row here changes in the same breath
+149	(on 2026-09-11 a stale Ledger row put Ledger back on Codex at the first
+150	restart).
+151	
+152	The Ctrl-C fallback below is for **clearing context only**, never for changing
+153	a model.
+154	
+155	**A cursor `--model` leaks to every unpinned cursor seat.** `cursor-agent`
+156	persists the flag to `~/.cursor/cli-config.json`, so it is a global default and
+157	not a per-invocation choice. Both cursor seats above (Anvil, Gauge) are pinned
+158	explicitly, which is what protects them; launching a bare `agent` anywhere on
+159	this machine re-points the file, and any seat that is not pinned picks that up
+160	on its next start. The Conductor's own Cursor floor (`composer-2.5`) is pinned
+161	for the same reason.
+162	
+163	**Junie effort is not settable from the launch line.** `--effort high` and
+164	`--effort=high` are both parsed and both ignored. Effort lives in
+165	`~/.junie/settings.json` under `effortPerModel`, a JSON string mapping model
+166	alias -> low|medium|high. Built-in aliases are keyed bare (`gemini-3.1-flash-lite`);
+167	custom profiles are keyed `custom:<filename>`.
+168	
+169	**A model absent from that map runs at LOW, silently.** Nothing in the UI says
+170	so; the only trace is `Effort=low` in `~/.junie/logs/`. That is why Sentry
+171	dropped when it moved off GLM 5.2 -- the new model simply had no entry. It is
+172	also why DEV-116 got a review from Ledger that cited line ranges which do not
+173	exist: `gpt-5.6-luna` was unmapped. Both it and `gemini-3.1-flash-lite` were
+174	added to the map on 2026-09-05, so Cog's head is mapped; Sentry's replacement
+175	`grok-4.3` must be checked before it is ever used.
+176	
+177	The map is read at process start, so editing it changes nothing until the seat
+178	is restarted. Check the status bar after a relaunch.
+179	
+180	**OpenCode has the same trap in a different place.** Reasoning effort sits at
+181	`provider.openrouter.options.extraBody.reasoning` in
+182	`~/.config/opencode/opencode.jsonc`. Model-level `extraBody` is silently
+183	dropped, so that setting is global across every OpenCode seat at once.
+184	
+185	**When you learn something this note gets wrong, edit it.** The clear commands
+186	above are the intended host commands; Sentry's `/new` was not accepted in
+187	this run and needed the universal fallback. The `agy` and `codex` rows are
+188	unverified as of 2026-09-11 — the first restart that confirms them should
+189	change their status here. Clear verification uses `maestri check "Seat"`; it
+190	reads the current terminal without sending input.
+191	
+192	Require a fresh prompt with no prior turns visible, and do not treat unsent TUI
+193	input as a completed clear.
+194	
+195	That is part of the job, not an optional extra. This note should get faster
+196	every time it runs.
+197	
+198	## 3. Re-anchor every seat
+199	
+200	A cleared agent may or may not still hold its role prompt — that depends on how
+201	Maestri injects it, and it is not safe to assume. What it certainly does **not**
+202	hold is its codename. A model knows its host; nothing in its context tells it
+203	the external label the canvas hung on it. On DEV-116, 5 of 8 seats got the
+204	codename wrong on the first probe -- Quill said "Gemini CLI", Wisp said
+205	"opencode", Ledger and Compass said "Junie", Sentry invented "Bramble", Rigger
+206	said nothing -- while every one of them stated its *role* correctly. The role
+207	prompt had survived the clear. Only the name had not.
+208	
+209	**So assign the codename. Do not probe for it.** Probing harder has never fixed
+210	this and cannot: there is nothing for the seat to remember. Telling all ten who
+211	they are costs one batch and one turn, and everything downstream depends on it
+212	-- the charter requires every ask to open `[from <YourCodename>]`, and a seat
+213	that does not know its own name either omits the tag or invents one, which is
+214	indistinguishable from an unattributed instruction.
+215	
+216	### 3a. Assign the names
+217	
+218	One batch. Expand this template over the table below — one entry per seat, and
+219	tag the batch as coming from you:
+220	
+221	    [from Conductor] You are <Codename>, the <Duty> on this team. That is your name for the rest of this session: open every ask you send with [from <Codename>]. Your role record holds your duties and your model chain -- reread it now. Reply with one line: your name, your duty, and the model your status bar shows.
+222	
+223	| Seat | Codename | Duty to state in the ask |
+224	| --- | --- | --- |
+225	| Thinker | Keel | plan, adjudication, merge bar |
+226	| Builder | Anvil | substantive implementation |
+227	| Mechanic | Cog | mechanical edits and the ripple sweep |
+228	| Scout | Wisp | read-only reconnaissance |
+229	| Verifier | Gauge | gates and ripple verification |
+230	| Challenger | Sentry | adversarial review on the Risk axis |
+231	| Challenger | Ledger | adversarial review on the Standards axis |
+232	| Challenger | Compass | adversarial review on the Spec axis |
+233	| Writer | Quill | PR bodies and round summaries |
+234	| Operator | Rigger | intake, branch, commits, push, PR, cleanup |
+235	
+236	The roster in `harness-team-charter` is the authority for this table. If the two
+237	disagree, the charter wins and this one gets fixed.
+238	
+239	### 3b. Grade the reply on the lane, not the name
+240	
+241	You just supplied the name, so a seat echoing it proves nothing. What the reply
+242	has to show is that the *lane* survived the clear, and that the seat is on its
+243	chain. Three answers are a stop:
+244	
+245	- A seat that states a **different lane's** duties -- Gauge saying it writes
+246	  code, a reviewer saying it adjudicates. Re-point it at its role record before
+247	  it gets work.
+248	- A seat that is **silent or reports its host out of usage**. Rigger was silent
+249	  here and Anvil and Cog both reported Cursor "out of usage" -- that is a dry
+250	  wallet, and under the charter it is a halt, not a re-probe. In a chain, a
+251	  halt here ends the chain (see `task-chain` §4).
+252	- A seat whose reported model appears **nowhere in its chain**. That is a seat
+253	  that reverted to a stored command or a leaked default; fix the command with
+254	  `recruit --replace`, never by keystroke.
+255	
+256	## 4. Do not
+257	
+258	- Do not re-recruit. A full rebuild costs ten terminals and eleven connections
+259	  and risks losing wiring, to gain nothing a clear does not already give you.
+260	- Do not rewrite role records. They are current.
+261	- Do not archive notes, and do not recreate an `Archive` stack. Task notes are
+262	  deleted in step 9.5 of `task-pipeline`; the ticket holds the plan and the PR
+263	  holds the findings.
+264	- Do not touch `harness-team-charter`.
+265	
+266	## 5. Clear yourself last
+267	
+268	Everything above happens before you clear your own context. Then report to the
+269	user: which seats cleared cleanly, which needed the fallback, and any that
+270	failed re-anchoring. The user clears you after reading that report.
+271	
+272	**Not in a chain.** Between chained tasks, stop after section 4, write the
+273	result into the `chain` note, and start the next id. Section 5 runs once, after
+274	the last task's reap (`task-chain` §6).
+275	

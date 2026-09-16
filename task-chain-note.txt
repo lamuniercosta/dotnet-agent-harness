@@ -1,0 +1,234 @@
+﻿[lines 1-233 of 233]
+1	# task-chain
+2	
+3	The standing procedure for running several tasks **one after another** with
+4	no one at the keyboard. The user hands you an ordered list of ids; you return
+5	a PR ready to merge for each, and the team is clean between them. Nothing in
+6	this note replaces `task-pipeline` — every task in the chain runs that note
+7	in full. This note only says what happens at the joints.
+8	
+9	The goal is not throughput. It is to keep the seats moving while the user is
+10	away. One task at a time, always: the team has one Builder, one Verifier and
+11	one Operator, and two tasks in flight would share them, share the canvas, and
+12	share the Conductor's context. A chain is a queue, not a fan-out.
+13	
+14	## 0. Invocation
+15	
+16	    chain DEV-201 DEV-187 DEV-204
+17	
+18	Order is the order. If the user gives ids with no order stated, keep the
+19	order given. Do not reorder for size, for dependency or for wallet — if a
+20	later id depends on an earlier one, that is a block (§4), not a reason to
+21	reshuffle.
+22	
+23	## 1. Open the chain
+24	
+25	Before the first task:
+26	
+27	1. `maestri list`. Every seat present and wired to the fichário "Task
+28	   notes", every standing note present, and "Task notes" holding only
+29	   `task-notes-keeper` -- no
+30	   `task-DEV-*` / `plan-DEV-*` / `findings-*` / `recon-*` / `adjudication-*`
+31	   / `merge-bar-*` / `pr-body-*` / `trust-*` note inside it or loose on the canvas. If there is
+32	   one, the last task did not close; finish `task-pipeline` §9.5 for it
+33	   first. A seat missing the fichário is wired once,
+34	   `maestri connect "Task notes" "<seat>"`, and stays wired.
+35	2. **Prove every id exists** before anything is named after any of them.
+36	   Rigger runs the ticket fetch from `task-pipeline` §1 for each id in the
+37	   list, in one go. One 404 stops the chain before it starts — report which
+38	   id and wait. (DEV-115 reached main because this check ran one task at a
+39	   time and late.)
+40	3. Create the chain note, one line per id, exact name:
+41	
+42	       maestri note create --name "chain" "# chain
+43	       started <ISO timestamp> by Conductor
+44	
+45	       | # | Task | Status | PR | Note |
+46	       |---|---|---|---|---|
+47	       | 1 | DEV-201 | queued | | |
+48	       | 2 | DEV-187 | queued | | |
+49	       | 3 | DEV-204 | queued | | |
+50	       "
+51	
+52	   Statuses, and nothing else: `queued` → `running` → `ready` / `blocked` /
+53	   `halted` → `merged` → `reaped`. `PR` holds the URL once one exists. `Note`
+54	   holds one line: what blocked.
+55	
+56	## 2. Run one task
+57	
+58	Set the task's row to `running`, then run `task-pipeline` §1 through §9.5,
+59	unchanged. The chain changes nothing inside a task: same seats, same
+60	two-round caps, same merge bar, same posting of every review to the PR.
+61	
+62	Two things are stricter in a chain than in a single task:
+63	
+64	- **Non-blocking findings are not left dangling.** Before §9.5 deletes the
+65	  findings notes, every finding that was not fixed is either rejected on the
+66	  PR with a reason, or filed as its own YouTrack ticket and named in the PR's
+67	  round summary. In a single task the user is watching and can catch a
+68	  dropped finding; in a chain nobody is. `task-pipeline` §9.5 already says
+69	  this; here it is a gate, not a reminder.
+70	- **The two-round cap is a hard stop.** A task still red after two fix
+71	  rounds, or a review still unmet after two address rounds, is `blocked`
+72	  (§4). Do not spend a third round because the user is not there to say no.
+73	
+74	- **A turn never ends with the row `running` and nothing armed.** Every
+75	  dispatch is a blocking `maestri ask`. When the host's tool timeout cuts
+76	  it off before the seat answers, do not poll and do not re-send: arm a
+77	  watch routine and end the turn (the Conductor role has the exact form).
+78	  The routine's fire, or the seat's own `[from <Seat>]` ask, is what
+79	  continues the chain — not the user typing "continue". A chain that idles
+80	  because its Conductor ended a turn with work outstanding has failed at
+81	  the one thing it exists for.
+82	
+83	## 3. Close one task
+84	
+85	When `task-pipeline` §9 has notified the user (`DEV-### is ready to merge:
+86	<PR url>`) and §9.5 has left the canvas clean:
+87	
+88	1. Set the row to `ready`, fill the PR URL.
+89	2. Run `team-restart` **§1 to §4** — clear every seat, re-anchor every seat,
+90	   grade the replies. **Do not run §5.** You are the chain.
+91	3. If any seat halts in re-anchoring (dry wallet, off-chain model, wrong
+92	   lane you cannot re-point), the chain is `halted` (§4).
+93	4. **Checkpoint and hand off. The next row does not start in this session.**
+94	   `team-restart` clears every seat but you, and your context is the one
+95	   cost that grows across tasks: on 2026-09-14 one session carried the
+96	   whole chain from 04:18 to 14:42 and reached 439k tokens, at which point
+97	   every ask cost four times what it cost at task one. One task per
+98	   Conductor session. Leave the next row `queued`, confirm
+99	   `maestri routine list` shows nothing enabled, then, in this order:
+100	
+101	       maestri notify "chain checkpoint: DEV-### ready <url>; next DEV-###; Watcher resetting the Conductor"
+102	       maestri ask "Watcher" --raw "[from Conductor] checkpoint DEV-###"
+103	   maestri ask "Watcher" --raw "\x0d"
+104	
+105	   and end the turn with nothing armed. Watcher clears you and sends
+106	   `chain resume`; §7 is the continuation. A `blocked` row (§4) hands off
+107	   the same way. If `maestri list` shows no Watcher, notify the user with
+108	   the same line minus "Watcher resetting the Conductor" and stop.
+109	
+110	Nothing is merged in between. Each task's worktree stays on disk and its
+111	branch stays pushed; the next task branches from `origin/main` after a
+112	`git fetch`, never from the previous task's branch or its PR head. If the
+113	next task cannot be built without a change that is still waiting in an
+114	earlier row's PR, it is a §4 block — a plan that proposes stacking on that
+115	PR is refused, not accepted with a note. (DEV-184 was stacked on DEV-113's
+116	PR #145; the user merged #147 first, and #145 closed empty after hours of
+117	reopen work.)
+118	
+119	## 4. Blocks and halts
+120	
+121	A **block** is task-local. The task stops, the chain continues:
+122	
+123	- the ticket fetch fails (should have been caught in §1, but the API can
+124	  fail mid-chain too);
+125	- the branch already exists (`task-pipeline` §1 says stop; never force);
+126	- the task depends on an earlier chained task that is not merged yet — the
+127	  Scout's reconnaissance (file overlap with an open chain PR) is where this
+128	  shows up, and it is a block the moment it is seen, not after
+129	  implementation collides with it. A plan that names an open PR's branch as
+130	  its base is the same block. The notify names the merge order:
+131	  `maestri notify "DEV-### blocked: depends on PR #N (DEV-###); merge #N, then chain resume"`;
+132	- the two-round cap is hit in §5 or §8 of `task-pipeline`;
+133	- Keel cannot freeze a plan inside the ticket's acceptance criteria (the
+134	  task needs splitting, which is the user's call).
+135	
+136	On a block: first have Rigger commit whatever is on the branch as
+137	`DEV-### - WIP: <reason>` and push it, so the block leaves no uncommitted work
+138	(DEV-113 blocked with 13 modified files and zero commits). Then finish whatever
+139	of §9.5 applies (publish the plan comment if one
+140	was frozen; file the unfixed findings; delete the task's notes), set the row
+141	to `blocked` with a one-line reason, notify the user
+142	(`maestri notify "DEV-### blocked: <reason>; chain continues with DEV-###"`),
+143	run `team-restart` §1–§4, and move on. A blocked task's branch and worktree
+144	stay on disk for the user to look at; do not delete them.
+145	
+146	A **halt** is team-level. The chain stops:
+147	
+148	- a seat reports its host out of usage, or is running a model that appears
+149	  nowhere in its chain and cannot be re-seated with `recruit --replace`;
+150	- `gh` or the YouTrack API refuses writes for two consecutive tasks;
+151	- you cannot tell whether §9.5 completed (a note you cannot see is not a
+152	  note you verified deleted).
+153	
+154	On a halt: leave the current task in whatever state it reached, set its row
+155	to `halted` with the reason, mark every remaining row `queued` (they already
+156	are), notify the user with the full chain table, and stop. Do not clear
+157	yourself. The user resumes with `chain resume` (§7) or ends it.
+158	
+159	## 5. Close the chain
+160	
+161	After the last row is `ready`, `blocked` or `halted`:
+162	
+163	    maestri notify "chain done: DEV-201 ready <url>; DEV-187 ready <url>; DEV-204 blocked <reason>"
+164	
+165	Then stop. **You do not merge.** The chain note stays on the canvas — it is
+166	the only record of which PRs are waiting — until
+167	the user has reported on every row.
+168	
+169	Every `ready` in that line means `task-pipeline` §9's gate held on the pushed
+170	head: `MERGEABLE`, not `BEHIND`, every CI job green. A row that is ready only
+171	on the local bar is not ready, and calling it so costs the user a merge
+172	attempt that fails.
+173	
+174	## 6. After the user reports the merges
+175	
+176	The user says which PRs merged (`merged DEV-201 DEV-187`, or `all merged`).
+177	For each one, Rigger runs `task-pipeline` §10: ticket to Done, local branch
+178	deleted, worktree removed. Set the row to `reaped`. A row the user did not
+179	name stays `ready`; a `blocked` row is reaped only if the user says to.
+180	
+181	**Then re-prove every row still `ready`.** A merge moves `main`, so every
+182	open PR is now `BEHIND` at best and `DIRTY` at worst. For each one, Rigger
+183	runs `task-pipeline` §9's list again — fetch, rebase onto `origin/main`,
+184	conflicts to the owning seat, `--force-with-lease`, `MERGEABLE`,
+185	`gh pr checks --watch` green — and the user is notified again with the same
+186	PR url once it holds. Do not stop, and do not report, while a `ready` row is
+187	`DIRTY`, `BEHIND` or red: after the user's merges, that PR's state is the
+188	team's work, not the user's. (After DEV-113 and DEV-184 merged on
+189	2026-09-12, DEV-110's PR #146 was left with conflicts and a red `lint` job
+190	while the team reaped the other two.)
+191	
+192	When no row is left in `ready` — every one is `reaped`, or `blocked` /
+193	`halted` and acknowledged — copy the chain table into your final report to
+194	the user, delete the `chain` note, and run `team-restart` §5.
+195	
+196	## 7. Resuming a chain
+197	
+198	If you start a session and `maestri list` shows a `chain` note, a chain is
+199	open. Read it. The first row that is `running` is where it stopped: check the
+200	fichário "Task notes" for that task's notes and the repo for its branch and PR, work out
+201	which `task-pipeline` step was reached, and continue from there — or, if you
+202	cannot tell, treat the task as `blocked` with reason `resumed, state
+203	unclear` and go to the next `queued` row. Never restart a `running` task
+204	from §1: its branch exists, and `new-task-branch.ps1` will stop on it.
+205	
+206	`chain resume` from the user means exactly this. Before anything else,
+207	`maestri routine list`: a watch routine left enabled for a task that is no
+208	longer running is disabled first. `chain add DEV-###` appends
+209	rows to an open chain; `chain drop DEV-###` marks a `queued` row `blocked`
+210	with reason `dropped by user` without running it.
+211	
+212	## 8. What the Conductor must not do in a chain
+213	
+214	- **Not clear yourself between tasks.** `team-restart` §5 is once per chain.
+215	- **Not merge.** Ready means ready for the user, and ready means
+216	  `task-pipeline` §9's gate: `MERGEABLE` and every CI job green on the
+217	  pushed head. The local bar alone is not ready.
+218	- **Not end a turn with a row `running` and nothing armed.** A dispatch
+219	  outstanding means a blocking ask in flight or a watch routine enabled;
+220	  otherwise the chain is idle until a human types, which is the failure
+221	  this note exists to prevent.
+222	- **Not accept a plan that stacks.** A base that is not `origin/main` is a
+223	  §4 block, whatever the plan calls it.
+224	- **Not run two tasks at once**, even when one is waiting on a review. The
+225	  wait is the seats' time, not yours to fill.
+226	- **Not paste notes to seats.** The chain runs longer than any single task
+227	  and the transport rule in `task-pipeline` is what keeps your context
+228	  inside the limit: connect the note, name the read, bound the reply.
+229	- **Not widen a task** to absorb a finding, a ripple or a neighbouring
+230	  ticket. File it, name it in the PR, move on.
+231	- **Not delete the `chain` note** before §6 completes. It is the one thing
+232	  on the canvas that is a record, and only until the user has read it.
+233	

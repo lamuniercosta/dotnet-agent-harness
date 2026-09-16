@@ -1,0 +1,388 @@
+﻿[lines 1-387 of 387]
+1	# task-pipeline
+2	
+3	The standing procedure for one task on `dotnet-agent-harness`, start to
+4	merge. Run it whenever the user hands you a `DEV-###`. You coordinate; you do
+5	not implement. Every phase names the seat that owns it — doing a seat's work
+6	yourself is the failure this team exists to prevent.
+7	
+8	Read `harness-team-charter` before you start. It holds the rules that bind
+9	every seat; this note holds the sequence. If the user handed you a **list** of
+10	ids, `task-chain` wraps this note: every task still runs it in full.
+11	
+12	## Standing constraints (apply to every phase)
+13	
+14	- `fixtures/BadCode/` is **deliberately broken C#**. `fixture-gates.yml`
+15	  asserts every gate exits non-zero on it. Never edit, fix, tidy or lint it.
+16	- **The harness's own pipeline skills do not exist in this checkout and must
+17	  not be run on it** — `/implement`, `/code-review`, `/verify`, `/architect`,
+18	  `/refactor`, `/ship-review`, `/grill-with-docs`, speckit. They target C#,
+19	  and there is none here. If one resolves, it is an installed plugin. Do the
+20	  work directly.
+21	- The gates that matter are the PowerShell tests under `scripts/local/` and
+22	  the grep gates in `.github/workflows/lint-harness.yml`. There is no
+23	  solution, no `dotnet-tools.json`, nothing to restore or build.
+24	- **Ripple-completeness.** This repo's signature bug is a change landing in
+25	  `skills/` but not in `rules/`, `adapters/claude/`, `adapters/codex/`, root
+26	  `CLAUDE.md`, root `AGENTS.md`, the `install.ps1` manifest, or the grep gates
+27	  in `lint-harness.yml`. Root `CLAUDE.md` and `AGENTS.md` are the two most
+28	  often missed. Walk the whole chain, every time.
+29	- Tracking is **YouTrack only**. `DEV-###` is the only task id; there are no
+30	  GitHub issues.
+31	- **Every task note is created with `--name` and `--stack "Task notes"`.**
+32	  Always `maestri note create --name "<exact-name>" --stack "Task notes" ...`
+33	  — never let the name be derived, and never leave the note loose. The
+34	  fichário "Task notes" is the one place task notes live: every seat is
+35	  wired to it once and reads every note in it, so nothing is connected per
+36	  note, and §9.5 empties it in one pass. A note created without `--stack`
+37	  lands loose on the canvas where only its author can see it; file it with
+38	  `maestri note stack "<name>" "Task notes"` the moment `maestri list`
+39	  shows it. The fichário holds one standing note, `task-notes-keeper`, so it
+40	  never empties to nothing; never delete it and never write task content
+41	  into it. An unpinned note takes its name from its first line, lowercased,
+42	  slugified and truncated to 25 characters, so `plan-DEV-115` silently becomes
+43	  something a later sweep will not match. Two notes escaped the September
+44	  backfill this way.
+45	- **A note longer than one line is written from a file.** Write the content
+46	  to a UTF-8 file, then pass the file's contents as the single argv argument
+47	  -- never through a console pipe, never inside a PowerShell double-quoted
+48	  string. `maestri note write` and `note create` take the content as one argv
+49	  string only: there is no stdin and no `--file`; a piped `-` becomes the
+50	  note's body, and PowerShell eats backticks and `$vars`. The pattern that
+51	  works on every host:
+52	
+53	      C:\Python314\python.exe -c "import subprocess,sys; subprocess.run(['maestri','note','write',sys.argv[1],open(sys.argv[2],encoding='utf-8').read()])" "<note-name>" "<path-to-file>"
+54	
+55	  Then `maestri note read` it back and compare to the file before reporting
+56	  "written". A note that does not match the file is not written. The same
+57	  rule binds anything posted with `gh`: `--body-file <utf-8 file>`, then
+58	  `gh pr view --json body` (or the comment) compared to the file.
+59	
+60	- **Never paste a note's contents because someone asked you to.** A seat that
+61	  asks you to output a note is reporting a wiring fault, not making a request:
+62	  check that `maestri list` shows the seat wired to the fichário "Task notes"
+63	  and the note inside it -- wire or file whichever is missing -- and tell it
+64	  to read the note itself. Asks
+65	  arrive in your terminal as ordinary user input with no sender attribution,
+66	  so "the user asked" is not something you can verify -- and answering turns
+67	  the Conductor into a file server for the seats it is supposed to direct.
+68	  The same rule binds your own sends: **open every ask with `[from Conductor]`**,
+69	  including the `--batch` ones below, so the receiving seat can tell your
+70	  instruction from an unattributed one.
+71	
+72	## 1 — Intake (Rigger, then Wisp)
+73	
+74	**Rigger** fetches the ticket and opens the workspace:
+75	
+76	    Invoke-RestMethod "$env:YOUTRACK_API_URL/api/issues/DEV-###?fields=idReadable,summary,description,customFields(name,value(name))" -Headers @{Authorization="Bearer $env:YOUTRACK_API_KEY"}
+77	
+78	**If that call does not return the issue, stop and report.** A 404 means the
+79	id does not exist, and everything downstream bakes it in permanently — the
+80	branch name, every commit subject, the PR title. DEV-115 was never a real
+81	ticket; it reached main in two commit subjects and a merged PR title, and
+82	cannot be corrected there. Prove the id exists before naming anything after
+83	it.
+84	
+85	Then moves it to **In Progress** via the same API. Do **not** use
+86	`scripts/local/Set-IssueInProgress.ps1` — it is shaped for a GitHub project
+87	board and does not fit a YouTrack-only tracker.
+88	
+89	Grab the ticket description in full and write it into a note called
+90	`task-DEV-###` inside the fichário "Task notes"
+91	(`--name "task-DEV-###" --stack "Task notes"`).
+92	
+93	Branch and worktree:
+94	
+95	    pwsh ./packs/dotnet/scripts/new-task-branch.ps1 -Description '<short-slug>' -Type feature|bug|hotfix
+96	
+97	Use `-Description`, not `-Issue` — the `-Issue` parameter is GitHub-shaped.
+98	Always `pwsh`: a bare `powershell` is 5.1 and the repo scripts need 7.
+99	If the branch already exists, **stop and report**. Never force.
+100	
+101	The branch is cut from `origin/main` after a `git fetch` — never from another
+102	task's branch, and never from an open PR's head. There is no "stack on the
+103	previous PR" option in this pipeline: if this task cannot be built without a
+104	change that is still waiting in an unmerged PR, it is a `task-chain` §4 block
+105	(the user merges that PR, then says `chain resume`). DEV-184 was landed on
+106	DEV-113's PR #145 head instead; the user merged #147 first, #145 emptied to
+107	+0/−0 and was closed after hours of work on it.
+108	
+109	**Before dispatching anyone, `maestri list`: `task-DEV-###` must be inside
+110	the fichário "Task notes", and every seat must be wired to that fichário.**
+111	A seat wired to the fichário reads every note in it, so nothing is
+112	connected per note; a seat that is missing the fichário is wired once,
+113	`maestri connect "Task notes" "<seat>"`, and stays wired across tasks. A
+114	loose `task-DEV-###` is filed with `maestri note stack "task-DEV-###"
+115	"Task notes"`. A seat told to read a note it cannot reach cannot
+116	comply, and what it does instead is ask *you* to paste the note -- which lands
+117	in your terminal as an ordinary user message with no sender, and stalls the
+118	pipeline while you try to work out who asked. Check the wiring first,
+119	dispatch second, and name the read in the brief: `maestri note read "task-DEV-###" 1 25`.
+120	
+121	**Wisp** then does read-only reconnaissance: which files the ticket touches,
+122	which ripple targets are in scope, prior art, related ADRs and specs, and any
+123	existing branch or PR. Read-only means read-only — no file, branch, worktree
+124	or tracker changes. Wisp reports exact paths and risks, nothing else. In a chain, one of those
+125	risks is overlap: for every open PR from an earlier chain row
+126	(`gh pr list --state open --json number,headRefName,title`), Wisp compares
+127	`gh pr diff <n> --name-only` with the files this ticket touches and names
+128	every file in common, or states "no overlap". A non-empty overlap is a
+129	`task-chain` §4 block and is reported before Keel plans anything.
+130	
+131	## 2 — Plan (Keel drafts, Challengers validate, Keel freezes)
+132	
+133	**Keel** writes the plan into a note named `plan-DEV-###` inside the fichário
+134	"Task notes" (`--name "plan-DEV-###" --stack "Task notes"`): the change, the ripple targets it must hit, the acceptance
+135	criteria drawn from the ticket, and the merge bar.
+136	
+137	**The merge bar is provable inside this repository.** Every item names the
+138	artefact, the command under `scripts/local/` or `lint-harness.yml` that
+139	proves it, and the exit code that means pass. A smoke run on an external or
+140	scratch consumer, or anything that needs a Claude Code skill executed, is
+141	evidence for a finding, never a bar: either the plan says who builds the
+142	fixture inside the repo first, or the check is recorded as a post-merge
+143	manual step. (DEV-113 blocked with zero findings open, on a bar that needed
+144	`/code-review` run on two scratch consumers.)
+145	
+146	Then validate it — all three in parallel, on the *plan*, not on code:
+147	
+148	    maestri ask --batch '{"Sentry":"[from Conductor] Review plan-DEV-### on the Risk axis...","Ledger":"[from Conductor] ...Standards axis...","Compass":"[from Conductor] ...Spec axis: does this plan satisfy the ticket acceptance criteria?..."}'
+149	
+150	When each challenger reports back, confirm with `maestri list` that its
+151	note sits in the fichário "Task notes" (file a loose one with
+152	`maestri note stack "findings-DEV-###-<seat>" "Task notes"`), then send
+153	the adjudication ask naming the three notes. Keel is wired to the fichário
+154	and reads them there; nothing is connected per note. Challengers are not
+155	wired to Keel; they write their note and reply to you with its name and a
+156	headline count, nothing more.
+157	
+158	**Keel adjudicates** their candidates into decisions — they propose, Keel
+159	decides — and then **freezes** the plan. From this point the acceptance list
+160	does not change. If the ticket turns out to need something outside it, that is
+161	a new task, not a widened one.
+162	
+163	Do not start implementation until the plan is frozen.
+164	
+165	**A plan does not stack.** A plan that names another task's branch or an
+166	open PR's head as the base, or offers "land the earlier PR first, or stack"
+167	as a choice, is not frozen — send it back. The base is `origin/main`; a
+168	dependency on an unmerged chain PR is a `task-chain` §4 block, which is the
+169	user's call to resolve by merging, not the team's to route around.
+170	
+171	## 3 — Implement (Anvil, with Cog)
+172	
+173	**Anvil** does the substantive edits. **Cog** takes the mechanical and
+174	repetitive ones — renames, call-site sweeps, manifest and gate-list updates
+175	that follow from Anvil's change. Split the ripple chain between them
+176	explicitly so no target is assumed to be someone else's.
+177	
+178	**A test that passes only on Windows is not done.** CI's `lint` job runs the
+179	PowerShell tests on ubuntu. An assertion that depends on `$IsWindows`, on the
+180	`User`/`Machine` environment scope, on path casing or on `\` separators is
+181	guarded with `if ($IsWindows)` or split into a Windows case and a
+182	cross-platform case with its own expected literal. Before reporting, run the
+183	file once with the Windows-only branch forced off and quote that exit code
+184	too. (DEV-110's PR #146 was red on every push because test (d) in
+185	`Test-TaskBranchScripts.ps1` fed its token through the `User` scope, which
+186	`get-task.ps1` reads only on Windows; every local run was green.)
+187	
+188	## 4 — Verify (Gauge)
+189	
+190	**Gauge** runs the gates and reports pass/fail per gate, each failure as
+191	`file:line` plus a one-line cause:
+192	
+193	- the PowerShell tests under `scripts/local/`
+194	- the grep gates in `.github/workflows/lint-harness.yml`
+195	- the ripple walk: every target in the plan actually changed
+196	
+197	Gauge reports; Gauge does not fix. Gauge also names the platform it ran on:
+198	a local Windows pass is evidence for the Windows leg of CI only. The ubuntu
+199	leg is proved by `gh pr checks` in §9, never by Gauge.
+200	
+201	## 5 — Fix (Anvil, Cog)
+202	
+203	Route each failure back to whoever owns that file, with Gauge's `file:line`
+204	and expected/actual pasted verbatim. The owner runs that gate itself and
+205	quotes the exit code in its reply; "done" without an exit code is not done.
+206	Re-run Gauge after. **Cap
+207	this loop at two rounds.** If it is still red after two, stop and report to
+208	the user with what remains — do not grind.
+209	
+210	## 6 — Land (Rigger)
+211	
+212	Fetch, then rebase onto `origin/main` — never onto another task's branch or
+213	an open PR's head (DEV-184 was landed on DEV-113's PR #145 head; when the
+214	user merged #147 first, #145 emptied and closed) — then commit. **Every commit message starts with
+215	the task id, in this exact form:**
+216	
+217	    DEV-### - {subject}
+218	
+219	A space, a hyphen, a space. The id comes first so the tracker can group the
+220	task's commits. Push, then open the PR with the **same form in the title**.
+221	
+222	Once the PR is open, move the task to Code Review.
+223	
+224	**Quill** drafts the PR body: what changed, which ripple targets were walked,
+225	which acceptance criteria it satisfies, what was deliberately left out, and —
+226	when the commit includes a context-floor baseline refresh — which hosts moved,
+227	which were expected from the diff, and why any unrelated host also moved (the
+228	ratchet regenerates the whole baseline, so a host whose files were not edited
+229	may show a byte delta from corrected staleness, as the Claude host did in DEV-195). Rigger posts it
+230	with `gh pr create --body-file <utf-8 file>` and compares `gh pr view --json body`
+231	to the file; a console pipe turns the body into mojibake (PR #144).
+232	
+233	## 7 — Review (Challengers, Keel, Rigger)
+234	
+235	Fan out on the **diff** this time:
+236	
+237	    maestri ask --batch '{"Sentry":"[from Conductor] Review the PR diff on the Risk axis...","Ledger":"[from Conductor] ...Standards...","Compass":"[from Conductor] ...Spec: does the diff match the frozen acceptance list?..."}'
+238	
+239	Confirm each findings note landed in the fichário "Task notes" as it
+240	arrives (`maestri list`; file a loose one with `maestri note stack`), then
+241	**Keel adjudicates**
+242	into final findings with severity.
+243	
+244	**Rigger posts the whole review to the PR** — the summary body *and* every
+245	finding, including the ones that were rejected or that changed nothing. A
+246	review that exists only in chat did not happen. If `gh` refuses the write,
+247	report the refusal; never treat an unposted review as finished.
+248	
+249	## 8 — Address (Anvil/Cog fix, Rigger closes out)
+250	
+251	Fix the findings, then close the round out on the PR. All three, or the round
+252	is not done:
+253	
+254	1. Reply to each inline comment saying what changed, or why it was rejected
+255	   (`gh api .../pulls/{n}/comments/{id}/replies` with a body -- never an empty
+256	   `gh pr review` submit; PR #144 collected eight of those).
+257	2. **Resolve that thread** — needs the GraphQL `resolveReviewThread` mutation
+258	   via `gh api graphql`; `gh pr comment` cannot do it. Read the thread ids
+259	   from the PR's `reviewThreads` first, and check the mutation result rather
+260	   than assuming it took.
+261	3. Post one summary comment covering the round's changes as a whole.
+262	
+263	Verify against the **fetched head**, not a local checkout — GitHub anchors
+264	comments to current HEAD even when the reviewer read something older.
+265	
+266	Ledger every finding before you start, so none is silently dropped. **Two
+267	rounds maximum**, then it either meets the merge bar or goes back to the user.
+268	
+269	**A test that turns red only because the adjudication changed the contract is
+270	not a finding and does not open a round.** When Keel accepts a behaviour
+271	change, the fix packet names the existing tests that encode the old behaviour
+272	and the seat fixing the code fixes them in the same packet. If a red test
+273	reaches Gauge anyway, Keel rules it CODE-WRONG or TEST-WRONG; a TEST-WRONG
+274	ruling carries `file:line`, the current assertion, the replacement assertion
+275	with its literal expected value, and what happens to any neighbouring
+276	assertion the change contradicts. Route that ruling with Gauge's exact
+277	expected/actual output pasted in, verbatim. If the ruling has no literal, it
+278	goes back to Keel, not to a Mechanic. (DEV-190 spent its last round on two
+279	assertion lines because "preserve substance" never said which string.)
+280	
+281	## 9 — Hand back
+282	
+283	Ready has two halves, and the local bar is only the first. Before the notify,
+284	**Rigger** proves the PR on GitHub, in this order, quoting each result:
+285	
+286	    git fetch origin
+287	    git rebase origin/main
+288	    git push --force-with-lease origin HEAD:<branch>
+289	    gh pr view <n> --json mergeable,mergeStateStatus
+290	    gh pr checks <n> --watch
+291	
+292	- A rebase conflict goes to the seat that owns the file, with the conflict
+293	  hunk pasted verbatim; Keel rules anything that is a judgment call. After a
+294	  conflict is resolved, the §4 gates run again before the push.
+295	- `mergeable` must read `MERGEABLE`, and `mergeStateStatus` must be neither
+296	  `DIRTY` (conflicts) nor `BEHIND` (rebase again) nor `UNSTABLE` (a check is
+297	  red). `UNKNOWN` means GitHub is still computing: wait and re-read.
+298	- `gh pr checks --watch` must end with every job passing. A red job is a §5
+299	  failure: `gh run view <run-id> --log-failed`, paste the failing line
+300	  verbatim, route it to the file's owner under the same two-round cap, and
+301	  re-run this list from the top. Gauge's local pass does not stand in for a
+302	  red job — the `lint` job runs on ubuntu and sees what Windows cannot.
+303	
+304	Only when all of that holds:
+305	
+306	    maestri notify "DEV-### is ready to merge: <PR url>"
+307	
+308	Then stop. **You do not merge.** Wait for the user to say it is merged.
+309	
+310	**In a chain, do not stop here.** Run 9.5, then `task-chain` §3: record the
+311	row, run `team-restart` §1–§4, and start the next
+312	id. The user is told once per task by the notify above and once at the end of
+313	the chain.
+314	
+315	## 9.5 — Close the canvas footprint (Rigger, once the PR is ready to merge)
+316	
+317	Nothing on the canvas is a record. The ticket and the PR are. Before the task
+318	leaves your attention, move what is worth keeping into them and delete the
+319	rest.
+320	
+321	**Publish the plan to the ticket.** `plan-DEV-###` becomes a comment on
+322	`DEV-###`. Three rules, all load-bearing:
+323	
+324	1. Read the note file from disk as UTF-8 bytes. Never pipe it through a
+325	   console — the Windows OEM codepage (CP850) rewrites em dashes and arrows on
+326	   the way through, and the damage is invisible until you compare bytes. It
+327	   also means there is no `[N lines total]` banner and no `N<tab>` prefixes to
+328	   strip.
+329	2. If a comment already carries this plan, update it in place rather than
+330	   posting a second copy.
+331	3. **Re-fetch the comment and compare it to the source, ordinally.** Not its
+332	   length — this corruption is length-*increasing*, so a length check passes
+333	   on mangled text. Not the POST response either; it echoes what you sent, not
+334	   what was stored.
+335	
+336	**Anything short of a positive byte-match blocks the step.** "I could not
+337	tell" is never "verified absent" — a check that cannot see the comment must
+338	stop, not wave the deletion through.
+339	
+340	**Then delete every note in the fichário "Task notes" except
+341	`task-notes-keeper`**: `task-DEV-###`, `plan-DEV-###`, and every transient
+342	one — `findings-*`, `recon-*`, `adjudication-*`, `merge-bar-*`, `pr-body-*`,
+343	`trust-*`. Delete, not archive; there is no archive any more. Walk the
+344	fichário's members off `maestri list`, not a name pattern, because seats do
+345	not always name them the way this note expects; then sweep the loose notes
+346	on the canvas by those prefixes for anything created without `--stack`.
+347	Afterwards `maestri list` must show the fichário "Task notes" holding only
+348	`task-notes-keeper`. If the fichário dissolved when its last task note went,
+349	recreate it -- `maestri note stack "task-notes-keeper" "Task notes"` --
+350	re-wire every seat as §1 says, and name that in the notify: it is a fact
+351	about Maestri the user wants to hear once.
+352	
+353	Non-blocking findings that were not fixed go to YouTrack as their own tickets
+354	**before** their note is deleted, and the new ticket ids are named in the PR's
+355	round summary. A finding that lives only in a note you are about to delete is
+356	a finding you are discarding. In a chain this is a gate: `task-chain` §3 does
+357	not run until every unfixed finding is either rejected on the PR or filed. When creating a new task on Youtrack, the custom field Repository should filled with "dotnet-agent-harness".
+358	
+359	The canvas should now hold nothing about `DEV-###`.
+360	
+361	## 10 — After the user confirms the merge (only then)
+362	
+363	**Rigger** reaps:
+364	
+365	- move `DEV-###` to **Done** via the YouTrack API
+366	- delete the local branch
+367	- remove the worktree under `../dotnet-agent-harness.worktrees/`
+368	- git pull origin main
+369	
+370	The notes are already gone, in step 9.5. Nothing here touches the canvas,
+371	except at the end of a chain, where `task-chain` §6 deletes the `chain` note
+372	after the last reap.
+373	
+374	## Seat map
+375	
+376	| Phase | Owner |
+377	| --- | --- |
+378	| Intake, branch, tracker state | Rigger |
+379	| Reconnaissance | Wisp |
+380	| Plan, adjudication, merge bar | Keel |
+381	| Plan and diff review | Sentry (Risk), Ledger (Standards), Compass (Spec) |
+382	| Implementation | Anvil |
+383	| Mechanical edits, ripple sweep | Cog |
+384	| Gates and ripple verification | Gauge |
+385	| PR body, round summaries | Quill |
+386	| Commits, push, PR, replies, cleanup | Rigger |
+387	
