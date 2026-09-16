@@ -128,6 +128,73 @@ function Save-SeatMap {
     Save-SeatMapFile -Path $Path -Content $json
 }
 
+$rosterHeaderPattern = '(?ms)\| Seat \| Codename \| Agent \+ model \((?:head|active)\) \| Pool \|.+?\n\n'
+$launchHeaderPattern = '(?ms)\| Seat \| Launch command \|.+?\n\n'
+$swapRollback = $null
+
+function Add-SwapRollbackPath {
+    param([string]$Path)
+    if ($null -eq $script:swapRollback) { return }
+    if ([string]::IsNullOrWhiteSpace($Path)) { return }
+    if ($script:swapRollback.Contains($Path)) { return }
+    $existed = Test-Path -LiteralPath $Path
+    $bytes = $null
+    if ($existed) { $bytes = [System.IO.File]::ReadAllBytes($Path) }
+    $script:swapRollback[$Path] = [pscustomobject]@{ Existed = [bool]$existed; Bytes = $bytes }
+}
+
+function Restore-SwapRollback {
+    if ($null -eq $script:swapRollback) { return }
+    foreach ($path in @($script:swapRollback.Keys)) {
+        $snap = $script:swapRollback[$path]
+        if ($snap.Existed) {
+            [System.IO.File]::WriteAllBytes($path, $snap.Bytes)
+        } elseif (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+function Get-TargetSwapNotePaths {
+    param(
+        [string]$WorkspaceIdParam,
+        [string]$RepoRootParam
+    )
+    $resolvedWorkspace = Resolve-MaestriWorkspaceId -WorkspaceId $WorkspaceIdParam -RepoRoot $RepoRootParam
+    $notesDir = Join-Path $HOME '.maestri' 'workspaces' $resolvedWorkspace 'notes'
+    return [pscustomobject]@{
+        NotesDir    = $notesDir
+        CharterPath = Join-Path $notesDir 'harness-team-charter.md'
+        RestartPath = Join-Path $notesDir 'team-restart.md'
+    }
+}
+
+function Get-TargetSwapNoteMisses {
+    param($NotePaths)
+    $misses = [System.Collections.Generic.List[string]]::new()
+    if (-not (Test-Path -LiteralPath $NotePaths.NotesDir)) {
+        $misses.Add("Notes directory not found at: $($NotePaths.NotesDir)")
+        return @($misses)
+    }
+    if (-not (Test-Path -LiteralPath $NotePaths.CharterPath)) {
+        $misses.Add("harness-team-charter.md not found at: $($NotePaths.CharterPath)")
+    } else {
+        $charterContent = Get-Content -LiteralPath $NotePaths.CharterPath -Raw
+        if ($charterContent -notmatch $rosterHeaderPattern) {
+            $misses.Add('Could not find Roster table in harness-team-charter.md')
+        }
+    }
+    if (-not (Test-Path -LiteralPath $NotePaths.RestartPath)) {
+        $misses.Add("team-restart.md not found at: $($NotePaths.RestartPath)")
+    } else {
+        $restartContent = Get-Content -LiteralPath $NotePaths.RestartPath -Raw
+        if ($restartContent -notmatch $launchHeaderPattern) {
+            $misses.Add('Could not find Launch commands table in team-restart.md')
+        }
+    }
+    return @($misses)
+}
+
 $violations = @(Get-SeatMapViolations -Map $seatMap)
 $noAction = -not ($Seat -or $SyncRoles -or $SyncNotes -or $Verify -or $GenerateCommands -or $All)
 if ($Validate -or $All -or $noAction) {
@@ -158,8 +225,6 @@ if ($Rung -and -not $Seat) {
     throw '-Seat is required when -Rung is set.'
 }
 
-$swapTarget = $null
-$targetRuntimeFloor = $null
 if ($Seat -and $Rung) {
     $swapTarget = Get-SeatByName -Map $seatMap -Name $Seat
     if ($null -eq $swapTarget) {
@@ -189,6 +254,36 @@ if ($Seat -and $Rung) {
             exit 1
         }
         $swapRoleJson.prompt = Replace-LiteralRegex -InputText $swapRoleJson.prompt -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $swapChainLine
+    }
+
+    if ($SyncNotes -or $All) {
+        try {
+            $preflightNotes = Get-TargetSwapNotePaths -WorkspaceIdParam $WorkspaceId -RepoRootParam $repoRoot
+        } catch {
+            Write-Error ([string]$_) -ErrorAction Continue
+            exit 1
+        }
+        Write-ViolationsAndExit -Violations @(Get-TargetSwapNoteMisses -NotePaths $preflightNotes)
+    }
+
+    $script:swapRollback = [ordered]@{}
+    Add-SwapRollbackPath -Path $SeatMapPath
+    Add-SwapRollbackPath -Path $swapRoleFile
+    if ($SyncRoles -or $All) {
+        $rolesDirForRollback = Join-Path $repoRoot '.maestri' 'roles'
+        foreach ($s in @($seatMap.seats)) {
+            if (Test-JsonProperty -Object $s -Name 'roleId') {
+                Add-SwapRollbackPath -Path (Join-Path $rolesDirForRollback $s.roleId 'role.json')
+            }
+        }
+    }
+    if ($SyncNotes -or $All) {
+        Add-SwapRollbackPath -Path $preflightNotes.CharterPath
+        Add-SwapRollbackPath -Path $preflightNotes.RestartPath
+    }
+    trap {
+        Restore-SwapRollback
+        exit 1
     }
 
     Save-SeatMap -Map $seatMap -Path $SeatMapPath
@@ -252,8 +347,6 @@ if ($SyncNotes -or $All) {
     Write-Host "`n=== Syncing Canvas Notes ===" -ForegroundColor Cyan
     $resolvedWorkspace = Resolve-MaestriWorkspaceId -WorkspaceId $WorkspaceId -RepoRoot $repoRoot
     $notesDir = Join-Path $HOME '.maestri' 'workspaces' $resolvedWorkspace 'notes'
-    $rosterHeaderPattern = '(?ms)\| Seat \| Codename \| Agent \+ model \((?:head|active)\) \| Pool \|.+?\n\n'
-    $launchHeaderPattern = '(?ms)\| Seat \| Launch command \|.+?\n\n'
     if (-not (Test-Path -LiteralPath $notesDir)) {
         $syncMisses.Add("Notes directory not found at: $notesDir")
         Write-Warning "Notes directory not found at: $notesDir"
@@ -363,6 +456,18 @@ if ($Verify -or $All) {
 }
 
 if ($syncMisses.Count -gt 0) {
+    $noteFatal = @(
+        $syncMisses | Where-Object {
+            $_ -match 'Notes directory not found|harness-team-charter|team-restart|Roster table|Launch commands table'
+        }
+    )
+    # Target-swap notes miss: restore map/role/notes/swap-log (B1/A7). Missing
+    # other seats' role files stay non-fatal for a committed target swap (A9).
+    if ($null -ne $swapTarget -and $noteFatal.Count -eq 0) {
+        foreach ($m in $syncMisses) { Write-Warning ([string]$m) }
+        exit 0
+    }
+    Restore-SwapRollback
     Write-ViolationsAndExit -Violations @($syncMisses)
 }
 

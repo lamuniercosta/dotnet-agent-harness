@@ -32,11 +32,14 @@ Verifier ran a model outside its chain because a restart note was stale.
 The live seat map at `~/.maestri/workspaces/<workspaceId>/seat-map.json` is
 keyed by seat, not by command. `scripts/local/seat-map.example.json` is the
 schema, the invariants block, and the CI contract. Each seat
-carries a set of rungs (`head`, `then`, `floor`) — each a complete launch
-specification:
+carries an ordered `rungs` array of declared named rungs — each a complete
+launch specification. Typical names include `head`, `then`, `alt`, and
+`floor`; extra declared names are valid.
 
 ```json
 {
+  "name": "head",
+  "role": "head",
   "launch": "claude --model claude-opus-4-6 --effort high --permission-mode auto",
   "pool": "CLAUDE",
   "tier": 3,
@@ -97,9 +100,9 @@ and is not a CI artefact:
 - At most 1 AGY-G-pool head.
 - At least 1 Gemini-API-pool head.
 - ZEN is never a floor pool (Quill is the documented exception).
-- Every seat's three rungs use distinct pools.
+- Every seat's declared rungs use distinct pools.
 - Every OpenCode launch line contains `-m` or `--model` (the shared-config trap).
-- Tier values, when present, are integers 1–4.
+- Tier values, when present, are integers 0–4 (runtime FLOOR selection still requires 1–4).
 
 This gate runs in `lint-harness.yml` on both Windows and Ubuntu. It replaces the
 `Test-RouteMap.ps1` gate.
@@ -221,14 +224,11 @@ seat-based work, and the two would diverge within a week. One source of truth
 or none.
 
 **Model the seat map as an extensible array of rungs instead of a fixed
-head/then/floor object.** The ticket asks for ≥4 candidate options per seat.
-An array schema would accommodate that directly. But the current charter defines
-exactly three rungs with distinct semantics (head is the target, then is the
-first fallback, floor is the cheapest capable), and `Test-SeatMap.ps1` validates
-all three by name. An array loses named semantics and requires index-based
-reasoning about which rung is which. The fixed object is extended to ≥4 when the
-charter defines the semantics of a fourth rung, not before. This is a data +
-schema change, not a data-only task (correcting the prior plan's claim).
+head/then/floor object.** Originally rejected: the charter then defined exactly
+three rungs with distinct semantics, and an array was treated as future work.
+**Superseded:** schemaVersion 2 shipped declared-rung arrays. The fixed-object
+shape (`rungs.head` / `rungs.then` / `rungs.floor`) is fail-closed. Extra named
+rungs such as `alt` are valid. This is the current contract, not deferred work.
 
 **Run the portal on a non-localhost interface for remote team access.** The
 portal executes `maestri recruit --replace` on the host machine. Exposing that
@@ -258,10 +258,10 @@ requests from the developer's own browser, not network-level attackers. The
 per-session token is sufficient for that threat and avoids the complexity of
 certificate management for a developer tool.
 
-`Test-SeatMap.ps1` hardcodes the three rung names. Adding a fourth rung requires
-editing the test, which means the test is a gate against accidental schema
-expansion — a feature, not a bug, until the charter defines what a fourth rung
-means.
+`Test-SeatMap.ps1` validates schemaVersion 2 declared-rung arrays (unique
+names, required head and floor roles, at least four rungs). Extra declared
+rungs are in-contract; the gate still fail-closes schemaVersion 1 fixed-object
+maps.
 
 ## Deferred follow-ups
 
@@ -274,9 +274,6 @@ PR body.
 - **Workspace verification** — `Sync-SeatMap.ps1 -Verify` drift check against
   `workspace.json`. Included as a switch in the shipped script but not in the
   merge bar (machine-local state).
-- **Candidate pool ≥4 expansion** — requires schema change from fixed object to
-  named-rung array (or additional named properties), plus test and synchronizer
-  updates.
 - **Probe-evidence re-anchor (DEV-244)** — broader than target-swap runtime
   floor anchoring: re-anchor from probe evidence across seats, candidate-pool
   expansion, and schema/evidence changes. Out of scope for DEV-234.

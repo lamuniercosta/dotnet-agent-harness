@@ -3,12 +3,12 @@
     Localhost HTTP server for the Maestri seat-map portal (port 8765).
 .DESCRIPTION
     Serves artifacts/seat-map-selector.html and applies rung selections:
-    preflights target-swap runtime FLOOR with the shared helper, then lets
-    Sync-SeatMap.ps1 write activeRung (no portal mutation before child sync
-    succeeds), rewrite role chains, update canvas notes, and optionally run
+    preflights target-swap runtime FLOOR with the shared helper, persists any
+    declared activeRung on the listener's seat-map, then runs Sync-SeatMap.ps1
+    as a child to rewrite role chains and canvas notes, and optionally runs
     `maestri recruit --replace`. POST endpoints require the per-session token
-    printed at startup. CORS is restricted to localhost. Failed swaps leave
-    seat-map, roles, notes, and the swap log unchanged.
+    printed at startup. CORS is restricted to localhost. Fail-closed swaps
+    (undeclared rung, no capable runtime floor) leave the seat-map unchanged.
 .PARAMETER Port
     HTTP port to bind (default 8765).
 .PARAMETER WorkspaceId
@@ -64,19 +64,7 @@ $sessionToken = [guid]::NewGuid().ToString('N')
 $prefix = "http://localhost:$Port/"
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add($prefix)
-
-try {
-    $listener.Start()
-    Write-Host '==========================================================' -ForegroundColor Cyan
-    Write-Host " Maestri Seat Map server: $prefix" -ForegroundColor Green
-    Write-Host " POST token (X-Seat-Map-Token): $sessionToken" -ForegroundColor Yellow
-    Write-Host ' CORS: localhost / 127.0.0.1 only' -ForegroundColor Yellow
-    Write-Host ' Press Ctrl+C to stop.' -ForegroundColor Gray
-    Write-Host '==========================================================' -ForegroundColor Cyan
-} catch {
-    Write-Error "Failed to start HttpListener on $prefix. Error: $_"
-    exit 1
-}
+$listener.IgnoreWriteExceptions = $true
 
 function Test-LocalhostOrigin {
     param([string]$Origin)
@@ -116,15 +104,71 @@ function Get-RequestToken {
     return [string]$Request.Headers['X-Seat-Map-Token']
 }
 
+function Stop-OtherSeatMapServerProcesses {
+    $mine = $PID
+    foreach ($procName in @('pwsh.exe', 'powershell.exe')) {
+        Get-CimInstance -ClassName Win32_Process -Filter "Name = '$procName'" -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProcessId -ne $mine -and ([string]$_.CommandLine -match 'Start-SeatMapServer\.ps1') } |
+            ForEach-Object {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+    }
+    Start-Sleep -Milliseconds 400
+}
+
+function Invoke-SeatMapSyncChild {
+    param(
+        [string]$SeatMapPath,
+        [string]$SeatId,
+        [string]$RungName,
+        [string]$WorkspaceId
+    )
+    $pwshExe = (Get-Command pwsh).Source
+    $childScript = Join-Path $PSScriptRoot 'Sync-SeatMap.ps1'
+    $psi = [System.Diagnostics.ProcessStartInfo]::new()
+    $psi.FileName = $pwshExe
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $psi.WorkingDirectory = $repoRoot
+    foreach ($a in @(
+            '-NoProfile', '-File', $childScript,
+            '-SeatMapPath', $SeatMapPath,
+            '-Seat', $SeatId,
+            '-Rung', $RungName,
+            '-SyncRoles',
+            '-SyncNotes'
+        )) {
+        [void]$psi.ArgumentList.Add($a)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($WorkspaceId)) {
+        [void]$psi.ArgumentList.Add('-WorkspaceId')
+        [void]$psi.ArgumentList.Add($WorkspaceId)
+    }
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $stdoutTask = $p.StandardOutput.ReadToEndAsync()
+    $stderrTask = $p.StandardError.ReadToEndAsync()
+    if (-not $p.WaitForExit(120000)) {
+        try { $p.Kill($true) } catch { }
+        [void]$p.WaitForExit(5000)
+    }
+    elseif (-not $p.HasExited) {
+        try { $p.Kill($true) } catch { }
+        [void]$p.WaitForExit(5000)
+    }
+    $out = $stdoutTask.GetAwaiter().GetResult()
+    $err = $stderrTask.GetAwaiter().GetResult()
+    if (-not [string]::IsNullOrWhiteSpace($out)) { Write-Host $out }
+    if (-not [string]::IsNullOrWhiteSpace($err)) { Write-Warning $err }
+    return $p.ExitCode
+}
+
 function Apply-SeatRung {
     param(
         [string]$SeatId,
         [string]$RungName
     )
-
-    if ($RungName -notin @('head', 'then', 'floor')) {
-        return @{ success = $false; error = "Rung '$RungName' is not head|then|floor" }
-    }
 
     $map = Get-Content -LiteralPath $seatMapPath -Raw | ConvertFrom-Json
     $target = $null
@@ -161,19 +205,8 @@ function Apply-SeatRung {
         return @{ success = $false; error = 'Invariant check failed'; violations = $violations }
     }
 
-    $syncScript = Join-Path $PSScriptRoot 'Sync-SeatMap.ps1'
-    $syncArgs = @{
-        SeatMapPath = $seatMapPath
-        Seat        = $target.id
-        Rung        = $RungName
-        SyncRoles   = $true
-        SyncNotes   = $true
-    }
-    if (-not [string]::IsNullOrWhiteSpace($WorkspaceId)) {
-        $syncArgs.WorkspaceId = $WorkspaceId
-    }
-    & $syncScript @syncArgs
-    $syncExit = $LASTEXITCODE
+    $targetId = [string]$target.id
+    $syncExit = Invoke-SeatMapSyncChild -SeatMapPath $seatMapPath -SeatId $targetId -RungName $RungName -WorkspaceId $workspaceIdForLog
     if ($syncExit -ne 0) {
         return @{
             success = $false
@@ -183,12 +216,12 @@ function Apply-SeatRung {
     }
 
     # $target still has the pre-sync activeRung; rungs are unchanged. When the
-    # requested rung is floor, the portal launch is the resolved runtime FLOOR.
-    if ($RungName -eq 'floor') {
+    # requested rung is the floor-role rung, the portal launch is the resolved runtime FLOOR.
+    $rungCell = Get-SeatMapRungByName -Seat $target -Name $RungName
+    if (Test-SeatMapRungIsFloorRole -Seat $target -RungName $RungName -Cell $rungCell) {
         $launch = [string]$resolvedFloor.Launch
         $pool = [string]$resolvedFloor.Pool
     } else {
-        $rungCell = Get-SeatMapRungByName -Seat $target -Name $RungName
         $launch = if ($null -ne $rungCell -and (Test-JsonProperty -Object $rungCell -Name 'launch')) { [string]$rungCell.launch } else { '' }
         $pool = if ($null -ne $rungCell -and (Test-JsonProperty -Object $rungCell -Name 'pool')) { [string]$rungCell.pool } else { '' }
     }
@@ -219,6 +252,20 @@ function Apply-SeatRung {
         liveSwapped    = $liveSwapped
         recruitCommand = $recruitCmd
     }
+}
+
+Stop-OtherSeatMapServerProcesses
+try {
+    $listener.Start()
+    Write-Host '==========================================================' -ForegroundColor Cyan
+    Write-Host " Maestri Seat Map server: $prefix" -ForegroundColor Green
+    Write-Host " POST token (X-Seat-Map-Token): $sessionToken" -ForegroundColor Yellow
+    Write-Host ' CORS: localhost / 127.0.0.1 only' -ForegroundColor Yellow
+    Write-Host ' Press Ctrl+C to stop.' -ForegroundColor Gray
+    Write-Host '==========================================================' -ForegroundColor Cyan
+} catch {
+    Write-Error "Failed to start HttpListener on $prefix. Error: $_"
+    exit 1
 }
 
 try {
