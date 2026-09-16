@@ -239,7 +239,8 @@ PR body.
 
 - **Pre-flight validations** — Junie `effortPerModel` existence check, OpenCode
   global reasoning-effort collision warning, Cursor `cli-config.json` collision
-  detection.
+  detection. Delivered in DEV-236 / PR #164; pre-flight checks now run in
+  `scripts/local/Test-ModelProbe.ps1` before any launch or seat-state mutation.
 - **Workspace verification** — `Sync-SeatMap.ps1 -Verify` drift check against
   `workspace.json`. Included as a switch in the shipped script but not in the
   merge bar (machine-local state).
