@@ -29,7 +29,9 @@
 .PARAMETER SyncNotes
     Update canvas notes (charter and restart).
 .PARAMETER Verify
-    Check drift against the workspace.json terminals. Not a merge-bar gate.
+    Read-only drift check of each seat-map head launch against workspace.json
+    terminals. Exit 1 on drift, missing/duplicate terminals, or workspace errors.
+    Not a merge-bar gate.
 .PARAMETER GenerateCommands
     Print maestri recruit --replace commands.
 .PARAMETER Validate
@@ -210,6 +212,181 @@ function Get-TargetSwapNoteMisses {
         }
     }
     return @($misses)
+}
+
+function Get-VerifyNormalizedCommand {
+    param([AllowNull()][string]$Command)
+    if ($null -eq $Command) { return '' }
+    return [regex]::Replace([string]$Command, '[\r\n]+$', '')
+}
+
+function Get-VerifySha256Hex {
+    param([AllowNull()][string]$Value)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes([string]$Value))
+        return [BitConverter]::ToString($bytes).Replace('-', '').ToLowerInvariant()
+    }
+    finally {
+        $sha.Dispose()
+    }
+}
+
+function Write-VerifyReceiptIfAll {
+    if ($All) {
+        [Console]::Error.WriteLine('Sync phases completed before verify failure; workspace drift remains.')
+    }
+}
+
+function Get-WorkspaceTerminalParseResult {
+    param($Workspace)
+    $records = [System.Collections.Generic.List[object]]::new()
+    if (-not (Test-JsonProperty -Object $Workspace -Name 'payload')) {
+        return [pscustomobject]@{ Malformed = $false; Records = @() }
+    }
+    $payload = $Workspace.payload
+    if (-not (Test-JsonProperty -Object $payload -Name 'nodes') -or $null -eq $payload.nodes) {
+        return [pscustomobject]@{ Malformed = $false; Records = @() }
+    }
+
+    foreach ($node in @($payload.nodes)) {
+        if ($null -eq $node) { continue }
+        if (-not (Test-JsonProperty -Object $node -Name 'content')) { continue }
+        $content = $node.content
+        if ($null -eq $content -or -not (Test-JsonProperty -Object $content -Name 'terminal')) { continue }
+        $terminal = $content.terminal
+        if ($null -eq $terminal -or -not (Test-JsonProperty -Object $terminal -Name '_0')) {
+            return [pscustomobject]@{ Malformed = $true; Records = @() }
+        }
+        $t0 = $terminal._0
+        if ($null -eq $t0) {
+            return [pscustomobject]@{ Malformed = $true; Records = @() }
+        }
+        $hasRole = Test-JsonProperty -Object $t0 -Name 'assignedRoleId'
+        $hasCommand = Test-JsonProperty -Object $t0 -Name 'command'
+        $roleId = if ($hasRole) { [string]$t0.assignedRoleId } else { '' }
+        if (-not $hasRole -or [string]::IsNullOrEmpty($roleId) -or -not $hasCommand) {
+            return [pscustomobject]@{ Malformed = $true; Records = @() }
+        }
+        $records.Add([pscustomobject]@{
+            AssignedRoleId = $roleId
+            Command        = [string]$t0.command
+        })
+    }
+
+    return [pscustomobject]@{
+        Malformed = $false
+        Records   = @($records)
+    }
+}
+
+function Invoke-SeatMapWorkspaceVerify {
+    param(
+        $Map,
+        [string]$WorkspaceIdParam,
+        [string]$ResolvedWorkspaceIdParam,
+        [string]$RepoRootParam
+    )
+
+    Write-Host "`n=== Verifying Against Active Maestri Workspace ===" -ForegroundColor Cyan
+
+    $wsId = $ResolvedWorkspaceIdParam
+    if ([string]::IsNullOrWhiteSpace($wsId)) {
+        $wsId = $WorkspaceIdParam
+    }
+    if ([string]::IsNullOrWhiteSpace($wsId)) {
+        try {
+            $wsId = Resolve-MaestriWorkspaceId -WorkspaceId $WorkspaceIdParam -RepoRoot $RepoRootParam
+        }
+        catch {
+            Write-VerifyReceiptIfAll
+            Write-SeatMapResolutionFailureMessage -ResolverError ([string]$_.Exception.Message)
+            exit 1
+        }
+    }
+
+    $wsPath = Join-Path $HOME '.maestri' 'workspaces' $wsId 'workspace.json'
+    if (-not (Test-Path -LiteralPath $wsPath)) {
+        Write-VerifyReceiptIfAll
+        [Console]::Error.WriteLine("Verify workspace.json not found at: $wsPath")
+        exit 1
+    }
+
+    $ws = $null
+    try {
+        $raw = Get-Content -LiteralPath $wsPath -Raw -ErrorAction Stop
+        $ws = $raw | ConvertFrom-Json
+    }
+    catch {
+        Write-VerifyReceiptIfAll
+        [Console]::Error.WriteLine("Verify workspace.json unreadable at: $wsPath")
+        exit 1
+    }
+    if ($null -eq $ws) {
+        Write-VerifyReceiptIfAll
+        [Console]::Error.WriteLine("Verify workspace.json unreadable at: $wsPath")
+        exit 1
+    }
+
+    $parsed = Get-WorkspaceTerminalParseResult -Workspace $ws
+    if ($parsed.Malformed) {
+        Write-VerifyReceiptIfAll
+        [Console]::Error.WriteLine('[VERIFY ERROR] workspace terminal payload malformed')
+        exit 1
+    }
+    $records = @($parsed.Records)
+    if ($records.Count -eq 0) {
+        Write-VerifyReceiptIfAll
+        [Console]::Error.WriteLine('[VERIFY ERROR] no terminal records found in workspace.json')
+        exit 1
+    }
+
+    $issueCount = 0
+    $matchCount = 0
+    foreach ($s in @($Map.seats)) {
+        $codeName = if (Test-JsonProperty -Object $s -Name 'codename') { [string]$s.codename } else { [string]$s.id }
+        $roleId = if (Test-JsonProperty -Object $s -Name 'roleId') { [string]$s.roleId } else { '' }
+        $headCell = Get-SeatMapRungByRole -Seat $s -Role 'head'
+        $expected = ''
+        if ($null -ne $headCell -and (Test-JsonProperty -Object $headCell -Name 'launch')) {
+            $expected = [string]$headCell.launch
+        }
+
+        $hits = @(
+            $records | Where-Object { $_.AssignedRoleId -eq $roleId }
+        )
+        if ($hits.Count -eq 0) {
+            $issueCount++
+            [Console]::Error.WriteLine("[VERIFY MISSING] $codeName roleId=$roleId no terminal with assignedRoleId")
+            continue
+        }
+        if ($hits.Count -gt 1) {
+            $issueCount++
+            [Console]::Error.WriteLine("[VERIFY ERROR] $codeName roleId=$roleId duplicate terminals for assignedRoleId")
+            continue
+        }
+
+        $actual = Get-VerifyNormalizedCommand -Command $hits[0].Command
+        if ($actual -cne $expected) {
+            $issueCount++
+            $expectedHash = Get-VerifySha256Hex -Value $expected
+            $actualHash = Get-VerifySha256Hex -Value $actual
+            [Console]::Error.WriteLine("[VERIFY DRIFT] $codeName roleId=$roleId head expectedSha256=$expectedHash actualSha256=$actualHash")
+            continue
+        }
+
+        $matchCount++
+        $matchHash = Get-VerifySha256Hex -Value $expected
+        [Console]::Out.WriteLine("[VERIFY MATCH] $codeName roleId=$roleId head sha256=$matchHash")
+    }
+
+    if ($issueCount -gt 0) {
+        Write-VerifyReceiptIfAll
+        [Console]::Error.WriteLine("VERIFY FAILED: $issueCount issue(s); workspaceId=$wsId path=$wsPath")
+        exit 1
+    }
+
+    [Console]::Out.WriteLine("VERIFY OK: $matchCount seat(s) matched; workspaceId=$wsId path=$wsPath")
 }
 
 $violations = @(Get-SeatMapViolations -Map $seatMap)
@@ -429,49 +606,7 @@ if ($SyncNotes -or $All) {
 }
 
 if ($Verify -or $All) {
-    Write-Host "`n=== Verifying Against Active Maestri Workspace ===" -ForegroundColor Cyan
-    $resolvedWorkspace = Resolve-MaestriWorkspaceId -WorkspaceId $WorkspaceId -RepoRoot $repoRoot
-    $wsPath = Join-Path $HOME '.maestri' 'workspaces' $resolvedWorkspace 'workspace.json'
-    if (-not (Test-Path -LiteralPath $wsPath)) {
-        Write-Warning "workspace.json not found at: $wsPath"
-    } else {
-        $ws = Get-Content -LiteralPath $wsPath -Raw | ConvertFrom-Json
-        $terminals = @()
-        if ((Test-JsonProperty -Object $ws -Name 'payload') -and (Test-JsonProperty -Object $ws.payload -Name 'nodes')) {
-            $terminals = @(
-                $ws.payload.nodes |
-                    Where-Object { Test-JsonProperty -Object $_.content -Name 'terminal' } |
-                    ForEach-Object { $_.content.terminal._0 }
-            )
-        }
-        $driftCount = 0
-        foreach ($s in @($seatMap.seats)) {
-            $runtimeFloor = $null
-            if ($null -ne $swapTarget -and $s.id -eq $swapTarget.id) { $runtimeFloor = $targetRuntimeFloor }
-            $activeKey = Get-SeatActiveRungName -Seat $s
-            $activeCell = Get-SeatActiveLaunchCell -Seat $s -RuntimeFloor $runtimeFloor
-            $t = @(
-                $terminals | Where-Object {
-                    (Test-JsonProperty -Object $_ -Name 'assignedRoleId') -and $_.assignedRoleId -eq $s.roleId
-                }
-            ) | Select-Object -First 1
-            if ($null -eq $t) { continue }
-            $terminalCmd = if (Test-JsonProperty -Object $t -Name 'command') { [string]$t.command } else { '' }
-            if ($terminalCmd -ne $activeCell.launch) {
-                $driftCount++
-                Write-Warning "DRIFT on $($s.codename) ($($s.name)):"
-                Write-Host "   Map activeRung ($activeKey): $($activeCell.launch)" -ForegroundColor Yellow
-                Write-Host "   Workspace terminal:          $terminalCmd" -ForegroundColor Red
-            } else {
-                Write-Host "  [MATCH] $($s.codename): $($activeCell.launch)" -ForegroundColor Green
-            }
-        }
-        if ($driftCount -eq 0) {
-            Write-Host 'All seats MATCH current workspace.json!' -ForegroundColor Green
-        } else {
-            Write-Warning "Found $driftCount seats with drift between seat-map.json and workspace.json."
-        }
-    }
+    Invoke-SeatMapWorkspaceVerify -Map $seatMap -WorkspaceIdParam $WorkspaceId -ResolvedWorkspaceIdParam $resolvedWorkspaceId -RepoRootParam $repoRoot
 }
 
 if ($syncMisses.Count -gt 0) {

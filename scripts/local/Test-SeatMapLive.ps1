@@ -1,6 +1,7 @@
 #!/usr/bin/env pwsh
-# Bar-proves DEV-239 A1, A3, A5 and override precedence against an isolated HOME.
-# Does not touch the real user profile's ~/.maestri. Cleanup is enforced.
+# Bar-proves DEV-239 A1, A3, A5, override precedence, and DEV-237 -Verify
+# against an isolated HOME. Does not touch the real user profile's ~/.maestri.
+# Cleanup is enforced.
 #
 #   pwsh -NoProfile ./scripts/local/Test-SeatMapLive.ps1
 #
@@ -120,6 +121,122 @@ function New-WorkspaceDir {
     return $wsDir
 }
 
+function Get-HeadLaunchRecords {
+    param([Parameter(Mandatory)][string]$SeatMapPath)
+    $map = Get-Content -LiteralPath $SeatMapPath -Raw | ConvertFrom-Json
+    $out = [System.Collections.Generic.List[object]]::new()
+    foreach ($s in @($map.seats)) {
+        $head = Get-SeatMapRungByRole -Seat $s -Role 'head'
+        $launch = ''
+        if ($null -ne $head -and (Test-JsonProperty -Object $head -Name 'launch')) {
+            $launch = [string]$head.launch
+        }
+        $roleId = if (Test-JsonProperty -Object $s -Name 'roleId') { [string]$s.roleId } else { '' }
+        $code = if (Test-JsonProperty -Object $s -Name 'codename') { [string]$s.codename } else { [string]$s.id }
+        $out.Add([pscustomobject]@{
+            Codename       = $code
+            AssignedRoleId = $roleId
+            Command        = $launch
+        })
+    }
+    return @($out)
+}
+
+function Write-WorkspaceVerifyJson {
+    param(
+        [Parameter(Mandatory)][string]$Path,
+        [string]$RepoRootHint,
+        [AllowEmptyCollection()][object[]]$Terminals = @()
+    )
+    $nodes = [System.Collections.Generic.List[object]]::new()
+    $nodes.Add([ordered]@{
+            content = [ordered]@{
+                note = [ordered]@{ text = 'ignored-non-terminal' }
+            }
+        })
+    foreach ($t in @($Terminals)) {
+        if ($null -eq $t) { continue }
+        if ([bool](Test-JsonProperty -Object $t -Name 'OmitTerminal') -and [bool]$t.OmitTerminal) { continue }
+        if ([bool](Test-JsonProperty -Object $t -Name 'Missing0') -and [bool]$t.Missing0) {
+            $nodes.Add([ordered]@{
+                    content = [ordered]@{ terminal = [ordered]@{} }
+                })
+            continue
+        }
+        $inner = [ordered]@{}
+        $missingRole = [bool](Test-JsonProperty -Object $t -Name 'MissingRoleId') -and [bool]$t.MissingRoleId
+        $missingCmd = [bool](Test-JsonProperty -Object $t -Name 'MissingCommand') -and [bool]$t.MissingCommand
+        if (-not $missingRole) {
+            $inner['assignedRoleId'] = [string]$t.AssignedRoleId
+        }
+        if (-not $missingCmd) {
+            $inner['command'] = [string]$t.Command
+        }
+        $nodes.Add([ordered]@{
+                content = [ordered]@{
+                    terminal = [ordered]@{
+                        '_0' = $inner
+                    }
+                }
+            })
+    }
+    $obj = [ordered]@{
+        repoRoot = $RepoRootHint
+        payload  = [ordered]@{ nodes = @($nodes) }
+    }
+    $json = $obj | ConvertTo-Json -Depth 8
+    if (-not $json.EndsWith("`n")) { $json += "`n" }
+    [System.IO.File]::WriteAllText($Path, $json, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Write-MatchingWorkspaceVerifyJson {
+    param(
+        [Parameter(Mandatory)][string]$WsDir,
+        [string]$RepoRootHint,
+        [Parameter(Mandatory)][string]$SeatMapPath,
+        [object[]]$Terminals
+    )
+    $wj = Join-Path $WsDir 'workspace.json'
+    $rows = if ($null -ne $Terminals) { @($Terminals) } else { @(Get-HeadLaunchRecords -SeatMapPath $SeatMapPath) }
+    Write-WorkspaceVerifyJson -Path $wj -RepoRootHint $RepoRootHint -Terminals $rows
+}
+
+function Get-RecursiveFileSnapshot {
+    param([Parameter(Mandatory)][string]$Root)
+    if (-not (Test-Path -LiteralPath $Root)) { return '<missing>' }
+    $items = @(
+        Get-ChildItem -LiteralPath $Root -Recurse -Force -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.Name -notlike 'StartupProfileData-*' } |
+            Sort-Object FullName
+    )
+    $lines = foreach ($f in $items) {
+        $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
+        $rel = $f.FullName.Substring($Root.Length).TrimStart('\', '/')
+        '{0}|{1}|{2}' -f $rel.Replace('\', '/'), $hash, $f.Length
+    }
+    return (($lines | ForEach-Object { $_ }) -join "`n")
+}
+
+function Get-TargetedMaestriSnapshot {
+    param([Parameter(Mandatory)][string]$Root)
+    if (-not (Test-Path -LiteralPath $Root)) { return '<missing>' }
+    $want = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($n in @('workspace.json', 'seat-map.json', 'harness-team-charter.md', 'team-restart.md', 'seat-map-swaps.jsonl', 'role.json')) {
+        [void]$want.Add($n)
+    }
+    $items = @(
+        Get-ChildItem -LiteralPath $Root -Recurse -Force -File -ErrorAction SilentlyContinue |
+            Where-Object { $want.Contains($_.Name) } |
+            Sort-Object FullName
+    )
+    $lines = foreach ($f in $items) {
+        $hash = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
+        $rel = $f.FullName.Substring($Root.Length).TrimStart('\', '/')
+        '{0}|{1}|{2}' -f $rel.Replace('\', '/'), $hash, $f.Length
+    }
+    return (($lines | ForEach-Object { $_ }) -join "`n")
+}
+
 function Write-NoteStubs {
     param([string]$WsDir)
     $notes = Join-Path $WsDir 'notes'
@@ -195,6 +312,8 @@ if ($realSwapExistsBefore) {
     $realSwapWriteBefore = $item.LastWriteTimeUtc
     $realSwapLenBefore = $item.Length
 }
+
+$realMaestriSnapBefore = Get-TargetedMaestriSnapshot -Root $realMaestri
 
 $isoHome = Join-Path ([System.IO.Path]::GetTempPath()) ('seat-map-live-' + [guid]::NewGuid().ToString('N'))
 if ([string]::Equals((ConvertTo-Fwd $isoHome).TrimEnd('/'), (ConvertTo-Fwd $realProfile).TrimEnd('/'), [StringComparison]::OrdinalIgnoreCase)) {
@@ -302,6 +421,137 @@ try {
     # Restore live map for A3.
     Copy-Item -LiteralPath $examplePath -Destination $livePath
 
+    # --- DEV-237 -Verify workspace drift ---
+    $anvilRoleId = 'BA23D857-A79B-4128-B154-8D05C3D5DC31'
+    $cogRoleId = '1E272DA5-EB12-4E33-8A46-5D5579AB066C'
+    $anvilLaunch = 'agent --model cursor-grok-4.6-high --trust'
+    $cogLaunch = 'agy --model gemini-3.6-flash-low --dangerously-skip-permissions'
+    $anvilDriftLaunch = 'agent --model drifted --trust'
+    $anvilMatch = "[VERIFY MATCH] Anvil roleId=$anvilRoleId"
+    $cogMatch = "[VERIFY MATCH] Cog roleId=$cogRoleId"
+    $anvilDrift = "[VERIFY DRIFT] Anvil roleId=$anvilRoleId"
+    $cogMissing = "[VERIFY MISSING] Cog roleId=$cogRoleId no terminal with assignedRoleId"
+    $anvilDup = "[VERIFY ERROR] Anvil roleId=$anvilRoleId duplicate terminals for assignedRoleId"
+    $malformedLiteral = '[VERIFY ERROR] workspace terminal payload malformed'
+    $zeroLiteral = '[VERIFY ERROR] no terminal records found in workspace.json'
+    $exampleRaw = Get-Content -LiteralPath $examplePath -Raw
+    Assert-True 'DEV-237 fixture Anvil roleId' (Test-TextContains $exampleRaw $anvilRoleId) $anvilRoleId 'missing'
+    Assert-True 'DEV-237 fixture Anvil head launch' (Test-TextContains $exampleRaw $anvilLaunch) $anvilLaunch 'missing'
+    Assert-True 'DEV-237 fixture Cog roleId' (Test-TextContains $exampleRaw $cogRoleId) $cogRoleId 'missing'
+    Assert-True 'DEV-237 fixture Cog head launch' (Test-TextContains $exampleRaw $cogLaunch) $cogLaunch 'missing'
+    Assert-True 'DEV-237 path compare has no $IsWindows branch' (Test-TextContains 'a\b\c' 'a/b/c') 'a/b/c' 'separator-normalized'
+
+    $matchRecords = @(Get-HeadLaunchRecords -SeatMapPath $livePath)
+    $matchRecords += [pscustomobject]@{
+        AssignedRoleId = '00000000-0000-0000-0000-000000000000'
+        Command        = 'orphan-should-be-ignored'
+    }
+    Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath -Terminals $matchRecords
+
+    $isoMaestri = Join-Path $isoHome '.maestri'
+    $homeBeforeVerify = Get-RecursiveFileSnapshot -Root $isoMaestri
+    $porcelainBeforeVerify = Get-Porcelain
+    $realBeforeVerify = Get-TargetedMaestriSnapshot -Root $realMaestri
+    $verifyOk = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify')
+    $homeAfterVerify = Get-RecursiveFileSnapshot -Root $isoMaestri
+    $porcelainAfterVerify = Get-Porcelain
+    $realAfterVerify = Get-TargetedMaestriSnapshot -Root $realMaestri
+    $verifyOkCombined = "$($verifyOk.StdOut)`n$($verifyOk.StdErr)"
+    Assert-True 'DEV-237 success: exit 0' ($verifyOk.ExitCode -eq 0) '0' ("exit=$($verifyOk.ExitCode)`n$verifyOkCombined")
+    Assert-True 'DEV-237 success: Anvil MATCH on stdout' (Test-TextContains $verifyOk.StdOut $anvilMatch) $anvilMatch $verifyOk.StdOut
+    Assert-True 'DEV-237 success: Cog MATCH on stdout' (Test-TextContains $verifyOk.StdOut $cogMatch) $cogMatch $verifyOk.StdOut
+    Assert-True 'DEV-237 success: VERIFY OK: on stdout' (Test-TextContains $verifyOk.StdOut 'VERIFY OK:') 'VERIFY OK:' $verifyOk.StdOut
+    Assert-True 'DEV-237 success: Anvil launch redacted' (-not (Test-TextContains $verifyOkCombined $anvilLaunch)) "absent $anvilLaunch" $verifyOkCombined
+    Assert-True 'DEV-237 success: Cog launch redacted' (-not (Test-TextContains $verifyOkCombined $cogLaunch)) "absent $cogLaunch" $verifyOkCombined
+    Assert-True 'DEV-237 read-only: git porcelain unchanged' ($porcelainBeforeVerify -eq $porcelainAfterVerify) $porcelainBeforeVerify $porcelainAfterVerify
+    Assert-True 'DEV-237 read-only: isolated HOME snapshot unchanged' ($homeBeforeVerify -eq $homeAfterVerify) $homeBeforeVerify $homeAfterVerify
+    Assert-True 'DEV-237 read-only: real .maestri targeted snapshot unchanged' ($realBeforeVerify -eq $realAfterVerify) $realBeforeVerify $realAfterVerify
+
+    $crlfRecords = @(Get-HeadLaunchRecords -SeatMapPath $livePath)
+    foreach ($row in $crlfRecords) {
+        if ($row.AssignedRoleId -eq $anvilRoleId) {
+            $row.Command = $anvilLaunch + "`r`n"
+        }
+    }
+    Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath -Terminals $crlfRecords
+    $verifyCrlf = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify')
+    $verifyCrlfCombined = "$($verifyCrlf.StdOut)`n$($verifyCrlf.StdErr)"
+    Assert-True 'DEV-237 trailing CR/LF: exit 0' ($verifyCrlf.ExitCode -eq 0) '0' ("exit=$($verifyCrlf.ExitCode)`n$verifyCrlfCombined")
+    Assert-True 'DEV-237 trailing CR/LF: Anvil MATCH' (Test-TextContains $verifyCrlf.StdOut $anvilMatch) $anvilMatch $verifyCrlf.StdOut
+
+    $driftRecords = @(Get-HeadLaunchRecords -SeatMapPath $livePath)
+    foreach ($row in $driftRecords) {
+        if ($row.AssignedRoleId -eq $anvilRoleId) { $row.Command = $anvilDriftLaunch }
+    }
+    Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath -Terminals $driftRecords
+    $verifyDrift = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify')
+    $verifyDriftCombined = "$($verifyDrift.StdOut)`n$($verifyDrift.StdErr)"
+    Assert-True 'DEV-237 drift: exit 1' ($verifyDrift.ExitCode -eq 1) '1' ("exit=$($verifyDrift.ExitCode)`n$verifyDriftCombined")
+    Assert-True 'DEV-237 drift: Anvil DRIFT' (Test-TextContains $verifyDriftCombined $anvilDrift) $anvilDrift $verifyDriftCombined
+    Assert-True 'DEV-237 drift: VERIFY FAILED:' (Test-TextContains $verifyDriftCombined 'VERIFY FAILED:') 'VERIFY FAILED:' $verifyDriftCombined
+    Assert-True 'DEV-237 drift: expected launch redacted' (-not (Test-TextContains $verifyDriftCombined $anvilLaunch)) "absent $anvilLaunch" $verifyDriftCombined
+    Assert-True 'DEV-237 drift: actual launch redacted' (-not (Test-TextContains $verifyDriftCombined $anvilDriftLaunch)) "absent $anvilDriftLaunch" $verifyDriftCombined
+
+    $missingRecords = @(Get-HeadLaunchRecords -SeatMapPath $livePath | Where-Object { $_.AssignedRoleId -ne $cogRoleId })
+    Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath -Terminals $missingRecords
+    $verifyMissing = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify')
+    $verifyMissingCombined = "$($verifyMissing.StdOut)`n$($verifyMissing.StdErr)"
+    Assert-True 'DEV-237 missing terminal: exit 1' ($verifyMissing.ExitCode -eq 1) '1' ("exit=$($verifyMissing.ExitCode)`n$verifyMissingCombined")
+    Assert-True 'DEV-237 missing terminal: Cog MISSING' (Test-TextContains $verifyMissingCombined $cogMissing) $cogMissing $verifyMissingCombined
+
+    $dupRecords = [System.Collections.Generic.List[object]]::new()
+    foreach ($row in @(Get-HeadLaunchRecords -SeatMapPath $livePath)) {
+        $dupRecords.Add($row)
+        if ($row.AssignedRoleId -eq $anvilRoleId) { $dupRecords.Add($row) }
+    }
+    Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath -Terminals @($dupRecords)
+    $verifyDup = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify')
+    $verifyDupCombined = "$($verifyDup.StdOut)`n$($verifyDup.StdErr)"
+    Assert-True 'DEV-237 duplicate terminal: exit 1' ($verifyDup.ExitCode -eq 1) '1' ("exit=$($verifyDup.ExitCode)`n$verifyDupCombined")
+    Assert-True 'DEV-237 duplicate terminal: Anvil ERROR' (Test-TextContains $verifyDupCombined $anvilDup) $anvilDup $verifyDupCombined
+
+    $malformedRecords = @(Get-HeadLaunchRecords -SeatMapPath $livePath)
+    $malformedRecords += [pscustomobject]@{
+        AssignedRoleId = 'FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF'
+        Command        = 'unused'
+        MissingCommand = $true
+    }
+    Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath -Terminals $malformedRecords
+    $verifyMalformed = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify')
+    $verifyMalformedCombined = "$($verifyMalformed.StdOut)`n$($verifyMalformed.StdErr)"
+    Assert-True 'DEV-237 malformed payload: exit 1' ($verifyMalformed.ExitCode -eq 1) '1' ("exit=$($verifyMalformed.ExitCode)`n$verifyMalformedCombined")
+    Assert-True 'DEV-237 malformed payload: ERROR' (Test-TextContains $verifyMalformedCombined $malformedLiteral) $malformedLiteral $verifyMalformedCombined
+    Assert-True 'DEV-237 malformed payload: no seat DRIFT' (-not (Test-TextContains $verifyMalformedCombined '[VERIFY DRIFT]')) 'no [VERIFY DRIFT]' $verifyMalformedCombined
+
+    Write-WorkspaceVerifyJson -Path (Join-Path $wsDir 'workspace.json') -RepoRootHint $repoRoot -Terminals @()
+    $verifyZero = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify')
+    $verifyZeroCombined = "$($verifyZero.StdOut)`n$($verifyZero.StdErr)"
+    Assert-True 'DEV-237 zero terminals: exit 1' ($verifyZero.ExitCode -eq 1) '1' ("exit=$($verifyZero.ExitCode)`n$verifyZeroCombined")
+    Assert-True 'DEV-237 zero terminals: ERROR' (Test-TextContains $verifyZeroCombined $zeroLiteral) $zeroLiteral $verifyZeroCombined
+
+    $wjPath = Join-Path $wsDir 'workspace.json'
+    $wjBackup = [System.IO.File]::ReadAllBytes($wjPath)
+    Remove-Item -LiteralPath $wjPath -Force
+    $verifyMissingWs = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify', '-WorkspaceId', $wsId)
+    $verifyMissingWsCombined = "$($verifyMissingWs.StdOut)`n$($verifyMissingWs.StdErr)"
+    Assert-True 'DEV-237 missing workspace.json: exit 1' ($verifyMissingWs.ExitCode -eq 1) '1' ("exit=$($verifyMissingWs.ExitCode)`n$verifyMissingWsCombined")
+    Assert-True 'DEV-237 missing workspace.json: not found at' (Test-TextContains $verifyMissingWsCombined 'Verify workspace.json not found at:') 'Verify workspace.json not found at:' $verifyMissingWsCombined
+    [System.IO.File]::WriteAllBytes($wjPath, $wjBackup)
+
+    $accumRecords = @(Get-HeadLaunchRecords -SeatMapPath $livePath | Where-Object { $_.AssignedRoleId -ne $cogRoleId })
+    foreach ($row in $accumRecords) {
+        if ($row.AssignedRoleId -eq $anvilRoleId) { $row.Command = $anvilDriftLaunch }
+    }
+    Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath -Terminals $accumRecords
+    $verifyAccum = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify')
+    $verifyAccumCombined = "$($verifyAccum.StdOut)`n$($verifyAccum.StdErr)"
+    Assert-True 'DEV-237 multi-seat: exit 1' ($verifyAccum.ExitCode -eq 1) '1' ("exit=$($verifyAccum.ExitCode)`n$verifyAccumCombined")
+    Assert-True 'DEV-237 multi-seat: Anvil DRIFT' (Test-TextContains $verifyAccumCombined $anvilDrift) $anvilDrift $verifyAccumCombined
+    Assert-True 'DEV-237 multi-seat: Cog MISSING' (Test-TextContains $verifyAccumCombined $cogMissing) $cogMissing $verifyAccumCombined
+    Assert-True 'DEV-237 multi-seat: VERIFY FAILED:' (Test-TextContains $verifyAccumCombined 'VERIFY FAILED:') 'VERIFY FAILED:' $verifyAccumCombined
+
+    Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath
+
     # --- A3 porcelain unchanged after Sync -All and probe -WhatIf ---
     $porcelainBefore = Get-Porcelain
     $all = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-All')
@@ -324,6 +574,18 @@ try {
     }
     # Portal-swap live-server leg is a post-merge manual step; same write helper.
 
+    $allDriftRecords = @(Get-HeadLaunchRecords -SeatMapPath $livePath)
+    foreach ($row in $allDriftRecords) {
+        if ($row.AssignedRoleId -eq $anvilRoleId) { $row.Command = $anvilDriftLaunch }
+    }
+    Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath -Terminals $allDriftRecords
+    $allDrift = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-All')
+    $allDriftCombined = "$($allDrift.StdOut)`n$($allDrift.StdErr)"
+    Assert-True 'DEV-237 -All drift: exit 1' ($allDrift.ExitCode -eq 1) '1' ("exit=$($allDrift.ExitCode)`n$allDriftCombined")
+    Assert-True 'DEV-237 -All drift: partial-write receipt' (Test-TextContains $allDriftCombined 'Sync phases completed before verify failure; workspace drift remains.') 'Sync phases completed before verify failure; workspace drift remains.' $allDriftCombined
+    Assert-True 'DEV-237 -All drift: VERIFY DRIFT' (Test-TextContains $allDriftCombined '[VERIFY DRIFT]') '[VERIFY DRIFT]' $allDriftCombined
+    Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath
+
     # --- zero-workspace resolution failure (not A5 Init) ---
     $zeroHome = Join-Path $isoHome 'zero-ws'
     New-Item -ItemType Directory -Path (Join-Path $zeroHome '.maestri' 'workspaces') -Force | Out-Null
@@ -335,6 +597,12 @@ try {
     Assert-True 'zero-workspace: stderr names SeatMapPath remedy' (Test-TextContains $zero.StdErr '-SeatMapPath') '-SeatMapPath' $zero.StdErr
     Assert-True 'zero-workspace: stderr omits Init' (-not (Test-TextContains $zero.StdErr 'Init')) 'no Init' $zero.StdErr
     Assert-True 'zero-workspace: no bind-time throw' (-not (Test-BindTimeThrow $zero.StdOut $zero.StdErr)) 'no ParameterBindingException' "$($zero.StdOut)$($zero.StdErr)"
+    $zeroVerify = Invoke-IsolatedPwsh -HomeDir $zeroHome -File $syncScript -ArgumentList @('-Verify')
+    Assert-True 'zero-workspace -Verify: exit 1' ($zeroVerify.ExitCode -eq 1) '1' ([string]$zeroVerify.ExitCode)
+    Assert-True 'zero-workspace -Verify: stderr names resolution failure' (Test-TextContains $zeroVerify.StdErr 'Seat map workspace could not be resolved:') 'Seat map workspace could not be resolved:' $zeroVerify.StdErr
+    Assert-True 'zero-workspace -Verify: stderr names WorkspaceId remedy' (Test-TextContains $zeroVerify.StdErr '-WorkspaceId') '-WorkspaceId' $zeroVerify.StdErr
+    Assert-True 'zero-workspace -Verify: stderr names SeatMapPath remedy' (Test-TextContains $zeroVerify.StdErr '-SeatMapPath') '-SeatMapPath' $zeroVerify.StdErr
+    Assert-True 'zero-workspace -Verify: no bind-time throw' (-not (Test-BindTimeThrow $zeroVerify.StdOut $zeroVerify.StdErr)) 'no ParameterBindingException' "$($zeroVerify.StdOut)$($zeroVerify.StdErr)"
 
     # --- two-workspace (both match) resolution failure (not A5 Init) ---
     $twoHome = Join-Path $isoHome 'two-ws'
@@ -349,6 +617,12 @@ try {
     Assert-True 'two-workspace: stderr names SeatMapPath remedy' (Test-TextContains $two.StdErr '-SeatMapPath') '-SeatMapPath' $two.StdErr
     Assert-True 'two-workspace: stderr omits Init' (-not (Test-TextContains $two.StdErr 'Init')) 'no Init' $two.StdErr
     Assert-True 'two-workspace: no bind-time throw' (-not (Test-BindTimeThrow $two.StdOut $two.StdErr)) 'no ParameterBindingException' "$($two.StdOut)$($two.StdErr)"
+    $twoVerify = Invoke-IsolatedPwsh -HomeDir $twoHome -File $syncScript -ArgumentList @('-Verify')
+    Assert-True 'two-workspace -Verify: exit 1' ($twoVerify.ExitCode -eq 1) '1' ([string]$twoVerify.ExitCode)
+    Assert-True 'two-workspace -Verify: stderr names resolution failure' (Test-TextContains $twoVerify.StdErr 'Seat map workspace could not be resolved:') 'Seat map workspace could not be resolved:' $twoVerify.StdErr
+    Assert-True 'two-workspace -Verify: stderr names WorkspaceId remedy' (Test-TextContains $twoVerify.StdErr '-WorkspaceId') '-WorkspaceId' $twoVerify.StdErr
+    Assert-True 'two-workspace -Verify: stderr names SeatMapPath remedy' (Test-TextContains $twoVerify.StdErr '-SeatMapPath') '-SeatMapPath' $twoVerify.StdErr
+    Assert-True 'two-workspace -Verify: no bind-time throw' (-not (Test-BindTimeThrow $twoVerify.StdOut $twoVerify.StdErr)) 'no ParameterBindingException' "$($twoVerify.StdOut)$($twoVerify.StdErr)"
 
     # --- repo-root-mismatch: one workspace whose hint names a different repo ---
     $mismatchHome = Join-Path $isoHome 'mismatch-ws'
@@ -362,6 +636,12 @@ try {
     Assert-True 'repo-root-mismatch: stderr names SeatMapPath remedy' (Test-TextContains $mismatch.StdErr '-SeatMapPath') '-SeatMapPath' $mismatch.StdErr
     Assert-True 'repo-root-mismatch: stderr omits Init' (-not (Test-TextContains $mismatch.StdErr 'Init')) 'no Init' $mismatch.StdErr
     Assert-True 'repo-root-mismatch: no bind-time throw' (-not (Test-BindTimeThrow $mismatch.StdOut $mismatch.StdErr)) 'no ParameterBindingException' "$($mismatch.StdOut)$($mismatch.StdErr)"
+    $mismatchVerify = Invoke-IsolatedPwsh -HomeDir $mismatchHome -File $syncScript -ArgumentList @('-Verify')
+    Assert-True 'repo-root-mismatch -Verify: exit 1' ($mismatchVerify.ExitCode -eq 1) '1' ([string]$mismatchVerify.ExitCode)
+    Assert-True 'repo-root-mismatch -Verify: stderr names resolution failure' (Test-TextContains $mismatchVerify.StdErr 'Seat map workspace could not be resolved:') 'Seat map workspace could not be resolved:' $mismatchVerify.StdErr
+    Assert-True 'repo-root-mismatch -Verify: stderr names WorkspaceId remedy' (Test-TextContains $mismatchVerify.StdErr '-WorkspaceId') '-WorkspaceId' $mismatchVerify.StdErr
+    Assert-True 'repo-root-mismatch -Verify: stderr names SeatMapPath remedy' (Test-TextContains $mismatchVerify.StdErr '-SeatMapPath') '-SeatMapPath' $mismatchVerify.StdErr
+    Assert-True 'repo-root-mismatch -Verify: no bind-time throw' (-not (Test-BindTimeThrow $mismatchVerify.StdOut $mismatchVerify.StdErr)) 'no ParameterBindingException' "$($mismatchVerify.StdOut)$($mismatchVerify.StdErr)"
 
     # --- swap-log workspaceId (isolated HOME; helper write) ---
     $swapWriter = Join-Path $isoHome 'write-swap.ps1'
@@ -423,6 +703,14 @@ try {
 '@
     [System.IO.File]::WriteAllText($v1MapPath, $v1MapContent, [System.Text.UTF8Encoding]::new($false))
     $v1Diagnostic = "Seat map schemaVersion 1 is not supported; schemaVersion 2 is required. In-place migration is not implemented."
+
+    $v1Verify = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify', '-SeatMapPath', $v1MapPath)
+    $v1VerifyCombined = "$($v1Verify.StdOut)`n$($v1Verify.StdErr)"
+    Assert-True 'DEV-237 invalid schema before verify: exit 1' ($v1Verify.ExitCode -eq 1) '1' ("exit=$($v1Verify.ExitCode)`n$v1VerifyCombined")
+    Assert-True 'DEV-237 invalid schema before verify: diagnostic' (Test-TextContains $v1VerifyCombined $v1Diagnostic) $v1Diagnostic $v1VerifyCombined
+    Assert-True 'DEV-237 invalid schema before verify: no MATCH' (-not (Test-TextContains $v1VerifyCombined '[VERIFY MATCH]')) 'no [VERIFY MATCH]' $v1VerifyCombined
+    Assert-True 'DEV-237 invalid schema before verify: no DRIFT' (-not (Test-TextContains $v1VerifyCombined '[VERIFY DRIFT]')) 'no [VERIFY DRIFT]' $v1VerifyCombined
+    Assert-True 'DEV-237 invalid schema before verify: no VERIFY OK' (-not (Test-TextContains $v1VerifyCombined 'VERIFY OK:')) 'no VERIFY OK:' $v1VerifyCombined
 
     $v1Server = Invoke-IsolatedPwsh -HomeDir $isoHome -File $serverScript -ArgumentList @('-SeatMapPath', $v1MapPath, '-Port', '8790') -TimeoutMs 15000
     Assert-True 'R1 A1 Start-SeatMapServer v1: exit 1' ($v1Server.ExitCode -eq 1) '1' ([string]$v1Server.ExitCode)
@@ -992,6 +1280,7 @@ try {
             [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORCMD'; pool = 'GEMINI'; host = 'gemini'; model = 'm-floor'; tier = 2; evidence = 'measured' }
         )
     }
+    Write-MatchingWorkspaceVerifyJson -WsDir $dev234WsDir -RepoRootHint $repoRoot -SeatMapPath $dev234MapPath
     $swapA8 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'floor', '-All', '-SeatMapPath', $dev234MapPath)
     Assert-True 'A8 target swap on activeRung=floor exit 0' ($swapA8.ExitCode -eq 0) '0' ([string]$swapA8.ExitCode)
     Assert-True 'A8 recruit command uses resolved runtime floor launch' (Test-TextContains $swapA8.StdOut 'THENCMD') 'THENCMD' $swapA8.StdOut
@@ -1021,6 +1310,7 @@ try {
     $tw5Validate = Invoke-IsolatedPwsh -HomeDir $tw5Home -File $syncScript -ArgumentList @('-Validate', '-SeatMapPath', $tw5MapPath)
     Assert-True 'TW5 -Validate with unrelated incapable seat: exit 0' ($tw5Validate.ExitCode -eq 0) '0' ([string]$tw5Validate.ExitCode)
     Assert-True 'TW5 -Validate: no target runtime-floor error' (-not (Test-TextContains "$($tw5Validate.StdOut)`n$($tw5Validate.StdErr)" $dev234NoFloorLiteral)) "no $dev234NoFloorLiteral" "$($tw5Validate.StdOut)`n$($tw5Validate.StdErr)"
+    Write-MatchingWorkspaceVerifyJson -WsDir $tw5WsDir -RepoRootHint $repoRoot -SeatMapPath $tw5MapPath
     $tw5All = Invoke-IsolatedPwsh -HomeDir $tw5Home -File $syncScript -ArgumentList @('-All', '-SeatMapPath', $tw5MapPath)
     Assert-True 'TW5 -All with unrelated incapable seat: exit 0' ($tw5All.ExitCode -eq 0) '0' ([string]$tw5All.ExitCode)
     Assert-True 'TW5 -All: no target runtime-floor error' (-not (Test-TextContains "$($tw5All.StdOut)`n$($tw5All.StdErr)" $dev234NoFloorLiteral)) "no $dev234NoFloorLiteral" "$($tw5All.StdOut)`n$($tw5All.StdErr)"
@@ -1072,6 +1362,9 @@ if ($realSwapExistsBefore) {
 else {
     Assert-True 'real home swap log not created' (-not $realSwapExistsAfter) 'absent' ([string]$realSwapExistsAfter)
 }
+
+$realMaestriSnapAfter = Get-TargetedMaestriSnapshot -Root $realMaestri
+Assert-True 'real profile .maestri targeted snapshot unchanged' ($realMaestriSnapBefore -eq $realMaestriSnapAfter) $realMaestriSnapBefore $realMaestriSnapAfter
 
 Write-Host ''
 Write-Host "Test-SeatMapLive: $checks checks, $failures failures."
