@@ -21,7 +21,7 @@
 .PARAMETER Seat
     Seat id or codename to update.
 .PARAMETER Rung
-    Active rung to set: head, then, floor.
+    Declared rung name to set as activeRung (schemaVersion-2 named rungs).
 .PARAMETER WorkspaceId
     Maestri workspace UUID. Auto-discovered from ~/.maestri/workspaces when omitted.
 .PARAMETER SyncRoles
@@ -44,7 +44,6 @@
 param(
     [string]$SeatMapPath,
     [string]$Seat,
-    [ValidateSet('head', 'then', 'floor')]
     [string]$Rung,
     [string]$WorkspaceId,
     [switch]$SyncRoles,
@@ -159,6 +158,8 @@ if ($Rung -and -not $Seat) {
     throw '-Seat is required when -Rung is set.'
 }
 
+$swapTarget = $null
+$targetRuntimeFloor = $null
 if ($Seat -and $Rung) {
     $swapTarget = Get-SeatByName -Map $seatMap -Name $Seat
     if ($null -eq $swapTarget) {
@@ -206,7 +207,10 @@ if ($GenerateCommands -or $All) {
         $runtimeFloor = $null
         if ($null -ne $swapTarget -and $s.id -eq $swapTarget.id) { $runtimeFloor = $targetRuntimeFloor }
         $activeCell = Get-SeatActiveLaunchCell -Seat $s -RuntimeFloor $runtimeFloor
-        Write-Host "maestri recruit `"$($s.codename)`" --preset `"$($s.preset)`" --command `"$($activeCell.launch)`" --replace `"$($s.codename)`""
+        $codeName = if (Test-JsonProperty -Object $s -Name 'codename') { [string]$s.codename } else { '' }
+        $preset = if (Test-JsonProperty -Object $s -Name 'preset') { [string]$s.preset } else { '' }
+        $launch = if ($null -ne $activeCell -and (Test-JsonProperty -Object $activeCell -Name 'launch')) { [string]$activeCell.launch } else { '' }
+        Write-Host (Get-SeatMapRecruitCommand -Codename $codeName -Preset $preset -Launch $launch)
     }
 }
 

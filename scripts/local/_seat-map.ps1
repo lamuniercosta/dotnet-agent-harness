@@ -786,7 +786,7 @@ function Resolve-SeatRuntimeFloor {
         if ($null -eq $cell) { continue }
 
         $r = "rung[$index]"
-        if (Test-JsonProperty -Object $cell -Name 'name' -and -not [string]::IsNullOrWhiteSpace([string]$cell.name)) {
+        if ((Test-JsonProperty -Object $cell -Name 'name') -and -not [string]::IsNullOrWhiteSpace([string]$cell.name)) {
             $r = [string]$cell.name
         }
 
@@ -801,7 +801,7 @@ function Resolve-SeatRuntimeFloor {
         if (-not $hasTier -or $null -eq $tierNum) {
             return [pscustomobject]@{
                 Ok       = $false
-                Error    = "Seat '$label' measured/cleared rung '$r' has missing, blank, or non-numeric tier (runtime floor requires 1-4)."
+                Error    = "Seat '$label' measured/cleared rung '$r' has invalid tier (missing, blank, or non-numeric; runtime floor requires 1-4)."
                 RungName = $null
                 Cell     = $null
                 Launch   = $null
