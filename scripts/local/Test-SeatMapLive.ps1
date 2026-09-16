@@ -512,6 +512,169 @@ try {
     $portalCondSeat = @($portalReadbackMap.seats | Where-Object { $_.id -eq 'conductor' })[0]
     Assert-True 'portal HTTP POST: activeRung readback confirmed alt' ($portalCondSeat.activeRung -eq 'alt') 'alt' ([string]$portalCondSeat.activeRung)
 
+    # --- DEV-236: Pre-flight validations (Junie, OpenCode, Cursor) ---
+    $preflightHome = Join-Path $isoHome 'preflight-home'
+    New-Item -ItemType Directory -Path $preflightHome -Force | Out-Null
+    $junieDir = Join-Path $preflightHome '.junie'
+    New-Item -ItemType Directory -Path $junieDir -Force | Out-Null
+    $junieFile = Join-Path $junieDir 'settings.json'
+
+    # Junie 1: Missing settings file -> exit 1, sanitized stderr
+    $resJ1 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'junie', '-Model', 'gpt-4o', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 Junie missing settings: exit 1' ($resJ1.ExitCode -eq 1) '1' ([string]$resJ1.ExitCode)
+    Assert-True 'DEV-236 Junie missing settings: sanitized stderr' (Test-TextContains $resJ1.StdErr 'Junie pre-flight failed: settings file missing:') 'missing' $resJ1.StdErr
+
+    # Junie 2: Invalid JSON -> exit 1, sanitized stderr
+    [System.IO.File]::WriteAllText($junieFile, '{ invalid json', [System.Text.UTF8Encoding]::new($false))
+    $resJ2 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'junie', '-Model', 'gpt-4o', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 Junie invalid JSON: exit 1' ($resJ2.ExitCode -eq 1) '1' ([string]$resJ2.ExitCode)
+    Assert-True 'DEV-236 Junie invalid JSON: sanitized stderr' (Test-TextContains $resJ2.StdErr 'Junie pre-flight failed: settings file is not valid JSON:') 'not valid JSON' $resJ2.StdErr
+    Assert-True 'DEV-236 Junie invalid JSON: stderr conceals raw file content' (-not (Test-TextContains $resJ2.StdErr '{ invalid json')) 'concealed' $resJ2.StdErr
+
+    # Junie 3: Missing effortPerModel -> exit 1, sanitized stderr
+    [System.IO.File]::WriteAllText($junieFile, '{"other": 123}', [System.Text.UTF8Encoding]::new($false))
+    $resJ3 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'junie', '-Model', 'gpt-4o', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 Junie missing effortPerModel: exit 1' ($resJ3.ExitCode -eq 1) '1' ([string]$resJ3.ExitCode)
+    Assert-True 'DEV-236 Junie missing effortPerModel: sanitized stderr' (Test-TextContains $resJ3.StdErr 'Junie pre-flight failed: effortPerModel missing:') 'missing' $resJ3.StdErr
+
+    # Junie 4: Non-object effortPerModel -> exit 1, sanitized stderr
+    [System.IO.File]::WriteAllText($junieFile, '{"effortPerModel": "high"}', [System.Text.UTF8Encoding]::new($false))
+    $resJ4 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'junie', '-Model', 'gpt-4o', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 Junie non-object effortPerModel: exit 1' ($resJ4.ExitCode -eq 1) '1' ([string]$resJ4.ExitCode)
+    Assert-True 'DEV-236 Junie non-object effortPerModel: sanitized stderr' (Test-TextContains $resJ4.StdErr 'Junie pre-flight failed: effortPerModel is not an object:') 'not an object' $resJ4.StdErr
+
+    # Junie 5: Valid settings under -WhatIf -> exit 0, file byte-identical
+    $validJunieContent = '{"effortPerModel": {"gpt-4o": "medium"}}' + [Environment]::NewLine
+    [System.IO.File]::WriteAllText($junieFile, $validJunieContent, [System.Text.UTF8Encoding]::new($false))
+    $resJ5 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'junie', '-Model', 'gpt-4o', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 Junie valid -WhatIf: exit 0' ($resJ5.ExitCode -eq 0) '0' ([string]$resJ5.ExitCode)
+    $afterJunieContent = [System.IO.File]::ReadAllText($junieFile)
+    Assert-True 'DEV-236 Junie valid -WhatIf: file byte-identical' ($afterJunieContent -eq $validJunieContent) 'byte-identical' $afterJunieContent
+
+    # Junie 6: Restore fidelity seam (Write-JunieEffortOnly & Restore-JunieEffort helper test)
+    $seamScript = Join-Path $isoHome 'junie-seam-test.ps1'
+    $helperPathLiteral = $helperPath.Replace("'", "''")
+    $seamScriptBody = @(
+        ". '$helperPathLiteral'"
+        'function Read-JunieEffortOnly {'
+        '    param([string]$SettingsPath, [string]$ModelName)'
+        '    if (-not (Test-Path -LiteralPath $SettingsPath)) {'
+        '        return [pscustomobject]@{ Exists = $false; HadKey = $false; Value = $null }'
+        '    }'
+        '    $settings = (Get-Content -LiteralPath $SettingsPath -Raw) | ConvertFrom-Json'
+        '    $map = Get-JsonPath -Object $settings -Path @("effortPerModel")'
+        '    $hadKey = $false'
+        '    $value = $null'
+        '    if ($null -ne $map -and $null -ne $map.PSObject.Properties[$ModelName]) {'
+        '        $hadKey = $true'
+        '        $value = $map.$ModelName'
+        '    }'
+        '    return [pscustomobject]@{ Exists = $true; HadKey = $hadKey; Value = $value }'
+        '}'
+        'function Write-JunieEffortOnly {'
+        '    param([string]$SettingsPath, [string]$ModelName, [string]$Effort)'
+        '    if (-not (Test-Path -LiteralPath $SettingsPath)) { return }'
+        '    $settings = (Get-Content -LiteralPath $SettingsPath -Raw) | ConvertFrom-Json'
+        '    if (-not (Test-JsonProperty -Object $settings -Name "effortPerModel") -or $null -eq $settings.effortPerModel) {'
+        '        $settings | Add-Member -NotePropertyName "effortPerModel" -NotePropertyValue ([pscustomobject]@{}) -Force'
+        '    }'
+        '    if ($null -ne $settings.effortPerModel.PSObject.Properties[$ModelName]) {'
+        '        $settings.effortPerModel.$ModelName = $Effort'
+        '    }'
+        '    else {'
+        '        $settings.effortPerModel | Add-Member -NotePropertyName $ModelName -NotePropertyValue $Effort'
+        '    }'
+        '    $json = $settings | ConvertTo-Json -Depth 12'
+        '    [System.IO.File]::WriteAllText($SettingsPath, $json + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))'
+        '}'
+        'function Restore-JunieEffort {'
+        '    param($Backup, [string]$SettingsPath, [string]$ModelName)'
+        '    if ($null -eq $Backup -or -not $Backup.Exists) { return }'
+        '    if (-not (Test-Path -LiteralPath $SettingsPath)) { return }'
+        '    $settings = (Get-Content -LiteralPath $SettingsPath -Raw) | ConvertFrom-Json'
+        '    if (-not (Test-JsonProperty -Object $settings -Name "effortPerModel") -or $null -eq $settings.effortPerModel) {'
+        '        if (-not $Backup.HadKey) { return }'
+        '        $settings | Add-Member -NotePropertyName "effortPerModel" -NotePropertyValue ([pscustomobject]@{}) -Force'
+        '    }'
+        '    $map = $settings.effortPerModel'
+        '    if ($Backup.HadKey) {'
+        '        if ($null -ne $map.PSObject.Properties[$ModelName]) {'
+        '            $map.$ModelName = $Backup.Value'
+        '        }'
+        '        else {'
+        '            $map | Add-Member -NotePropertyName $ModelName -NotePropertyValue $Backup.Value'
+        '        }'
+        '    }'
+        '    else {'
+        '        if ($null -ne $map.PSObject.Properties[$ModelName]) {'
+        '            $map.PSObject.Properties.Remove($ModelName)'
+        '        }'
+        '    }'
+        '    $json = $settings | ConvertTo-Json -Depth 12'
+        '    [System.IO.File]::WriteAllText($SettingsPath, $json + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))'
+        '}'
+        "`$backup = Read-JunieEffortOnly -SettingsPath '$($junieFile.Replace("'", "''"))' -ModelName 'gpt-4o'"
+        "Write-JunieEffortOnly -SettingsPath '$($junieFile.Replace("'", "''"))' -ModelName 'gpt-4o' -Effort 'high'"
+        "Restore-JunieEffort -Backup `$backup -SettingsPath '$($junieFile.Replace("'", "''"))' -ModelName 'gpt-4o'"
+    ) -join [Environment]::NewLine
+    [System.IO.File]::WriteAllText($seamScript, $seamScriptBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $resJ6 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $seamScript
+    Assert-True 'DEV-236 Junie restore fidelity seam: exit 0' ($resJ6.ExitCode -eq 0) '0' ([string]$resJ6.ExitCode)
+    $restoredJunieContent = [System.IO.File]::ReadAllText($junieFile)
+    $restoredObj = $restoredJunieContent | ConvertFrom-Json
+    $expectedObj = $validJunieContent | ConvertFrom-Json
+    Assert-True 'DEV-236 Junie restore fidelity seam: restored content match' ($restoredObj.effortPerModel.'gpt-4o' -eq $expectedObj.effortPerModel.'gpt-4o') 'restored' $restoredJunieContent
+
+    # OpenCode 1: Configured reasoning.effort -> stdout Warning & Note, exit 0
+    $opencodeDir = Join-Path (Join-Path $preflightHome '.config') 'opencode'
+    New-Item -ItemType Directory -Path $opencodeDir -Force | Out-Null
+    $opencodeFile = Join-Path $opencodeDir 'opencode.jsonc'
+    [System.IO.File]::WriteAllText($opencodeFile, '// comment' + [Environment]::NewLine + '{"reasoning": {"effort": "high"}}', [System.Text.UTF8Encoding]::new($false))
+    $resO1 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'opencode', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 OpenCode configured effort: exit 0' ($resO1.ExitCode -eq 0) '0' ([string]$resO1.ExitCode)
+    Assert-True 'DEV-236 OpenCode configured effort: stdout Warning present' (Test-TextContains $resO1.StdOut 'Warning:  reasoning.effort=high is a global/shared OpenCode setting') 'Warning' $resO1.StdOut
+    Assert-True 'DEV-236 OpenCode configured effort: stdout Note present' (Test-TextContains $resO1.StdOut 'Note:     OpenCode probes should not run while live OpenCode seats are active.') 'Note' $resO1.StdOut
+
+    # OpenCode 2: Invalid/unreadable config -> non-blocking under -WhatIf, exit 0, Note on stdout
+    [System.IO.File]::WriteAllText($opencodeFile, '{ invalid jsonc', [System.Text.UTF8Encoding]::new($false))
+    $resO2 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'opencode', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 OpenCode invalid config: non-blocking exit 0' ($resO2.ExitCode -eq 0) '0' ([string]$resO2.ExitCode)
+    Assert-True 'DEV-236 OpenCode invalid config: stdout Note present' (Test-TextContains $resO2.StdOut 'Note:     OpenCode config invalid:') 'Note' $resO2.StdOut
+    Assert-True 'DEV-236 OpenCode invalid config: stdout conceals raw file content' (-not (Test-TextContains $resO2.StdOut '{ invalid jsonc')) 'concealed' $resO2.StdOut
+
+    # Cursor 1: Missing cli-config.json -> exit 0
+    $cursorDir = Join-Path $preflightHome '.cursor'
+    New-Item -ItemType Directory -Path $cursorDir -Force | Out-Null
+    $cursorFile = Join-Path $cursorDir 'cli-config.json'
+    if (Test-Path -LiteralPath $cursorFile) { Remove-Item -LiteralPath $cursorFile -Force }
+    $resC1 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'cursor', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 Cursor missing config: exit 0' ($resC1.ExitCode -eq 0) '0' ([string]$resC1.ExitCode)
+
+    # Cursor 2: Matching model (exact ordinal trimmed) -> exit 0
+    [System.IO.File]::WriteAllText($cursorFile, '{"model": {"modelId": "  claude-3-5-sonnet  "}}', [System.Text.UTF8Encoding]::new($false))
+    $resC2 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'cursor', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 Cursor matching model: exit 0' ($resC2.ExitCode -eq 0) '0' ([string]$resC2.ExitCode)
+
+    # Cursor 3: Extraction order precedence test (model.modelId beats selectedModel.modelId)
+    [System.IO.File]::WriteAllText($cursorFile, '{"model": {"modelId": "claude-3-5-sonnet"}, "selectedModel": {"modelId": "gpt-4o"}}', [System.Text.UTF8Encoding]::new($false))
+    $resC3 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'cursor', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 Cursor extraction precedence (model.modelId): exit 0' ($resC3.ExitCode -eq 0) '0' ([string]$resC3.ExitCode)
+
+    # Cursor 4: Conflicting model -> exit 1, sanitized stderr
+    [System.IO.File]::WriteAllText($cursorFile, '{"model": "gpt-4o"}', [System.Text.UTF8Encoding]::new($false))
+    $resC4 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'cursor', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 Cursor conflicting model: exit 1' ($resC4.ExitCode -eq 1) '1' ([string]$resC4.ExitCode)
+    Assert-True 'DEV-236 Cursor conflicting model: sanitized stderr' (Test-TextContains $resC4.StdErr 'Cursor pre-flight failed: configured model conflicts with -Model:') 'conflicts' $resC4.StdErr
+
+    # Cursor 5: Malformed/unreadable config -> fail-closed exit 1, sanitized stderr
+    [System.IO.File]::WriteAllText($cursorFile, '{ bad cursor json', [System.Text.UTF8Encoding]::new($false))
+    $resC5 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'cursor', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 Cursor malformed config: fail-closed exit 1' ($resC5.ExitCode -eq 1) '1' ([string]$resC5.ExitCode)
+    Assert-True 'DEV-236 Cursor malformed config: sanitized stderr' (Test-TextContains $resC5.StdErr 'Cursor pre-flight failed: config file is not valid JSON:') 'not valid JSON' $resC5.StdErr
+    Assert-True 'DEV-236 Cursor malformed config: stderr conceals raw file content' (-not (Test-TextContains $resC5.StdErr '{ bad cursor json')) 'concealed' $resC5.StdErr
+
+
+
 }
 finally {
     if (Test-Path -LiteralPath $isoHome) {

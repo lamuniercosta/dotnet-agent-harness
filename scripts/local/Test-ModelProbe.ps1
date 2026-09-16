@@ -23,6 +23,15 @@
   OpenCode probes should not run while live OpenCode seats are active: this
   script records ambient reasoning.effort and never edits opencode.jsonc.
 
+  Pre-flight (DEV-236) runs after host/model resolution and before -WhatIf
+  exit, seat-map lock, Junie mutation, or launch. Junie missing/unreadable/
+  invalid JSON or a missing/non-object effortPerModel fails closed. OpenCode
+  warns on stdout when reasoning.effort is set; absent/unreadable/invalid
+  config stays non-blocking. Cursor compares cli-config.json with exact
+  ordinal trimmed equality and fails closed on conflict or a present
+  unreadable/malformed config. Failure messages name path and condition;
+  they never echo raw file contents or parser excerpts.
+
   Kit resolution: $env:PROBE_KIT_ROOT, then <repo>/artifacts/probe-kit.
   A missing kit is an error; the probe will not launch.
 
@@ -489,25 +498,72 @@ function ConvertFrom-Jsonc {
     }
 }
 
-function Get-OpenCodeAmbientEffort {
-    $configPath = Join-Path (Join-Path (Join-Path $HOME '.config') 'opencode') 'opencode.jsonc'
-    if (-not (Test-Path -LiteralPath $configPath)) {
-        $configPath = Join-Path (Join-Path (Join-Path $HOME '.config') 'opencode') 'opencode.json'
+function Test-JsonMapObject {
+    param(
+        [AllowNull()]
+        [object]$Value
+    )
+    if ($null -eq $Value) { return $false }
+    if ($Value -is [string]) { return $false }
+    if ($Value -is [System.ValueType]) { return $false }
+    if ($Value -is [System.Array]) { return $false }
+    if ($Value -is [System.Collections.IDictionary]) { return $true }
+    if ($Value -is [pscustomobject]) { return $true }
+    if ($Value -is [System.Collections.IList]) { return $false }
+    return $false
+}
+
+function Get-OpenCodeAmbientEffortResult {
+    $jsonc = Join-Path (Join-Path (Join-Path $HOME '.config') 'opencode') 'opencode.jsonc'
+    $json = Join-Path (Join-Path (Join-Path $HOME '.config') 'opencode') 'opencode.json'
+    $configPath = $null
+    if (Test-Path -LiteralPath $jsonc) {
+        $configPath = $jsonc
     }
-    if (-not (Test-Path -LiteralPath $configPath)) { return $null }
-    $raw = Get-Content -LiteralPath $configPath -Raw
+    elseif (Test-Path -LiteralPath $json) {
+        $configPath = $json
+    }
+    if ($null -eq $configPath) {
+        return [pscustomobject]@{ Status = 'missing'; Path = $null; Effort = $null; Source = $null }
+    }
+
+    $raw = $null
     try {
-        $json = ConvertFrom-Jsonc -Raw $raw
+        $raw = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop
     }
     catch {
-        return $null
+        return [pscustomobject]@{ Status = 'unreadable'; Path = $configPath; Effort = $null; Source = $null }
     }
-    $effort = Get-JsonPath -Object $json -Path @('reasoning', 'effort')
+    if ($null -eq $raw) { $raw = '' }
+
+    try {
+        $parsed = ConvertFrom-Jsonc -Raw $raw
+    }
+    catch {
+        return [pscustomobject]@{ Status = 'invalid'; Path = $configPath; Effort = $null; Source = $null }
+    }
+
+    $source = $null
+    $effort = Get-JsonPath -Object $parsed -Path @('reasoning', 'effort')
+    if ($null -ne $effort) {
+        $source = 'reasoning.effort'
+    }
+    else {
+        $effort = Get-JsonPath -Object $parsed -Path @('agent', 'reasoning', 'effort')
+        if ($null -ne $effort) {
+            $source = 'agent.reasoning.effort'
+        }
+    }
     if ($null -eq $effort) {
-        $effort = Get-JsonPath -Object $json -Path @('agent', 'reasoning', 'effort')
+        return [pscustomobject]@{ Status = 'absent'; Path = $configPath; Effort = $null; Source = $null }
     }
-    if ($null -eq $effort) { return $null }
-    return [string]$effort
+    return [pscustomobject]@{ Status = 'present'; Path = $configPath; Effort = [string]$effort; Source = $source }
+}
+
+function Get-OpenCodeAmbientEffort {
+    $result = Get-OpenCodeAmbientEffortResult
+    if ($result.Status -ne 'present') { return $null }
+    return $result.Effort
 }
 
 function Read-JunieEffortOnly {
@@ -568,6 +624,111 @@ function Restore-JunieEffort {
     }
     $json = $settings | ConvertTo-Json -Depth 12
     [System.IO.File]::WriteAllText($SettingsPath, $json + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+}
+
+function Assert-JunieSettingsPreflight {
+    $settingsPath = Join-Path (Join-Path $HOME '.junie') 'settings.json'
+    if (-not (Test-Path -LiteralPath $settingsPath)) {
+        Write-ProbeError "Junie pre-flight failed: settings file missing: $settingsPath"
+    }
+
+    $raw = $null
+    try {
+        $raw = Get-Content -LiteralPath $settingsPath -Raw -ErrorAction Stop
+    }
+    catch {
+        Write-ProbeError "Junie pre-flight failed: settings file unreadable: $settingsPath"
+    }
+    if ($null -eq $raw) { $raw = '' }
+
+    $settings = $null
+    try {
+        $settings = $raw | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        Write-ProbeError "Junie pre-flight failed: settings file is not valid JSON: $settingsPath"
+    }
+
+    if (-not (Test-JsonProperty -Object $settings -Name 'effortPerModel')) {
+        Write-ProbeError "Junie pre-flight failed: effortPerModel missing: $settingsPath"
+    }
+    if (-not (Test-JsonMapObject -Value $settings.effortPerModel)) {
+        Write-ProbeError "Junie pre-flight failed: effortPerModel is not an object: $settingsPath"
+    }
+}
+
+function Get-CursorConfiguredModelId {
+    param(
+        [AllowNull()]
+        [object]$Config
+    )
+    if (-not (Test-JsonMapObject -Value $Config)) {
+        return $null
+    }
+
+    if (Test-JsonProperty -Object $Config -Name 'model') {
+        $model = $Config.model
+        if ((Test-JsonMapObject -Value $model) -and (Test-JsonProperty -Object $model -Name 'modelId')) {
+            $id = $model.modelId
+            if ($id -is [string]) { return $id }
+        }
+    }
+
+    if (Test-JsonProperty -Object $Config -Name 'selectedModel') {
+        $selected = $Config.selectedModel
+        if ((Test-JsonMapObject -Value $selected) -and (Test-JsonProperty -Object $selected -Name 'modelId')) {
+            $id = $selected.modelId
+            if ($id -is [string]) { return $id }
+        }
+    }
+
+    if (Test-JsonProperty -Object $Config -Name 'model') {
+        $model = $Config.model
+        if ($model -is [string]) { return $model }
+    }
+
+    if (Test-JsonProperty -Object $Config -Name 'selectedModel') {
+        $selected = $Config.selectedModel
+        if ($selected -is [string]) { return $selected }
+    }
+
+    return $null
+}
+
+function Assert-CursorModelPreflight {
+    param([string]$ProbeModel)
+    $configPath = Join-Path (Join-Path $HOME '.cursor') 'cli-config.json'
+    if (-not (Test-Path -LiteralPath $configPath)) {
+        return
+    }
+
+    $raw = $null
+    try {
+        $raw = Get-Content -LiteralPath $configPath -Raw -ErrorAction Stop
+    }
+    catch {
+        Write-ProbeError "Cursor pre-flight failed: config file unreadable: $configPath"
+    }
+    if ($null -eq $raw) { $raw = '' }
+
+    $config = $null
+    try {
+        $config = $raw | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        Write-ProbeError "Cursor pre-flight failed: config file is not valid JSON: $configPath"
+    }
+
+    $configured = Get-CursorConfiguredModelId -Config $config
+    if ($null -eq $configured) {
+        return
+    }
+
+    $left = ([string]$configured).Trim()
+    $right = ([string]$ProbeModel).Trim()
+    if (-not [string]::Equals($left, $right, [StringComparison]::Ordinal)) {
+        Write-ProbeError "Cursor pre-flight failed: configured model conflicts with -Model: $configPath"
+    }
 }
 
 function Set-NoteValue {
@@ -904,13 +1065,25 @@ $workDir = Get-ProbeWorkingDirectory -TestName $Test -RepoRoot $repoRoot -KitRoo
 $pool = Resolve-ProbePool -HostName $ProbeHost -ModelName $Model
 $launch = New-LaunchSpec -HostName $ProbeHost -Binary $binary -ModelName $Model -TestName $Test -WorkDir $workDir -TaskPath $taskPath
 $ambientEffort = $null
+$openCodeEffortResult = $null
 if ($ProbeHost -eq 'opencode') {
-    $ambientEffort = Get-OpenCodeAmbientEffort
+    $openCodeEffortResult = Get-OpenCodeAmbientEffortResult
+    if ($openCodeEffortResult.Status -eq 'present') {
+        $ambientEffort = $openCodeEffortResult.Effort
+    }
 }
 
 $resolvedSeat = $null
 if ($hasSeat) {
     $resolvedSeat = Resolve-SeatCell -SeatName $Seat -RungName $Rung -MapPath $SeatMapPath
+}
+
+# DEV-236: fail-closed Junie/Cursor checks before -WhatIf, lock, mutation, or launch.
+if ($ProbeHost -eq 'junie') {
+    Assert-JunieSettingsPreflight
+}
+elseif ($ProbeHost -eq 'cursor') {
+    Assert-CursorModelPreflight -ProbeModel $Model
 }
 
 Write-Host "Host:     $ProbeHost"
@@ -930,9 +1103,19 @@ if ($ProbeHost -eq 'opencode') {
     Write-Host 'Note:     OpenCode probes should not run while live OpenCode seats are active.'
     if ($null -ne $ambientEffort) {
         Write-Host "Ambient:  reasoning.effort=$ambientEffort"
+        $effortName = if ($openCodeEffortResult -and $openCodeEffortResult.Source) {
+            [string]$openCodeEffortResult.Source
+        }
+        else {
+            'reasoning.effort'
+        }
+        Write-Host "Warning:  $effortName=$ambientEffort is a global/shared OpenCode setting that can affect concurrent OpenCode seats."
     }
     else {
         Write-Host 'Ambient:  reasoning.effort=(unrecorded)'
+        if ($openCodeEffortResult -and $openCodeEffortResult.Status -in @('unreadable', 'invalid') -and $openCodeEffortResult.Path) {
+            Write-Host "Note:     OpenCode config $($openCodeEffortResult.Status): $($openCodeEffortResult.Path)"
+        }
     }
 }
 if ($Test -eq 'Timeout') {
