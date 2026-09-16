@@ -205,6 +205,10 @@ $worktreeMaestri = Join-Path $repoRoot '.maestri'
 $worktreeRoles = Join-Path $worktreeMaestri 'roles'
 $hadWorktreeMaestri = Test-Path -LiteralPath $worktreeMaestri
 $hadWorktreeRoles = Test-Path -LiteralPath $worktreeRoles
+$dev234AnvilRoleFile = $null
+$dev234AnvilRoleHadFile = $false
+$dev234AnvilRolePriorBytes = $null
+$dev234AnvilRoleDirExisted = $false
 
 Write-Host 'Test-SeatMapLive (isolated HOME)'
 
@@ -489,6 +493,9 @@ try {
     Assert-True 'R1 A3 Start-SeatMapServer recruitCommand quoting: exit 0' ($portalQuoteRes.ExitCode -eq 0) '0' ("exit=$($portalQuoteRes.ExitCode)`n$($portalQuoteRes.StdOut)`n$($portalQuoteRes.StdErr)")
 
     # --- DEV-235 B4: Portal HTTP render + POST + activeRung readback ---
+    # B3 fixture: conductor needs a safe measured/cleared runtime-floor candidate before declared-rung POST.
+    # Probe fake write above sets alt evidence to probed; restore example map so alt stays cleared (tier 4 GEMINI).
+    Copy-Item -LiteralPath $examplePath -Destination $livePath -Force
     $portalScript = Join-Path $isoHome 'test-portal.ps1'
     $serverScriptLiteral = $serverScript.Replace("'", "''")
     $portalScriptBody = @(
@@ -504,7 +511,7 @@ try {
         "    `$tokenMatch = [regex]::Match(`$html, '<meta name=""seat-map-token"" content=""([^""]+)""')"
         "    if (-not `$tokenMatch.Success) { throw 'Token missing' }"
         "    `$token = `$tokenMatch.Groups[1].Value"
-        "    `$body = @{ seatId = 'anvil'; rung = 'then' } | ConvertTo-Json"
+        "    `$body = @{ seatId = 'conductor'; rung = 'alt' } | ConvertTo-Json"
         "    `$headers = @{ 'X-Seat-Map-Token' = `$token }"
         "    `$postResp = Invoke-WebRequest -Uri 'http://localhost:8789/api/seats/set' -Method POST -Headers `$headers -Body `$body -ContentType 'application/json' -UseBasicParsing"
         "    if (`$postResp.StatusCode -ne 200) { throw 'POST failed' }"
@@ -516,8 +523,84 @@ try {
     $portalRes = Invoke-IsolatedPwsh -HomeDir $isoHome -File $portalScript
     Assert-True 'portal HTTP render+POST: exit 0' ($portalRes.ExitCode -eq 0) '0' ("exit=$($portalRes.ExitCode)`n$($portalRes.StdOut)`n$($portalRes.StdErr)")
     $portalReadbackMap = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
-    $portalAnvilSeat = @($portalReadbackMap.seats | Where-Object { $_.id -eq 'anvil' })[0]
-    Assert-True 'portal HTTP POST: activeRung readback confirmed then' ($portalAnvilSeat.activeRung -eq 'then') 'then' ([string]$portalAnvilSeat.activeRung)
+    $portalCondSeat = @($portalReadbackMap.seats | Where-Object { $_.id -eq 'conductor' })[0]
+    Assert-True 'portal HTTP POST: activeRung readback confirmed alt' ($portalCondSeat.activeRung -eq 'alt') 'alt' ([string]$portalCondSeat.activeRung)
+
+    # --- TW1: Portal failure atomicity (no-capable-floor fixture) ---
+    $tw1Home = Join-Path $isoHome 'tw1-portal-fail'
+    $tw1WsId = [guid]::NewGuid().ToString()
+    $tw1WsDir = New-WorkspaceDir -HomeDir $tw1Home -WorkspaceId $tw1WsId -RepoRootHint $repoRoot
+    Write-NoteStubs -WsDir $tw1WsDir
+    $tw1MapPath = Join-Path $tw1WsDir 'seat-map.json'
+    Copy-Item -LiteralPath $examplePath -Destination $tw1MapPath
+    $tw1MapObj = Get-Content -LiteralPath $tw1MapPath -Raw | ConvertFrom-Json
+    $tw1Anvil = @($tw1MapObj.seats | Where-Object { $_.id -eq 'anvil' })[0]
+    $tw1Anvil.rungs = @(
+        [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 1; evidence = 'measured' },
+        [pscustomobject]@{ name = 'then'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'probed' },
+        [pscustomobject]@{ name = 'alt'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'probed' },
+        [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORCMD'; pool = 'GEMINI'; host = 'gemini'; model = 'm-floor'; tier = 3; evidence = 'probed' }
+    )
+    $tw1MapJson = $tw1MapObj | ConvertTo-Json -Depth 12
+    if (-not $tw1MapJson.EndsWith("`n")) { $tw1MapJson += "`n" }
+    [System.IO.File]::WriteAllText($tw1MapPath, $tw1MapJson, [System.Text.UTF8Encoding]::new($false))
+    $tw1AnvilRoleDir = Join-Path $repoRoot '.maestri' 'roles' 'BA23D857-A79B-4128-B154-8D05C3D5DC31'
+    New-Item -ItemType Directory -Path $tw1AnvilRoleDir -Force | Out-Null
+    $tw1AnvilRoleFile = Join-Path $tw1AnvilRoleDir 'role.json'
+    [System.IO.File]::WriteAllText($tw1AnvilRoleFile, '{"prompt":"Model chain (best first): HEADCMD -> THENCMD -> FLOORCMD (FLOOR)."}' + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $tw1MapHashBefore = (Get-FileHash -LiteralPath $tw1MapPath -Algorithm SHA256).Hash
+    $tw1RoleTextBefore = [System.IO.File]::ReadAllText($tw1AnvilRoleFile)
+    $tw1CharterPath = Join-Path $tw1WsDir 'notes' 'harness-team-charter.md'
+    $tw1RestartPath = Join-Path $tw1WsDir 'notes' 'team-restart.md'
+    $tw1CharterBefore = [System.IO.File]::ReadAllText($tw1CharterPath)
+    $tw1RestartBefore = [System.IO.File]::ReadAllText($tw1RestartPath)
+    $tw1SwapLogPath = Join-Path $tw1Home '.maestri' 'seat-map-swaps.jsonl'
+    $tw1SwapExisted = Test-Path -LiteralPath $tw1SwapLogPath
+    $tw1SwapLenBefore = 0
+    $tw1SwapWriteBefore = $null
+    if ($tw1SwapExisted) {
+        $tw1SwapItem = Get-Item -LiteralPath $tw1SwapLogPath
+        $tw1SwapLenBefore = $tw1SwapItem.Length
+        $tw1SwapWriteBefore = $tw1SwapItem.LastWriteTimeUtc
+    }
+    $tw1MapPathLiteral = $tw1MapPath.Replace("'", "''")
+    $tw1PortalFailScript = Join-Path $isoHome 'test-portal-fail.ps1'
+    $tw1PortalFailBody = @(
+        "`$serverProc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8793', '-SeatMapPath', '$tw1MapPathLiteral' -PassThru -RedirectStandardOutput (Join-Path '$isoHome' 'server-tw1.log')"
+        "Start-Sleep -Seconds 2"
+        "try {"
+        "    `$resp = Invoke-WebRequest -Uri 'http://localhost:8793/' -UseBasicParsing"
+        "    `$tokenMatch = [regex]::Match(`$resp.Content, '<meta name=""seat-map-token"" content=""([^""]+)""')"
+        "    if (-not `$tokenMatch.Success) { throw 'Token missing' }"
+        "    `$token = `$tokenMatch.Groups[1].Value"
+        "    `$body = @{ seatId = 'anvil'; rung = 'then' } | ConvertTo-Json"
+        "    `$headers = @{ 'X-Seat-Map-Token' = `$token }"
+        "    `$postResp = Invoke-WebRequest -Uri 'http://localhost:8793/api/seats/set' -Method POST -Headers `$headers -Body `$body -ContentType 'application/json' -UseBasicParsing -SkipHttpErrorCheck"
+        "    if (`$postResp.StatusCode -eq 200) { throw 'POST should fail' }"
+        "    if (-not `$postResp.Content.Contains('Seat ''Anvil'' has no capable runtime floor')) { throw 'missing capable-floor error' }"
+        "} finally {"
+        "    Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue"
+        "}"
+    ) -join [Environment]::NewLine
+    [System.IO.File]::WriteAllText($tw1PortalFailScript, $tw1PortalFailBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $tw1PortalFailRes = Invoke-IsolatedPwsh -HomeDir $tw1Home -File $tw1PortalFailScript
+    Assert-True 'TW1 portal failure POST: exit 0' ($tw1PortalFailRes.ExitCode -eq 0) '0' ("exit=$($tw1PortalFailRes.ExitCode)`n$($tw1PortalFailRes.StdOut)`n$($tw1PortalFailRes.StdErr)")
+    $tw1MapHashAfter = (Get-FileHash -LiteralPath $tw1MapPath -Algorithm SHA256).Hash
+    Assert-True 'TW1 portal failure: seat-map hash unchanged' ($tw1MapHashBefore -eq $tw1MapHashAfter) $tw1MapHashBefore $tw1MapHashAfter
+    $tw1RoleTextAfter = [System.IO.File]::ReadAllText($tw1AnvilRoleFile)
+    Assert-True 'TW1 portal failure: role file text unchanged' ($tw1RoleTextBefore -eq $tw1RoleTextAfter) 'unchanged' 'changed'
+    $tw1CharterAfter = [System.IO.File]::ReadAllText($tw1CharterPath)
+    Assert-True 'TW1 portal failure: harness-team-charter text unchanged' ($tw1CharterBefore -eq $tw1CharterAfter) 'unchanged' 'changed'
+    $tw1RestartAfter = [System.IO.File]::ReadAllText($tw1RestartPath)
+    Assert-True 'TW1 portal failure: team-restart text unchanged' ($tw1RestartBefore -eq $tw1RestartAfter) 'unchanged' 'changed'
+    if ($tw1SwapExisted) {
+        $tw1SwapItemAfter = Get-Item -LiteralPath $tw1SwapLogPath
+        Assert-True 'TW1 portal failure: swap-log mtime unchanged' ($tw1SwapItemAfter.LastWriteTimeUtc -eq $tw1SwapWriteBefore) ([string]$tw1SwapWriteBefore) ([string]$tw1SwapItemAfter.LastWriteTimeUtc)
+        Assert-True 'TW1 portal failure: swap-log length unchanged' ($tw1SwapItemAfter.Length -eq $tw1SwapLenBefore) ([string]$tw1SwapLenBefore) ([string]$tw1SwapItemAfter.Length)
+    }
+    else {
+        Assert-True 'TW1 portal failure: swap-log not created' (-not (Test-Path -LiteralPath $tw1SwapLogPath)) 'absent' ([string](Test-Path -LiteralPath $tw1SwapLogPath))
+    }
 
     # --- DEV-236: Pre-flight validations (Junie, OpenCode, Cursor) ---
     $preflightHome = Join-Path $isoHome 'preflight-home'
@@ -686,14 +769,20 @@ try {
     $dev234WsId = [guid]::NewGuid().ToString()
     $dev234WsDir = New-WorkspaceDir -HomeDir $dev234Home -WorkspaceId $dev234WsId -RepoRootHint $repoRoot
     Write-NoteStubs -WsDir $dev234WsDir
-    $dev234Roles = Install-RoleFixtures -RepoRoot $repoRoot -ExamplePath $examplePath
-    $null = $dev234Roles
     $dev234MapPath = Join-Path $dev234WsDir 'seat-map.json'
 
-    # Set up dev234 role directory file for Anvil
-    $dev234RolesDir = Join-Path $repoRoot '.maestri' 'roles' 'BA23D857-A79B-4128-B154-8D05C3D5DC31'
-    New-Item -ItemType Directory -Path $dev234RolesDir -Force | Out-Null
-    $anvilRoleFile = Join-Path $dev234RolesDir 'role.json'
+    # B2: snapshot Anvil role bytes before isolated writes; restore in finally
+    $dev234AnvilRoleDir = Join-Path $repoRoot '.maestri' 'roles' 'BA23D857-A79B-4128-B154-8D05C3D5DC31'
+    $dev234AnvilRoleDirExisted = Test-Path -LiteralPath $dev234AnvilRoleDir
+    $dev234AnvilRoleFile = Join-Path $dev234AnvilRoleDir 'role.json'
+    $dev234AnvilRoleHadFile = Test-Path -LiteralPath $dev234AnvilRoleFile
+    if ($dev234AnvilRoleHadFile) {
+        $dev234AnvilRolePriorBytes = [System.IO.File]::ReadAllBytes($dev234AnvilRoleFile)
+    }
+    New-Item -ItemType Directory -Path $dev234AnvilRoleDir -Force | Out-Null
+    $anvilRoleFile = $dev234AnvilRoleFile
+    $dev234InvalidTierLiteral = "Seat 'Anvil' measured/cleared rung 'floor' has invalid tier"
+    $dev234NoFloorLiteral = "Seat 'Anvil' has no capable runtime floor"
 
     # Inline seat map mutation script block
     $mutateSeat = {
@@ -744,6 +833,24 @@ try {
     $anvilRoleJson2 = Get-Content -LiteralPath $anvilRoleFile -Raw | ConvertFrom-Json
     Assert-True 'A2 model chain FLOOR ignores probed tier 1 and uses measured tier 2' (Test-TextContains $anvilRoleJson2.prompt '-> FLOORCMD (FLOOR).') '-> FLOORCMD (FLOOR).' $anvilRoleJson2.prompt
 
+    # TW3: Lowest-tier cleared evidence candidate selects CLEAREDCMD
+    Copy-Item -LiteralPath $examplePath -Destination $dev234MapPath
+    & $mutateSeat $dev234MapPath 'Anvil' {
+        param($s)
+        $s.rungs = @(
+            [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 4; evidence = 'measured' },
+            [pscustomobject]@{ name = 'then'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'measured' },
+            [pscustomobject]@{ name = 'alt'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'measured' },
+            [pscustomobject]@{ name = 'cleared'; launch = 'CLEAREDCMD'; pool = 'GEMINI'; host = 'gemini'; model = 'm-cleared'; tier = 1; evidence = 'cleared' },
+            [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORCMD'; pool = 'AGY-G'; host = 'agy'; model = 'm-floor'; tier = 3; evidence = 'measured' }
+        )
+    }
+    [System.IO.File]::WriteAllText($anvilRoleFile, '{"prompt":"Model chain (best first): HEADCMD -> THENCMD -> FLOORCMD (FLOOR)."}' + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $swapTw3 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    Assert-True 'TW3 cleared evidence target swap: exit 0' ($swapTw3.ExitCode -eq 0) '0' ([string]$swapTw3.ExitCode)
+    $anvilRoleJsonTw3 = Get-Content -LiteralPath $anvilRoleFile -Raw | ConvertFrom-Json
+    Assert-True 'TW3 model chain FLOOR uses lowest-tier cleared launch' (Test-TextContains $anvilRoleJsonTw3.prompt '-> CLEAREDCMD (FLOOR).') '-> CLEAREDCMD (FLOOR).' $anvilRoleJsonTw3.prompt
+
     # Test A3: ZEN disallowed pool exclusion for non-exception seat (Anvil)
     Copy-Item -LiteralPath $examplePath -Destination $dev234MapPath
     & $mutateSeat $dev234MapPath 'Anvil' {
@@ -778,15 +885,51 @@ try {
     $anvilRoleJson4 = Get-Content -LiteralPath $anvilRoleFile -Raw | ConvertFrom-Json
     Assert-True 'A4 excludes head pool and breaks tie to floor rung' (Test-TextContains $anvilRoleJson4.prompt '-> FLOORCMD (FLOOR).') '-> FLOORCMD (FLOOR).' $anvilRoleJson4.prompt
 
-    # Test A5: Missing / non-numeric tier failure
+    # TW4: Same-tier then beats head and middle/alt
+    Copy-Item -LiteralPath $examplePath -Destination $dev234MapPath
+    & $mutateSeat $dev234MapPath 'Anvil' {
+        param($s)
+        $s.rungs = @(
+            [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 2; evidence = 'measured' },
+            [pscustomobject]@{ name = 'then'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'measured' },
+            [pscustomobject]@{ name = 'alt'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 2; evidence = 'measured' },
+            [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORCMD'; pool = 'GEMINI'; host = 'gemini'; model = 'm-floor'; tier = 4; evidence = 'probed' }
+        )
+    }
+    [System.IO.File]::WriteAllText($anvilRoleFile, '{"prompt":"Model chain (best first): HEADCMD -> THENCMD -> FLOORCMD (FLOOR)."}' + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $swapTw4 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    Assert-True 'TW4 same-tier then-vs-head target swap: exit 0' ($swapTw4.ExitCode -eq 0) '0' ([string]$swapTw4.ExitCode)
+    $anvilRoleJsonTw4 = Get-Content -LiteralPath $anvilRoleFile -Raw | ConvertFrom-Json
+    Assert-True 'TW4 then beats head at same tier' (Test-TextContains $anvilRoleJsonTw4.prompt '-> THENCMD (FLOOR).') '-> THENCMD (FLOOR).' $anvilRoleJsonTw4.prompt
+    Assert-True 'TW4 then beats middle/alt at same tier' (Test-TextContains $anvilRoleJsonTw4.prompt '-> THENCMD (FLOOR).') '-> THENCMD (FLOOR).' $anvilRoleJsonTw4.prompt
+
+    # TW2 / A5: Missing, blank, and non-numeric tier failures
     Copy-Item -LiteralPath $examplePath -Destination $dev234MapPath
     & $mutateSeat $dev234MapPath 'Anvil' {
         param($s)
         $s.rungs[3].tier = 'invalid'
     }
-    $swapA5 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
-    Assert-True 'A5 swap with non-numeric tier fails non-zero' ($swapA5.ExitCode -ne 0) 'non-zero' ([string]$swapA5.ExitCode)
-    Assert-True 'A5 failure names seat and tier problem' (Test-TextContains $swapA5.StdErr 'invalid tier') 'invalid tier' $swapA5.StdErr
+    $swapA5NonNumeric = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    Assert-True 'A5 swap with non-numeric tier fails non-zero' ($swapA5NonNumeric.ExitCode -ne 0) 'non-zero' ([string]$swapA5NonNumeric.ExitCode)
+    Assert-True 'TW2 non-numeric tier names seat and floor rung' (Test-TextContains $swapA5NonNumeric.StdErr $dev234InvalidTierLiteral) $dev234InvalidTierLiteral $swapA5NonNumeric.StdErr
+
+    Copy-Item -LiteralPath $examplePath -Destination $dev234MapPath
+    & $mutateSeat $dev234MapPath 'Anvil' {
+        param($s)
+        $null = $s.rungs[3].PSObject.Properties.Remove('tier')
+    }
+    $swapA5Missing = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    Assert-True 'TW2 missing tier fails non-zero' ($swapA5Missing.ExitCode -ne 0) 'non-zero' ([string]$swapA5Missing.ExitCode)
+    Assert-True 'TW2 missing tier names seat and floor rung' (Test-TextContains $swapA5Missing.StdErr $dev234InvalidTierLiteral) $dev234InvalidTierLiteral $swapA5Missing.StdErr
+
+    Copy-Item -LiteralPath $examplePath -Destination $dev234MapPath
+    & $mutateSeat $dev234MapPath 'Anvil' {
+        param($s)
+        $s.rungs[3].tier = ''
+    }
+    $swapA5Blank = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    Assert-True 'TW2 blank tier fails non-zero' ($swapA5Blank.ExitCode -ne 0) 'non-zero' ([string]$swapA5Blank.ExitCode)
+    Assert-True 'TW2 blank tier names seat and floor rung' (Test-TextContains $swapA5Blank.StdErr $dev234InvalidTierLiteral) $dev234InvalidTierLiteral $swapA5Blank.StdErr
 
     # Test A6 & A7: No safe floor failure & Pre-write atomicity
     Copy-Item -LiteralPath $examplePath -Destination $dev234MapPath
@@ -802,7 +945,7 @@ try {
     $mapHashMutated = (Get-FileHash -LiteralPath $dev234MapPath -Algorithm SHA256).Hash
     $swapA6 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'then', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
     Assert-True 'A6 swap with no safe floor fails non-zero' ($swapA6.ExitCode -ne 0) 'non-zero' ([string]$swapA6.ExitCode)
-    Assert-True 'A6 failure names no capable runtime floor' (Test-TextContains $swapA6.StdErr 'has no capable runtime floor') 'has no capable runtime floor' $swapA6.StdErr
+    Assert-True 'A6 failure names no capable runtime floor' (Test-TextContains $swapA6.StdErr $dev234NoFloorLiteral) $dev234NoFloorLiteral $swapA6.StdErr
     $mapHashAfterFail = (Get-FileHash -LiteralPath $dev234MapPath -Algorithm SHA256).Hash
     Assert-True 'A7 seat-map file unchanged after failed target swap' ($mapHashMutated -eq $mapHashAfterFail) $mapHashMutated $mapHashAfterFail
 
@@ -824,8 +967,53 @@ try {
     Assert-True 'A8 harness-team-charter uses resolved runtime floor launch' (Test-TextContains $charterTxt 'THENCMD') 'THENCMD' $charterTxt
     $restartTxt = Get-Content -LiteralPath (Join-Path $dev234WsDir 'notes' 'team-restart.md') -Raw
     Assert-True 'A8 team-restart uses resolved runtime floor launch' (Test-TextContains $restartTxt 'THENCMD') 'THENCMD' $restartTxt
+
+    # TW5: Non-swap commands tolerate unrelated incapable seat
+    $tw5Home = Join-Path $isoHome 'tw5-non-swap'
+    $tw5WsId = [guid]::NewGuid().ToString()
+    $tw5WsDir = New-WorkspaceDir -HomeDir $tw5Home -WorkspaceId $tw5WsId -RepoRootHint $repoRoot
+    Write-NoteStubs -WsDir $tw5WsDir
+    $tw5MapPath = Join-Path $tw5WsDir 'seat-map.json'
+    Copy-Item -LiteralPath $examplePath -Destination $tw5MapPath
+    $tw5MapObj = Get-Content -LiteralPath $tw5MapPath -Raw | ConvertFrom-Json
+    $tw5Keel = @($tw5MapObj.seats | Where-Object { $_.id -eq 'keel' })[0]
+    $tw5Keel.rungs = @(
+        [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADK'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 1; evidence = 'probed' },
+        [pscustomobject]@{ name = 'then'; launch = 'THENK'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'unmeasured' },
+        [pscustomobject]@{ name = 'alt'; launch = 'ALTK'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'probed' },
+        [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORK'; pool = 'GEMINI'; host = 'gemini'; model = 'm-floor'; tier = 4; evidence = 'probed' }
+    )
+    $tw5MapJson = $tw5MapObj | ConvertTo-Json -Depth 12
+    if (-not $tw5MapJson.EndsWith("`n")) { $tw5MapJson += "`n" }
+    [System.IO.File]::WriteAllText($tw5MapPath, $tw5MapJson, [System.Text.UTF8Encoding]::new($false))
+    $tw5Validate = Invoke-IsolatedPwsh -HomeDir $tw5Home -File $syncScript -ArgumentList @('-Validate', '-SeatMapPath', $tw5MapPath)
+    Assert-True 'TW5 -Validate with unrelated incapable seat: exit 0' ($tw5Validate.ExitCode -eq 0) '0' ([string]$tw5Validate.ExitCode)
+    Assert-True 'TW5 -Validate: no target runtime-floor error' (-not (Test-TextContains "$($tw5Validate.StdOut)`n$($tw5Validate.StdErr)" $dev234NoFloorLiteral)) "no $dev234NoFloorLiteral" "$($tw5Validate.StdOut)`n$($tw5Validate.StdErr)"
+    $tw5All = Invoke-IsolatedPwsh -HomeDir $tw5Home -File $syncScript -ArgumentList @('-All', '-SeatMapPath', $tw5MapPath)
+    Assert-True 'TW5 -All with unrelated incapable seat: exit 0' ($tw5All.ExitCode -eq 0) '0' ([string]$tw5All.ExitCode)
+    Assert-True 'TW5 -All: no target runtime-floor error' (-not (Test-TextContains "$($tw5All.StdOut)`n$($tw5All.StdErr)" $dev234NoFloorLiteral)) "no $dev234NoFloorLiteral" "$($tw5All.StdOut)`n$($tw5All.StdErr)"
+    $tw5SyncRoles = Invoke-IsolatedPwsh -HomeDir $tw5Home -File $syncScript -ArgumentList @('-SyncRoles', '-SeatMapPath', $tw5MapPath)
+    Assert-True 'TW5 -SyncRoles with unrelated incapable seat: exit 0' ($tw5SyncRoles.ExitCode -eq 0) '0' ([string]$tw5SyncRoles.ExitCode)
+    Assert-True 'TW5 -SyncRoles: no target runtime-floor error' (-not (Test-TextContains "$($tw5SyncRoles.StdOut)`n$($tw5SyncRoles.StdErr)" $dev234NoFloorLiteral)) "no $dev234NoFloorLiteral" "$($tw5SyncRoles.StdOut)`n$($tw5SyncRoles.StdErr)"
+    $tw5SyncNotes = Invoke-IsolatedPwsh -HomeDir $tw5Home -File $syncScript -ArgumentList @('-SyncNotes', '-SeatMapPath', $tw5MapPath)
+    Assert-True 'TW5 -SyncNotes with unrelated incapable seat: exit 0' ($tw5SyncNotes.ExitCode -eq 0) '0' ([string]$tw5SyncNotes.ExitCode)
+    Assert-True 'TW5 -SyncNotes: no target runtime-floor error' (-not (Test-TextContains "$($tw5SyncNotes.StdOut)`n$($tw5SyncNotes.StdErr)" $dev234NoFloorLiteral)) "no $dev234NoFloorLiteral" "$($tw5SyncNotes.StdOut)`n$($tw5SyncNotes.StdErr)"
 }
 finally {
+    if ($null -ne $dev234AnvilRoleFile) {
+        if ($dev234AnvilRoleHadFile) {
+            [System.IO.File]::WriteAllBytes($dev234AnvilRoleFile, $dev234AnvilRolePriorBytes)
+        }
+        elseif (Test-Path -LiteralPath $dev234AnvilRoleFile) {
+            Remove-Item -LiteralPath $dev234AnvilRoleFile -Force -ErrorAction SilentlyContinue
+            if (-not $dev234AnvilRoleDirExisted -and (Test-Path -LiteralPath $dev234AnvilRoleDir)) {
+                $dev234RoleDirRemaining = @(Get-ChildItem -LiteralPath $dev234AnvilRoleDir -Force -ErrorAction SilentlyContinue)
+                if ($dev234RoleDirRemaining.Count -eq 0) {
+                    Remove-Item -LiteralPath $dev234AnvilRoleDir -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
+    }
     if (Test-Path -LiteralPath $isoHome) {
         Remove-Item -LiteralPath $isoHome -Recurse -Force -ErrorAction SilentlyContinue
     }
