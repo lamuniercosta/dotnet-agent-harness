@@ -1,7 +1,8 @@
 # Shared seat-map helpers. Dot-sourced by Test-SeatMap, Sync-SeatMap,
 # Start-SeatMapServer, and Test-ModelProbe so charter invariants (including the
-# Quill ZEN-floor exception) cannot drift between the CI gate, the
-# synchronizer, the portal, and the probe writer.
+# Quill ZEN-floor exception), advisory tier-policy warnings, and target-swap
+# runtime FLOOR selection cannot drift between the CI gate, the synchronizer,
+# the portal, and the probe writer.
 
 . (Join-Path $PSScriptRoot '_json-property.ps1')
 
@@ -649,6 +650,222 @@ function Write-SeatMapWarnings {
     foreach ($w in $list) { Write-Warning ([string]$w) }
 }
 
+function Get-SeatMapFloorPolicy {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Map
+    )
+
+    $disallowedFloorPools = @('ZEN')
+    $zenFloorExceptions = @('Quill')
+    if (Test-JsonProperty -Object $Map -Name 'invariants') {
+        $invariants = $Map.invariants
+        if (Test-JsonProperty -Object $invariants -Name 'disallowedFloorPools') {
+            $disallowedFloorPools = @($invariants.disallowedFloorPools)
+        }
+        if (Test-JsonProperty -Object $invariants -Name 'zenFloorExceptions') {
+            $zenFloorExceptions = @($invariants.zenFloorExceptions)
+        }
+    }
+    return [pscustomobject]@{
+        DisallowedFloorPools = @($disallowedFloorPools)
+        ZenFloorExceptions   = @($zenFloorExceptions)
+    }
+}
+
+function Get-SeatActiveRungName {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Seat
+    )
+    return (Get-SeatMapActiveRungName -Seat $Seat)
+}
+
+function Get-SeatMapSeatLabel {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Seat
+    )
+    $codename = if (Test-JsonProperty -Object $Seat -Name 'codename') { [string]$Seat.codename } else { '' }
+    $seatId = if (Test-JsonProperty -Object $Seat -Name 'id') { [string]$Seat.id } else { '' }
+    if (-not [string]::IsNullOrWhiteSpace($codename)) { return $codename }
+    if (-not [string]::IsNullOrWhiteSpace($seatId)) { return $seatId }
+    return '?'
+}
+
+function ConvertTo-SeatMapTier {
+    param($TierRaw)
+    if ($null -eq $TierRaw -or [string]$TierRaw -eq '') { return $null }
+    $tierNum = 0
+    $isNumeric = $TierRaw -is [int] -or $TierRaw -is [long] -or $TierRaw -is [decimal] -or $TierRaw -is [double]
+    if ($isNumeric) {
+        return [int]$TierRaw
+    }
+    if ([int]::TryParse([string]$TierRaw, [ref]$tierNum)) {
+        return $tierNum
+    }
+    return $null
+}
+
+function Test-SeatFloorPoolAllowed {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Seat,
+        [string]$Pool,
+        [Parameter(Mandatory = $true)]
+        $Policy
+    )
+    $codename = if (Test-JsonProperty -Object $Seat -Name 'codename') { [string]$Seat.codename } else { '' }
+    $seatId = if (Test-JsonProperty -Object $Seat -Name 'id') { [string]$Seat.id } else { '' }
+    if ($Policy.DisallowedFloorPools -contains $Pool) {
+        if ($Policy.ZenFloorExceptions -notcontains $codename -and $Policy.ZenFloorExceptions -notcontains $seatId) {
+            return $false
+        }
+    }
+    return $true
+}
+
+function Test-SeatMapRungIsFloorRole {
+    param(
+        $Seat,
+        [string]$RungName,
+        $Cell
+    )
+    if ([string]$RungName -ceq 'floor') { return $true }
+    $c = $Cell
+    if ($null -eq $c -and -not [string]::IsNullOrWhiteSpace($RungName)) {
+        $c = Get-SeatMapRungByName -Seat $Seat -Name $RungName
+    }
+    if ($null -ne $c -and (Test-JsonProperty -Object $c -Name 'role') -and [string]$c.role -ceq 'floor') {
+        return $true
+    }
+    return $false
+}
+
+function Get-SeatRuntimeFloorTieOrder {
+    param(
+        $Cell,
+        [int]$Index
+    )
+    $name = ''
+    $role = ''
+    if ($null -ne $Cell) {
+        if (Test-JsonProperty -Object $Cell -Name 'name') { $name = [string]$Cell.name }
+        if (Test-JsonProperty -Object $Cell -Name 'role') { $role = [string]$Cell.role }
+    }
+    if ($role -ceq 'floor' -or $name -ceq 'floor') { return 0 }
+    if ($name -ceq 'then') { return 1 }
+    if ($role -ceq 'head' -or $name -ceq 'head') { return 1000 }
+    return 10 + $Index
+}
+
+function Resolve-SeatRuntimeFloor {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Map,
+        [Parameter(Mandatory = $true)]
+        $Seat
+    )
+
+    $label = Get-SeatMapSeatLabel -Seat $Seat
+    $policy = Get-SeatMapFloorPolicy -Map $Map
+    $eligibleEvidence = @('measured', 'cleared')
+    $list = Get-SeatMapRungList -Seat $Seat
+
+    $headPool = ''
+    $headCell = Get-SeatMapRungByRole -Seat $Seat -Role 'head'
+    if ($null -ne $headCell -and (Test-JsonProperty -Object $headCell -Name 'pool')) {
+        $headPool = [string]$headCell.pool
+    }
+
+    $candidates = [System.Collections.Generic.List[object]]::new()
+    $idx = 0
+    foreach ($cell in @($list)) {
+        $index = $idx
+        $idx++
+        if ($null -eq $cell) { continue }
+
+        $r = "rung[$index]"
+        if (Test-JsonProperty -Object $cell -Name 'name' -and -not [string]::IsNullOrWhiteSpace([string]$cell.name)) {
+            $r = [string]$cell.name
+        }
+
+        $evidence = ''
+        if (Test-JsonProperty -Object $cell -Name 'evidence') { $evidence = [string]$cell.evidence }
+        if ($eligibleEvidence -notcontains $evidence) { continue }
+
+        $tierRaw = $null
+        $hasTier = Test-JsonProperty -Object $cell -Name 'tier'
+        if ($hasTier) { $tierRaw = $cell.tier }
+        $tierNum = ConvertTo-SeatMapTier -TierRaw $tierRaw
+        if (-not $hasTier -or $null -eq $tierNum) {
+            return [pscustomobject]@{
+                Ok       = $false
+                Error    = "Seat '$label' measured/cleared rung '$r' has missing, blank, or non-numeric tier (runtime floor requires 1-4)."
+                RungName = $null
+                Cell     = $null
+                Launch   = $null
+                Pool     = $null
+                Tier     = $null
+            }
+        }
+        if ($tierNum -lt 1 -or $tierNum -gt 4) { continue }
+
+        $pool = ''
+        if (Test-JsonProperty -Object $cell -Name 'pool') { $pool = [string]$cell.pool }
+        if (-not (Test-SeatFloorPoolAllowed -Seat $Seat -Pool $pool -Policy $policy)) { continue }
+        if (-not [string]::IsNullOrWhiteSpace($headPool) -and $pool -eq $headPool) { continue }
+
+        $launch = ''
+        if (Test-JsonProperty -Object $cell -Name 'launch') { $launch = [string]$cell.launch }
+        $candidates.Add([pscustomobject]@{
+                RungName = $r
+                Cell     = $cell
+                Launch   = $launch
+                Pool     = $pool
+                Tier     = $tierNum
+                Order    = Get-SeatRuntimeFloorTieOrder -Cell $cell -Index $index
+            })
+    }
+
+    if ($candidates.Count -eq 0) {
+        return [pscustomobject]@{
+            Ok       = $false
+            Error    = "Seat '$label' has no capable runtime floor (need measured or cleared evidence, numeric tier 1-4, floor-safe pool, and a pool other than this seat's head pool)."
+            RungName = $null
+            Cell     = $null
+            Launch   = $null
+            Pool     = $null
+            Tier     = $null
+        }
+    }
+
+    $chosen = @($candidates | Sort-Object Tier, Order)[0]
+    return [pscustomobject]@{
+        Ok       = $true
+        Error    = $null
+        RungName = [string]$chosen.RungName
+        Cell     = $chosen.Cell
+        Launch   = [string]$chosen.Launch
+        Pool     = [string]$chosen.Pool
+        Tier     = [int]$chosen.Tier
+    }
+}
+
+function Get-SeatActiveLaunchCell {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Seat,
+        $RuntimeFloor
+    )
+    $key = Get-SeatMapActiveRungName -Seat $Seat
+    $activeCell = Get-SeatMapRungByName -Seat $Seat -Name $key
+    if ((Test-SeatMapRungIsFloorRole -Seat $Seat -RungName $key -Cell $activeCell) -and $null -ne $RuntimeFloor -and [bool]$RuntimeFloor.Ok) {
+        return $RuntimeFloor.Cell
+    }
+    return $activeCell
+}
+
 function Resolve-MaestriWorkspaceId {
     param(
         [string]$WorkspaceId,
@@ -858,19 +1075,25 @@ function Replace-LiteralRegex {
 function Get-ModelChainLine {
     param(
         [Parameter(Mandatory = $true)]
-        $Seat
+        $Seat,
+        [string]$FloorLaunch
     )
     $list = Get-SeatMapRungList -Seat $Seat
-    if ($null -eq $list -or $list.Count -eq 0) {
+    if ($null -eq $list -or @($list).Count -eq 0) {
         return 'Model chain (best first): (FLOOR).'
     }
-    $parts = foreach ($cell in $list) {
-        if ($null -ne $cell -and (Test-JsonProperty -Object $cell -Name 'launch')) {
-            [string]$cell.launch
+    $parts = @(
+        foreach ($cell in @($list)) {
+            if ($null -ne $cell -and (Test-JsonProperty -Object $cell -Name 'launch')) {
+                [string]$cell.launch
+            }
+            else {
+                ''
+            }
         }
-        else {
-            ''
-        }
+    )
+    if (-not [string]::IsNullOrWhiteSpace($FloorLaunch) -and $parts.Count -gt 0) {
+        $parts[$parts.Count - 1] = $FloorLaunch
     }
     return "Model chain (best first): $($parts -join ' -> ') (FLOOR)."
 }

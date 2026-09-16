@@ -31,17 +31,12 @@ Verifier ran a model outside its chain because a restart note was stale.
 
 The live seat map at `~/.maestri/workspaces/<workspaceId>/seat-map.json` is
 keyed by seat, not by command. `scripts/local/seat-map.example.json` is the
-schema, the invariants block, and the CI contract. `schemaVersion` is 2.
-Each seat carries an ordered `rungs` array (best first, at least four
-entries). Exactly one rung has `role: "head"` and is the first element;
-exactly one has `role: "floor"` and is the last. `activeRung` stores a
-declared rung `name`. Lookup is by that name, never by PowerShell object
-member names. Each rung is a complete launch specification:
+schema, the invariants block, and the CI contract. Each seat
+carries a set of rungs (`head`, `then`, `floor`) — each a complete launch
+specification:
 
 ```json
 {
-  "name": "head",
-  "role": "head",
   "launch": "claude --model claude-opus-4-6 --effort high --permission-mode auto",
   "pool": "CLAUDE",
   "tier": 3,
@@ -65,7 +60,9 @@ order. **Amended 2026-09-16:** the original 1–4 table (1 free, 2 expiring
 allowances, 3 flat-rate, 4 metered) is replaced by the order the operator
 actually spends in, which puts the generous flat-rate pools first and the free
 pool last. The example map's rungs are renumbered to this scheme; the live map
-is the operator's to renumber.
+is the operator's to renumber. Runtime FLOOR selection still requires a
+numeric tier 1–4 on measured/cleared candidates; tier 0 (free/Zen) is never
+selected as runtime FLOOR.
 
 | Tier | Category | Examples |
 |------|----------|---------|
@@ -100,12 +97,9 @@ and is not a CI artefact:
 - At most 1 AGY-G-pool head.
 - At least 1 Gemini-API-pool head.
 - ZEN is never a floor pool (Quill is the documented exception).
-- When `distinctPoolsPerSeat` is true, every declared rung in a seat has a
-  distinct pool.
+- Every seat's three rungs use distinct pools.
 - Every OpenCode launch line contains `-m` or `--model` (the shared-config trap).
 - Tier values, when present, are integers 1–4.
-- Rung arrays are ordered, length ≥ 4, with role-backed head first and floor last.
-- `activeRung` names a declared rung; unsafe or duplicate names are rejected.
 
 This gate runs in `lint-harness.yml` on both Windows and Ubuntu. It replaces the
 `Test-RouteMap.ps1` gate.
@@ -155,18 +149,42 @@ reported in the UI.
 swap-audit file with timestamp, seat, previous model, new model, and pool.
 The log is untracked and machine-local.
 
-### The floor is the cheapest capable model in each seat's pool
+### Target-swap runtime floor anchoring
 
-Each seat's floor rung (`role: "floor"`, last in array order) is the
-lowest-tier model that has passed that seat's
-evidence bar (`measured` or `cleared`). Under the original 1–4 numbering this
-was a structural property of the data — the floor rung always had the lowest
-tier value in each seat. Under the 2026-09-16 consumption order it is not: Zen
-(tier 0) is last in the order and never a floor, so "cheapest" now means "last
-in `consumptionOrder`", and the `ORDER` warning reports rungs read out of that
-order. **Runtime floor anchoring** (logic that automatically re-selects the floor
-after a swap or pool change) is deferred. The tier field makes it mechanically
-checkable; the logic belongs in a follow-up.
+The floor rung (`role: "floor"`, last in the declared array) is the static
+schema slot. It is not automatically the resolved runtime FLOOR after a
+target swap. Under the 2026-09-16 consumption order, Zen (tier 0) is last
+and never a floor; advisory `ORDER`/`TIER` warnings report rungs read out of
+`consumptionOrder` without changing swap exit codes.
+
+A **target swap** is `Sync-SeatMap.ps1 -Seat <seat> -Rung <declared-name>`
+or the portal endpoint that applies the same swap. For that seat only, the
+runtime FLOOR is resolved from the current declared candidate rungs:
+
+1. Eligible evidence is exactly `measured` or `cleared`. `probed`,
+   `unmeasured`, blank, or missing evidence is ignored.
+2. Eligible candidates must have a numeric `tier` from 1 through 4. A
+   measured/cleared rung with missing, blank, or non-numeric tier fails the
+   swap with a named non-zero error. Tier 0 is skipped (not selected).
+3. Eligible candidates must pass floor safety: no disallowed floor pool
+   (ZEN, unless the seat is in `zenFloorExceptions`) and no selected FLOOR
+   whose pool equals the seat's head-role pool.
+4. Among remaining candidates, choose the lowest numeric tier. Ties break
+   in floor-safe order: `floor`, then `then`, then other middle rungs, then
+   `head`.
+5. If no candidate remains, the swap fails before any write and names the
+   seat plus the missing capable runtime floor.
+
+On success, the role prompt model-chain FLOOR endpoint (last array entry)
+uses that resolved launch. Active-launch outputs (recruit commands, charter
+roster, team-restart, portal response) stay `activeRung` outputs; they use
+the resolved runtime FLOOR only when the active rung is the floor-role
+rung.
+
+Non-swap whole-map commands (`-Validate`, `-All`, `-SyncRoles`,
+`-SyncNotes`) keep their existing contract and must not fail merely because
+an unrelated seat has no capable runtime floor. Broader probe-evidence
+re-anchor across the map is DEV-244.
 
 ### Legacy route-map tooling is deleted
 
@@ -202,19 +220,15 @@ the CI gate — would need to be taught that the seat map supersedes it for any
 seat-based work, and the two would diverge within a week. One source of truth
 or none.
 
-**Keep a fixed head/then/floor object and grow it with extra named
-properties.** The charter now requires ≥4 candidates per seat. Extra named
-properties still hard-code rung identity in every consumer (`ValidateSet`,
-portal `RUNGS`, `$rungs.head`) and cannot express an ordered chain without a
-parallel name list. DEV-235 accepts the ordered array with explicit
-`role: "head"|"floor"` so head/floor stay role-backed (not position-only,
-name-only, or regex-only) while additional rungs are just more array
-elements.
-
-**Migrate schemaVersion 1 maps in place, or silently normalize object
-rungs into arrays.** A guessed conversion would drop or rename cells. v1
-maps fail closed with an exact diagnostic naming schemaVersion 2 and the
-migration requirement; operators rewrite the file.
+**Model the seat map as an extensible array of rungs instead of a fixed
+head/then/floor object.** The ticket asks for ≥4 candidate options per seat.
+An array schema would accommodate that directly. But the current charter defines
+exactly three rungs with distinct semantics (head is the target, then is the
+first fallback, floor is the cheapest capable), and `Test-SeatMap.ps1` validates
+all three by name. An array loses named semantics and requires index-based
+reasoning about which rung is which. The fixed object is extended to ≥4 when the
+charter defines the semantics of a fourth rung, not before. This is a data +
+schema change, not a data-only task (correcting the prior plan's claim).
 
 **Run the portal on a non-localhost interface for remote team access.** The
 portal executes `maestri recruit --replace` on the host machine. Exposing that
@@ -244,12 +258,10 @@ requests from the developer's own browser, not network-level attackers. The
 per-session token is sufficient for that threat and avoids the complexity of
 certificate management for a developer tool.
 
-Shared helpers in `_seat-map.ps1` own enumeration, name lookup, head/floor
-role detection, all-rung distinct-pool counting, schemaVersion diagnostics,
-and model-chain rendering. Consumers that still assume exactly `head` /
-`then` / `floor` are defects except for the tested schemaVersion 1
-fail-closed diagnostic. Portal HTML escapes rung names and launch text;
-existing localhost CORS and session-token checks stay the trust boundary.
+`Test-SeatMap.ps1` hardcodes the three rung names. Adding a fourth rung requires
+editing the test, which means the test is a gate against accidental schema
+expansion — a feature, not a bug, until the charter defines what a fourth rung
+means.
 
 ## Deferred follow-ups
 
@@ -258,14 +270,16 @@ PR body.
 
 - **Pre-flight validations** — Junie `effortPerModel` existence check, OpenCode
   global reasoning-effort collision warning, Cursor `cli-config.json` collision
-  detection. Delivered in DEV-236 / PR #164; pre-flight checks now run in
-  `scripts/local/Test-ModelProbe.ps1` before any launch or seat-state mutation.
+  detection.
 - **Workspace verification** — `Sync-SeatMap.ps1 -Verify` drift check against
   `workspace.json`. Included as a switch in the shipped script but not in the
   merge bar (machine-local state).
-- **Runtime floor anchoring** — logic that re-anchors the floor to the
-  lowest-tier capable model after a swap or pool change. The tier field makes
-  this mechanically checkable; the logic is deferred until test fixtures exist.
+- **Candidate pool ≥4 expansion** — requires schema change from fixed object to
+  named-rung array (or additional named properties), plus test and synchronizer
+  updates.
+- **Probe-evidence re-anchor (DEV-244)** — broader than target-swap runtime
+  floor anchoring: re-anchor from probe evidence across seats, candidate-pool
+  expansion, and schema/evidence changes. Out of scope for DEV-234.
 
 ## Consequences
 

@@ -3,11 +3,12 @@
     Localhost HTTP server for the Maestri seat-map portal (port 8765).
 .DESCRIPTION
     Serves artifacts/seat-map-selector.html and applies rung selections:
-    writes activeRung on seat-map.json (same contract as Sync-SeatMap.ps1),
-    rewrites role chains (array order, one terminal (FLOOR). marker), updates canvas notes, and
-    optionally runs `maestri recruit --replace`. POST endpoints require the
-    per-session token printed at startup. CORS is restricted to localhost.
-    Writes are validated against the same charter invariants as Test-SeatMap.
+    preflights target-swap runtime FLOOR with the shared helper, then lets
+    Sync-SeatMap.ps1 write activeRung (no portal mutation before child sync
+    succeeds), rewrite role chains, update canvas notes, and optionally run
+    `maestri recruit --replace`. POST endpoints require the per-session token
+    printed at startup. CORS is restricted to localhost. Failed swaps leave
+    seat-map, roles, notes, and the swap log unchanged.
 .PARAMETER Port
     HTTP port to bind (default 8765).
 .PARAMETER WorkspaceId
@@ -52,10 +53,10 @@ if (-not (Test-Path -LiteralPath $seatMapPath)) {
     exit 1
 }
 
-$mapObj = Get-Content -LiteralPath $seatMapPath -Raw | ConvertFrom-Json
-$mapViolations = @(Get-SeatMapViolations -Map $mapObj)
-if ($mapViolations.Count -gt 0) {
-    $mapViolations | ForEach-Object { Write-Error $_ -ErrorAction Continue }
+$initialMapObj = Get-Content -LiteralPath $seatMapPath -Raw | ConvertFrom-Json
+$initialViolations = @(Get-SeatMapViolations -Map $initialMapObj)
+if ($initialViolations.Count -gt 0) {
+    $initialViolations | ForEach-Object { Write-Error $_ -ErrorAction Continue }
     exit 1
 }
 
@@ -121,24 +122,27 @@ function Apply-SeatRung {
         [string]$RungName
     )
 
-    $map = Get-Content -LiteralPath $seatMapPath -Raw | ConvertFrom-Json
-    $preViolations = @(Get-SeatMapViolations -Map $map)
-    if ($preViolations.Count -gt 0) {
-        return @{ success = $false; error = [string]$preViolations[0]; violations = $preViolations }
+    if ($RungName -notin @('head', 'then', 'floor')) {
+        return @{ success = $false; error = "Rung '$RungName' is not head|then|floor" }
     }
 
-    $target = Find-SeatMapSeat -Map $map -Name $SeatId
+    $map = Get-Content -LiteralPath $seatMapPath -Raw | ConvertFrom-Json
+    $target = $null
+    foreach ($s in @($map.seats)) {
+        if ($s.id -eq $SeatId -or $s.codename -eq $SeatId) {
+            $target = $s
+            break
+        }
+    }
     if ($null -eq $target) {
         return @{ success = $false; error = "Seat '$SeatId' not found" }
     }
-
-    $cell = Get-SeatMapRungByName -Seat $target -Name $RungName
-    if ($null -eq $cell) {
+    $targetRungCell = Get-SeatMapRungByName -Seat $target -Name $RungName
+    if ($null -eq $targetRungCell) {
         return @{ success = $false; error = "Seat '$SeatId' has no '$RungName' rung" }
     }
 
-    $previousRung = Get-SeatMapActiveRungName -Seat $target
-    if ([string]::IsNullOrWhiteSpace($previousRung)) { $previousRung = '' }
+    $previousRung = Get-SeatActiveRungName -Seat $target
     $previousLaunch = ''
     $previousPool = ''
     $prevCell = Get-SeatMapRungByName -Seat $target -Name $previousRung
@@ -147,13 +151,15 @@ function Apply-SeatRung {
         if (Test-JsonProperty -Object $prevCell -Name 'pool') { $previousPool = [string]$prevCell.pool }
     }
 
-    $target.activeRung = $RungName
+    $resolvedFloor = Resolve-SeatRuntimeFloor -Map $map -Seat $target
+    if (-not $resolvedFloor.Ok) {
+        return @{ success = $false; error = [string]$resolvedFloor.Error }
+    }
+
     $violations = @(Get-SeatMapViolations -Map $map)
     if ($violations.Count -gt 0) {
         return @{ success = $false; error = 'Invariant check failed'; violations = $violations }
     }
-    $mapJson = $map | ConvertTo-Json -Depth 12
-    Save-SeatMapFile -Path $seatMapPath -Content ($mapJson + [Environment]::NewLine)
 
     $syncScript = Join-Path $PSScriptRoot 'Sync-SeatMap.ps1'
     $syncArgs = @{
@@ -169,23 +175,24 @@ function Apply-SeatRung {
     & $syncScript @syncArgs
     $syncExit = $LASTEXITCODE
     if ($syncExit -ne 0) {
-        $failLaunch = if (Test-JsonProperty -Object $cell -Name 'launch') { [string]$cell.launch } else { '' }
-        $failPool = if (Test-JsonProperty -Object $cell -Name 'pool') { [string]$cell.pool } else { '' }
-        Write-SeatMapSwapLog -Seat $target.codename -Rung $RungName -Launch $failLaunch -Pool $failPool -PreviousActiveRung $previousRung -PreviousLaunch $previousLaunch -PreviousPool $previousPool -LiveSwapped $false -Detail "partialSync exit $syncExit" -WorkspaceId $workspaceIdForLog
         return @{
-            success     = $false
-            error       = "Partial sync failure: Sync-SeatMap.ps1 exited $syncExit"
-            partialSync = $true
-            seat        = $target.codename
-            activeRung  = $RungName
+            success = $false
+            error   = "Sync-SeatMap.ps1 exited $syncExit"
+            seat    = $target.codename
         }
     }
 
-    $launch = if (Test-JsonProperty -Object $cell -Name 'launch') { [string]$cell.launch } else { '' }
-    $pool = if (Test-JsonProperty -Object $cell -Name 'pool') { [string]$cell.pool } else { '' }
-    $codeName = if (Test-JsonProperty -Object $target -Name 'codename') { [string]$target.codename } else { '' }
-    $preset = if (Test-JsonProperty -Object $target -Name 'preset') { [string]$target.preset } else { '' }
-    $recruitCmd = Get-SeatMapRecruitCommand -Codename $codeName -Preset $preset -Launch $launch
+    # $target still has the pre-sync activeRung; rungs are unchanged. When the
+    # requested rung is floor, the portal launch is the resolved runtime FLOOR.
+    if ($RungName -eq 'floor') {
+        $launch = [string]$resolvedFloor.Launch
+        $pool = [string]$resolvedFloor.Pool
+    } else {
+        $rungCell = Get-SeatMapRungByName -Seat $target -Name $RungName
+        $launch = if ($null -ne $rungCell -and (Test-JsonProperty -Object $rungCell -Name 'launch')) { [string]$rungCell.launch } else { '' }
+        $pool = if ($null -ne $rungCell -and (Test-JsonProperty -Object $rungCell -Name 'pool')) { [string]$rungCell.pool } else { '' }
+    }
+    $recruitCmd = "maestri recruit `"$($target.codename)`" --preset `"$($target.preset)`" --command `"$launch`" --replace `"$($target.codename)`""
     $liveSwapped = $false
     $detail = 'map+roles+notes'
     if ($env:MAESTRI_PIPE) {
@@ -240,13 +247,6 @@ try {
         }
         elseif ($urlPath -eq '/api/seats' -and $req.HttpMethod -eq 'GET') {
             $json = Get-Content -LiteralPath $seatMapPath -Raw
-            $currentMap = $json | ConvertFrom-Json
-            $getViolations = @(Get-SeatMapViolations -Map $currentMap)
-            if ($getViolations.Count -gt 0) {
-                $errBody = @{ error = [string]$getViolations[0]; violations = $getViolations } | ConvertTo-Json -Depth 4
-                Send-HttpResponse -Context $context -Content $errBody -ContentType 'application/json' -StatusCode 400 -Origin $origin
-                continue
-            }
             Send-HttpResponse -Context $context -Content $json -ContentType 'application/json' -Origin $origin
         }
         elseif ($urlPath -eq '/api/seats/set' -and $req.HttpMethod -eq 'POST') {

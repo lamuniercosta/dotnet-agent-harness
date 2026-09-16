@@ -72,7 +72,9 @@ mode the team exists to prevent.
 
 ## Which host and model to run a command on
 
-The live seat map is Maestri workspace state at `~/.maestri/workspaces/<workspaceId>/seat-map.json` (resolved lazily from the active workspace; an explicit `-SeatMapPath` still overrides). It defines host and tier allocation for team seats via an ordered extensible `rungs` array (best first, head role first, floor role last), with a **floor** marking the lowest option that still does the work without losing quality. `scripts/local/seat-map.example.json` is the schema, the invariants block, and the CI contract.
+The live seat map is Maestri workspace state at `~/.maestri/workspaces/<workspaceId>/seat-map.json` (resolved lazily from the active workspace; an explicit `-SeatMapPath` still overrides). It defines host and tier allocation for team seats, ordered best first (`head`, `then`, `floor`), with a **floor** marking the lowest option that still does the work without losing quality. `scripts/local/seat-map.example.json` is the schema, the invariants block, and the CI contract.
+
+After a **target swap** (`Sync-SeatMap.ps1 -Seat <seat> -Rung <head|then|floor>`, or the canvas portal equivalent), the role prompt model-chain `(FLOOR)` endpoint is the **resolved runtime FLOOR**, not necessarily the static `rungs.floor` launch. Resolution uses `measured`/`cleared` evidence, numeric tier 1-4, disallowed-floor-pool policy (ZEN is not a floor except documented exceptions), and does not end the chain on the seat's head pool; same-tier ties break `floor`, then `then`, then `head`. Active-launch surfaces (recruit, charter roster, team-restart) follow `activeRung` and use that resolved launch only when `activeRung` is `floor`. If the target seat has no capable runtime floor, the swap exits non-zero and writes nothing. Non-swap `-Validate`/`-All`/`-SyncRoles`/`-SyncNotes` keep their existing whole-map contract. Broader probe-evidence re-anchor is DEV-244.
 
 ```powershell
 pwsh ./scripts/local/Sync-SeatMap.ps1 -Validate
@@ -91,7 +93,7 @@ Read down the chain to the first option you still have allowance for. **If that 
 floor, the work waits**; running below it means knowingly accepting reduced
 quality, which is the one thing the seat map exists to make visible.
 
-`scripts/local/Test-ModelProbe.ps1` auditions a candidate model on a named host against the floor-model probe kit (G1 trap, per-seat bars, cost ladder) and writes the resulting cell into the live workspace seat map. `Test-ModelProbe.ps1` launches hosts and can bill; use `-WhatIf` for non-launching validation. Before launching or mutating any seat state, the script runs pre-flight checks for supported hosts: Junie settings are validated for structure and required keys (missing or malformed settings block with a sanitized error); OpenCode ambient reasoning-effort configuration is detected and surfaced as a non-blocking warning on stdout; Cursor CLI configuration is inspected for model collisions, with a present but unreadable or malformed config treated as a blocking failure.
+`scripts/local/Test-ModelProbe.ps1` auditions a candidate model on a named host against the floor-model probe kit (G1 trap, per-seat bars, cost ladder) and writes the resulting cell into the live workspace seat map. `Test-ModelProbe.ps1` launches hosts and can bill; use `-WhatIf` for non-launching validation.
 
 ```powershell
 pwsh ./scripts/local/Test-ModelProbe.ps1 -Host cursor -Model composer-2.5 -Test Verdict -Seat conductor -Rung floor -WhatIf
