@@ -4,13 +4,15 @@
 .DESCRIPTION
     Propagates the active rung from the live workspace seat map
     (~/.maestri/workspaces/<id>/seat-map.json) across:
-    1. Role prompts (.maestri/roles/*/role.json) — ordered rung array, floor marked (FLOOR).
+    1. Role prompts (.maestri/roles/*/role.json) — all three rungs
     2. Canvas Note 1 (harness-team-charter.md roster table)
     3. Canvas Note 2 (team-restart.md launch commands)
     4. Printed `maestri recruit --replace` commands (-GenerateCommands)
 
-    Runtime contract is `activeRung` (a declared rung name), the same field the
-    portal writes. Invariant violations always exit 1 (Quill ZEN-floor
+    Runtime contract is `activeRung` (head|then|floor), the same field the
+    portal writes. A target swap (`-Seat` + `-Rung`) preflights runtime FLOOR
+    selection before any write and propagates that FLOOR into the target
+    role model-chain line. Invariant violations always exit 1 (Quill ZEN-floor
     exception matches Test-SeatMap.ps1). An explicit -SeatMapPath overrides
     workspace discovery. Path resolution is lazy (after helpers are
     dot-sourced) so a missing workspace never throws at bind time.
@@ -19,7 +21,7 @@
 .PARAMETER Seat
     Seat id or codename to update.
 .PARAMETER Rung
-    Active rung to set: a declared rung name from that seat's rungs array.
+    Active rung to set: head, then, floor.
 .PARAMETER WorkspaceId
     Maestri workspace UUID. Auto-discovered from ~/.maestri/workspaces when omitted.
 .PARAMETER SyncRoles
@@ -42,6 +44,7 @@
 param(
     [string]$SeatMapPath,
     [string]$Seat,
+    [ValidateSet('head', 'then', 'floor')]
     [string]$Rung,
     [string]$WorkspaceId,
     [switch]$SyncRoles,
@@ -99,20 +102,24 @@ if (-not (Test-Path -LiteralPath $SeatMapPath)) {
 
 $seatMap = Get-Content -LiteralPath $SeatMapPath -Raw | ConvertFrom-Json
 $syncMisses = [System.Collections.Generic.List[string]]::new()
+$swapTarget = $null
+$targetRuntimeFloor = $null
 
 function Write-ViolationsAndExit {
     param([object[]]$Violations)
-    Write-SeatMapViolationsAndExit -Violations $Violations
+    if (@($Violations).Count -eq 0) { return }
+    $Violations | ForEach-Object { Write-Error $_ -ErrorAction Continue }
+    exit 1
 }
 
 function Get-SeatByName {
     param($Map, [string]$Name)
-    return (Find-SeatMapSeat -Map $Map -Name $Name)
-}
-
-function Get-ActiveRungName {
-    param($SeatObj)
-    return (Get-SeatMapActiveRungName -Seat $SeatObj)
+    foreach ($s in @($Map.seats)) {
+        if ($s.id -eq $Name -or $s.codename -eq $Name -or $s.name -eq $Name) {
+            return $s
+        }
+    }
+    return $null
 }
 
 function Save-SeatMap {
@@ -153,29 +160,53 @@ if ($Rung -and -not $Seat) {
 }
 
 if ($Seat -and $Rung) {
-    $target = Get-SeatByName -Map $seatMap -Name $Seat
-    if ($null -eq $target) {
+    $swapTarget = Get-SeatByName -Map $seatMap -Name $Seat
+    if ($null -eq $swapTarget) {
         throw "Seat '$Seat' not found in seat map."
     }
-    if ($null -eq (Get-SeatMapRungByName -Seat $target -Name $Rung)) {
+    if ($null -eq (Get-SeatMapRungByName -Seat $swapTarget -Name $Rung)) {
         throw "Seat '$Seat' has no declared rung '$Rung'."
     }
-    $target.activeRung = $Rung
+    $targetRuntimeFloor = Resolve-SeatRuntimeFloor -Map $seatMap -Seat $swapTarget
+    if (-not $targetRuntimeFloor.Ok) {
+        Write-Error $targetRuntimeFloor.Error -ErrorAction Continue
+        exit 1
+    }
+    $swapTarget.activeRung = $Rung
     $after = @(Get-SeatMapViolations -Map $seatMap)
     Write-ViolationsAndExit -Violations $after
+
+    $rolesDirForSwap = Join-Path $repoRoot '.maestri' 'roles'
+    $swapRoleFile = Join-Path $rolesDirForSwap $swapTarget.roleId 'role.json'
+    $swapRoleJson = $null
+    $swapChainLine = $null
+    if (Test-Path -LiteralPath $swapRoleFile) {
+        $swapRoleJson = Get-Content -LiteralPath $swapRoleFile -Raw | ConvertFrom-Json
+        $swapChainLine = Get-ModelChainLine -Seat $swapTarget -FloorLaunch $targetRuntimeFloor.Launch
+        if ($swapRoleJson.prompt -notmatch '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
+            Write-Error "Seat '$($swapTarget.codename)' role file has no Model chain line; refusing target swap before writes." -ErrorAction Continue
+            exit 1
+        }
+        $swapRoleJson.prompt = Replace-LiteralRegex -InputText $swapRoleJson.prompt -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $swapChainLine
+    }
+
     Save-SeatMap -Map $seatMap -Path $SeatMapPath
-    Write-Host "Updated seat '$($target.codename)' activeRung to '$Rung'." -ForegroundColor Green
+    if ($null -ne $swapRoleJson) {
+        Save-SeatMap -Map $swapRoleJson -Path $swapRoleFile
+    }
+    Write-Host "Updated seat '$($swapTarget.codename)' activeRung to '$Rung'." -ForegroundColor Green
+    if ($null -ne $swapRoleJson) {
+        Write-Host "  Updated role model-chain FLOOR for $($swapTarget.codename) to runtime floor '$($targetRuntimeFloor.Launch)'." -ForegroundColor Green
+    }
 }
 
 if ($GenerateCommands -or $All) {
     Write-Host "`n=== Maestri Replacement Commands (maestri recruit --replace) ===" -ForegroundColor Cyan
     foreach ($s in @($seatMap.seats)) {
-        $activeKey = Get-ActiveRungName -SeatObj $s
-        $activeCell = Get-SeatMapRungByName -Seat $s -Name $activeKey
-        $codeName = if (Test-JsonProperty -Object $s -Name 'codename') { [string]$s.codename } else { '' }
-        $preset = if (Test-JsonProperty -Object $s -Name 'preset') { [string]$s.preset } else { '' }
-        $launch = if ($null -ne $activeCell -and (Test-JsonProperty -Object $activeCell -Name 'launch')) { [string]$activeCell.launch } else { '' }
-        Write-Host (Get-SeatMapRecruitCommand -Codename $codeName -Preset $preset -Launch $launch)
+        $runtimeFloor = $null
+        if ($null -ne $swapTarget -and $s.id -eq $swapTarget.id) { $runtimeFloor = $targetRuntimeFloor }
+        $activeCell = Get-SeatActiveLaunchCell -Seat $s -RuntimeFloor $runtimeFloor
+        Write-Host "maestri recruit `"$($s.codename)`" --preset `"$($s.preset)`" --command `"$($activeCell.launch)`" --replace `"$($s.codename)`""
     }
 }
 
@@ -195,7 +226,11 @@ if ($SyncRoles -or $All) {
                 continue
             }
             $roleJson = Get-Content -LiteralPath $roleFile -Raw | ConvertFrom-Json
-            $chainLine = Get-ModelChainLine -Seat $s
+            $floorLaunch = $null
+            if ($null -ne $swapTarget -and $s.id -eq $swapTarget.id -and $null -ne $targetRuntimeFloor -and $targetRuntimeFloor.Ok) {
+                $floorLaunch = $targetRuntimeFloor.Launch
+            }
+            $chainLine = Get-ModelChainLine -Seat $s -FloorLaunch $floorLaunch
             if ($roleJson.prompt -match '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
                 $roleJson.prompt = Replace-LiteralRegex -InputText $roleJson.prompt -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $chainLine
                 Save-SeatMap -Map $roleJson -Path $roleFile
@@ -230,8 +265,9 @@ if ($SyncNotes -or $All) {
                 '|---|---|---|---|'
             )
             foreach ($s in @($seatMap.seats)) {
-                $activeKey = Get-ActiveRungName -SeatObj $s
-                $activeCell = Get-SeatMapRungByName -Seat $s -Name $activeKey
+                $runtimeFloor = $null
+                if ($null -ne $swapTarget -and $s.id -eq $swapTarget.id) { $runtimeFloor = $targetRuntimeFloor }
+                $activeCell = Get-SeatActiveLaunchCell -Seat $s -RuntimeFloor $runtimeFloor
                 $rosterTable += "| $($s.name) | $($s.codename) | $($activeCell.launch) | $($activeCell.pool) |"
             }
             $newRoster = ($rosterTable -join "`n")
@@ -257,8 +293,9 @@ if ($SyncNotes -or $All) {
                 '| --- | --- |'
             )
             foreach ($s in @($seatMap.seats)) {
-                $activeKey = Get-ActiveRungName -SeatObj $s
-                $activeCell = Get-SeatMapRungByName -Seat $s -Name $activeKey
+                $runtimeFloor = $null
+                if ($null -ne $swapTarget -and $s.id -eq $swapTarget.id) { $runtimeFloor = $targetRuntimeFloor }
+                $activeCell = Get-SeatActiveLaunchCell -Seat $s -RuntimeFloor $runtimeFloor
                 $launchTable += "| $($s.codename) | ``$($activeCell.launch)`` |"
             }
             $newLaunch = ($launchTable -join "`n")
@@ -293,8 +330,10 @@ if ($Verify -or $All) {
         }
         $driftCount = 0
         foreach ($s in @($seatMap.seats)) {
-            $activeKey = Get-ActiveRungName -SeatObj $s
-            $activeCell = Get-SeatMapRungByName -Seat $s -Name $activeKey
+            $runtimeFloor = $null
+            if ($null -ne $swapTarget -and $s.id -eq $swapTarget.id) { $runtimeFloor = $targetRuntimeFloor }
+            $activeKey = Get-SeatActiveRungName -Seat $s
+            $activeCell = Get-SeatActiveLaunchCell -Seat $s -RuntimeFloor $runtimeFloor
             $t = @(
                 $terminals | Where-Object {
                     (Test-JsonProperty -Object $_ -Name 'assignedRoleId') -and $_.assignedRoleId -eq $s.roleId
