@@ -192,7 +192,9 @@ function Apply-SeatRung {
         $launch = if ($null -ne $rungCell -and (Test-JsonProperty -Object $rungCell -Name 'launch')) { [string]$rungCell.launch } else { '' }
         $pool = if ($null -ne $rungCell -and (Test-JsonProperty -Object $rungCell -Name 'pool')) { [string]$rungCell.pool } else { '' }
     }
-    $recruitCmd = "maestri recruit `"$($target.codename)`" --preset `"$($target.preset)`" --command `"$launch`" --replace `"$($target.codename)`""
+    $codeName = if (Test-JsonProperty -Object $target -Name 'codename') { [string]$target.codename } else { '' }
+    $preset = if (Test-JsonProperty -Object $target -Name 'preset') { [string]$target.preset } else { '' }
+    $recruitCmd = Get-SeatMapRecruitCommand -Codename $codeName -Preset $preset -Launch $launch
     $liveSwapped = $false
     $detail = 'map+roles+notes'
     if ($env:MAESTRI_PIPE) {
