@@ -103,6 +103,7 @@ $seatMap = Get-Content -LiteralPath $SeatMapPath -Raw | ConvertFrom-Json
 $syncMisses = [System.Collections.Generic.List[string]]::new()
 $swapTarget = $null
 $targetRuntimeFloor = $null
+$preflightNotes = $null
 
 function Write-ViolationsAndExit {
     param([object[]]$Violations)
@@ -158,8 +159,24 @@ function Restore-SwapRollback {
 function Get-TargetSwapNotePaths {
     param(
         [string]$WorkspaceIdParam,
-        [string]$RepoRootParam
+        [string]$RepoRootParam,
+        [string]$SeatMapPathParam
     )
+    # Notes live beside seat-map.json in the workspace dir. Prefer that sibling
+    # when present so portal Sync still finds them if Start-Process dropped HOME.
+    if (-not [string]::IsNullOrWhiteSpace($SeatMapPathParam) -and (Test-Path -LiteralPath $SeatMapPathParam)) {
+        $mapDir = [System.IO.Path]::GetDirectoryName((Resolve-Path -LiteralPath $SeatMapPathParam).Path)
+        if (-not [string]::IsNullOrWhiteSpace($mapDir)) {
+            $sibling = Join-Path $mapDir 'notes'
+            if (Test-Path -LiteralPath $sibling) {
+                return [pscustomobject]@{
+                    NotesDir    = $sibling
+                    CharterPath = Join-Path $sibling 'harness-team-charter.md'
+                    RestartPath = Join-Path $sibling 'team-restart.md'
+                }
+            }
+        }
+    }
     $resolvedWorkspace = Resolve-MaestriWorkspaceId -WorkspaceId $WorkspaceIdParam -RepoRoot $RepoRootParam
     $notesDir = Join-Path $HOME '.maestri' 'workspaces' $resolvedWorkspace 'notes'
     return [pscustomobject]@{
@@ -258,7 +275,7 @@ if ($Seat -and $Rung) {
 
     if ($SyncNotes -or $All) {
         try {
-            $preflightNotes = Get-TargetSwapNotePaths -WorkspaceIdParam $WorkspaceId -RepoRootParam $repoRoot
+            $preflightNotes = Get-TargetSwapNotePaths -WorkspaceIdParam $WorkspaceId -RepoRootParam $repoRoot -SeatMapPathParam $SeatMapPath
         } catch {
             Write-Error ([string]$_) -ErrorAction Continue
             exit 1
@@ -345,8 +362,10 @@ if ($SyncRoles -or $All) {
 
 if ($SyncNotes -or $All) {
     Write-Host "`n=== Syncing Canvas Notes ===" -ForegroundColor Cyan
-    $resolvedWorkspace = Resolve-MaestriWorkspaceId -WorkspaceId $WorkspaceId -RepoRoot $repoRoot
-    $notesDir = Join-Path $HOME '.maestri' 'workspaces' $resolvedWorkspace 'notes'
+    if ($null -eq $preflightNotes) {
+        $preflightNotes = Get-TargetSwapNotePaths -WorkspaceIdParam $WorkspaceId -RepoRootParam $repoRoot -SeatMapPathParam $SeatMapPath
+    }
+    $notesDir = $preflightNotes.NotesDir
     if (-not (Test-Path -LiteralPath $notesDir)) {
         $syncMisses.Add("Notes directory not found at: $notesDir")
         Write-Warning "Notes directory not found at: $notesDir"
