@@ -109,9 +109,8 @@ $preflightNotes = $null
 
 function Write-ViolationsAndExit {
     param([object[]]$Violations)
-    if (@($Violations).Count -eq 0) { return }
-    $Violations | ForEach-Object { Write-Error $_ -ErrorAction Continue }
-    exit 1
+    # Redirected Write-Error + exit inside a function drops stderr on Ubuntu.
+    Write-SeatMapViolationsAndExit -Violations $Violations
 }
 
 function Get-SeatByName {
