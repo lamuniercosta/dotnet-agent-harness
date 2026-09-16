@@ -552,67 +552,28 @@ try {
     Assert-True 'DEV-236 Junie valid -WhatIf: file byte-identical' ($afterJunieContent -eq $validJunieContent) 'byte-identical' $afterJunieContent
 
     # Junie 6: Restore fidelity seam (Write-JunieEffortOnly & Restore-JunieEffort helper test)
+    # R1-B: Source-equality hash guard proving inline seam copies match Test-ModelProbe.ps1 production helpers
+    $probeScriptContent = Get-Content -LiteralPath $probeScript -Raw
+    $extractHelper = {
+        param([string]$FuncName, [string]$Content)
+        $match = [regex]::Match($Content, "(?s)function\s+$FuncName\s*\{.*?\n\}")
+        if (-not $match.Success) { throw "Helper $FuncName not found in Test-ModelProbe.ps1" }
+        return $match.Value.Trim()
+    }
+    $prodRead = &$extractHelper 'Read-JunieEffortOnly' $probeScriptContent
+    $prodWrite = &$extractHelper 'Write-JunieEffortOnly' $probeScriptContent
+    $prodRestore = &$extractHelper 'Restore-JunieEffort' $probeScriptContent
+    Assert-True 'DEV-236 Junie restore seam source equality: Read-JunieEffortOnly present' ([string]::IsNullOrWhiteSpace($prodRead) -eq $false) 'present' 'empty'
+    Assert-True 'DEV-236 Junie restore seam source equality: Write-JunieEffortOnly present' ([string]::IsNullOrWhiteSpace($prodWrite) -eq $false) 'present' 'empty'
+    Assert-True 'DEV-236 Junie restore seam source equality: Restore-JunieEffort present' ([string]::IsNullOrWhiteSpace($prodRestore) -eq $false) 'present' 'empty'
+
     $seamScript = Join-Path $isoHome 'junie-seam-test.ps1'
     $helperPathLiteral = $helperPath.Replace("'", "''")
     $seamScriptBody = @(
         ". '$helperPathLiteral'"
-        'function Read-JunieEffortOnly {'
-        '    param([string]$SettingsPath, [string]$ModelName)'
-        '    if (-not (Test-Path -LiteralPath $SettingsPath)) {'
-        '        return [pscustomobject]@{ Exists = $false; HadKey = $false; Value = $null }'
-        '    }'
-        '    $settings = (Get-Content -LiteralPath $SettingsPath -Raw) | ConvertFrom-Json'
-        '    $map = Get-JsonPath -Object $settings -Path @("effortPerModel")'
-        '    $hadKey = $false'
-        '    $value = $null'
-        '    if ($null -ne $map -and $null -ne $map.PSObject.Properties[$ModelName]) {'
-        '        $hadKey = $true'
-        '        $value = $map.$ModelName'
-        '    }'
-        '    return [pscustomobject]@{ Exists = $true; HadKey = $hadKey; Value = $value }'
-        '}'
-        'function Write-JunieEffortOnly {'
-        '    param([string]$SettingsPath, [string]$ModelName, [string]$Effort)'
-        '    if (-not (Test-Path -LiteralPath $SettingsPath)) { return }'
-        '    $settings = (Get-Content -LiteralPath $SettingsPath -Raw) | ConvertFrom-Json'
-        '    if (-not (Test-JsonProperty -Object $settings -Name "effortPerModel") -or $null -eq $settings.effortPerModel) {'
-        '        $settings | Add-Member -NotePropertyName "effortPerModel" -NotePropertyValue ([pscustomobject]@{}) -Force'
-        '    }'
-        '    if ($null -ne $settings.effortPerModel.PSObject.Properties[$ModelName]) {'
-        '        $settings.effortPerModel.$ModelName = $Effort'
-        '    }'
-        '    else {'
-        '        $settings.effortPerModel | Add-Member -NotePropertyName $ModelName -NotePropertyValue $Effort'
-        '    }'
-        '    $json = $settings | ConvertTo-Json -Depth 12'
-        '    [System.IO.File]::WriteAllText($SettingsPath, $json + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))'
-        '}'
-        'function Restore-JunieEffort {'
-        '    param($Backup, [string]$SettingsPath, [string]$ModelName)'
-        '    if ($null -eq $Backup -or -not $Backup.Exists) { return }'
-        '    if (-not (Test-Path -LiteralPath $SettingsPath)) { return }'
-        '    $settings = (Get-Content -LiteralPath $SettingsPath -Raw) | ConvertFrom-Json'
-        '    if (-not (Test-JsonProperty -Object $settings -Name "effortPerModel") -or $null -eq $settings.effortPerModel) {'
-        '        if (-not $Backup.HadKey) { return }'
-        '        $settings | Add-Member -NotePropertyName "effortPerModel" -NotePropertyValue ([pscustomobject]@{}) -Force'
-        '    }'
-        '    $map = $settings.effortPerModel'
-        '    if ($Backup.HadKey) {'
-        '        if ($null -ne $map.PSObject.Properties[$ModelName]) {'
-        '            $map.$ModelName = $Backup.Value'
-        '        }'
-        '        else {'
-        '            $map | Add-Member -NotePropertyName $ModelName -NotePropertyValue $Backup.Value'
-        '        }'
-        '    }'
-        '    else {'
-        '        if ($null -ne $map.PSObject.Properties[$ModelName]) {'
-        '            $map.PSObject.Properties.Remove($ModelName)'
-        '        }'
-        '    }'
-        '    $json = $settings | ConvertTo-Json -Depth 12'
-        '    [System.IO.File]::WriteAllText($SettingsPath, $json + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))'
-        '}'
+        $prodRead
+        $prodWrite
+        $prodRestore
         "`$backup = Read-JunieEffortOnly -SettingsPath '$($junieFile.Replace("'", "''"))' -ModelName 'gpt-4o'"
         "Write-JunieEffortOnly -SettingsPath '$($junieFile.Replace("'", "''"))' -ModelName 'gpt-4o' -Effort 'high'"
         "Restore-JunieEffort -Backup `$backup -SettingsPath '$($junieFile.Replace("'", "''"))' -ModelName 'gpt-4o'"
@@ -625,6 +586,16 @@ try {
     $expectedObj = $validJunieContent | ConvertFrom-Json
     Assert-True 'DEV-236 Junie restore fidelity seam: restored content match' ($restoredObj.effortPerModel.'gpt-4o' -eq $expectedObj.effortPerModel.'gpt-4o') 'restored' $restoredJunieContent
 
+    # Junie 7: R1-D Portable Unreadable Settings Leg
+    if (Test-Path -LiteralPath $junieFile) { Remove-Item -LiteralPath $junieFile -Recurse -Force }
+    New-Item -ItemType Directory -Path $junieFile -Force | Out-Null
+    $resJUnreadable = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'junie', '-Model', 'gpt-4o', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 Junie unreadable settings: exit 1' ($resJUnreadable.ExitCode -eq 1) '1' ([string]$resJUnreadable.ExitCode)
+    Assert-True 'DEV-236 Junie unreadable settings: sanitized stderr' (Test-TextContains $resJUnreadable.StdErr 'Junie pre-flight failed: settings file unreadable:') 'unreadable' $resJUnreadable.StdErr
+    Assert-True 'DEV-236 Junie unreadable settings: stderr names settings path' (Test-TextContains $resJUnreadable.StdErr $junieFile) $junieFile $resJUnreadable.StdErr
+    Assert-True 'DEV-236 Junie unreadable settings: stderr conceals raw file content' (-not (Test-TextContains $resJUnreadable.StdErr 'System.UnauthorizedAccessException') -and -not (Test-TextContains $resJUnreadable.StdErr 'Access to the path')) 'concealed' $resJUnreadable.StdErr
+    Remove-Item -LiteralPath $junieFile -Recurse -Force
+
     # OpenCode 1: Configured reasoning.effort -> stdout Warning & Note, exit 0
     $opencodeDir = Join-Path (Join-Path $preflightHome '.config') 'opencode'
     New-Item -ItemType Directory -Path $opencodeDir -Force | Out-Null
@@ -635,12 +606,23 @@ try {
     Assert-True 'DEV-236 OpenCode configured effort: stdout Warning present' (Test-TextContains $resO1.StdOut 'Warning:  reasoning.effort=high is a global/shared OpenCode setting') 'Warning' $resO1.StdOut
     Assert-True 'DEV-236 OpenCode configured effort: stdout Note present' (Test-TextContains $resO1.StdOut 'Note:     OpenCode probes should not run while live OpenCode seats are active.') 'Note' $resO1.StdOut
 
-    # OpenCode 2: Invalid/unreadable config -> non-blocking under -WhatIf, exit 0, Note on stdout
+    # OpenCode 2: Invalid config -> non-blocking under -WhatIf, exit 0, Note on stdout
     [System.IO.File]::WriteAllText($opencodeFile, '{ invalid jsonc', [System.Text.UTF8Encoding]::new($false))
     $resO2 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'opencode', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
     Assert-True 'DEV-236 OpenCode invalid config: non-blocking exit 0' ($resO2.ExitCode -eq 0) '0' ([string]$resO2.ExitCode)
     Assert-True 'DEV-236 OpenCode invalid config: stdout Note present' (Test-TextContains $resO2.StdOut 'Note:     OpenCode config invalid:') 'Note' $resO2.StdOut
     Assert-True 'DEV-236 OpenCode invalid config: stdout conceals raw file content' (-not (Test-TextContains $resO2.StdOut '{ invalid jsonc')) 'concealed' $resO2.StdOut
+
+    # OpenCode 3: R1-D Portable Unreadable Config Leg
+    if (Test-Path -LiteralPath $opencodeFile) { Remove-Item -LiteralPath $opencodeFile -Recurse -Force }
+    New-Item -ItemType Directory -Path $opencodeFile -Force | Out-Null
+    $resOUnreadable = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'opencode', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 OpenCode unreadable config: non-blocking exit 0' ($resOUnreadable.ExitCode -eq 0) '0' ([string]$resOUnreadable.ExitCode)
+    Assert-True 'DEV-236 OpenCode unreadable config: stdout Note present' (Test-TextContains $resOUnreadable.StdOut 'Note:     OpenCode config unreadable:') 'Note' $resOUnreadable.StdOut
+    Assert-True 'DEV-236 OpenCode unreadable config: stdout names config path' (Test-TextContains $resOUnreadable.StdOut $opencodeFile) $opencodeFile $resOUnreadable.StdOut
+    Assert-True 'DEV-236 OpenCode unreadable config: stdout conceals raw file content' (-not (Test-TextContains $resOUnreadable.StdOut 'System.UnauthorizedAccessException') -and -not (Test-TextContains $resOUnreadable.StdOut 'Access to the path')) 'concealed' $resOUnreadable.StdOut
+    Assert-True 'DEV-236 OpenCode unreadable config: stderr empty' ([string]::IsNullOrWhiteSpace($resOUnreadable.StdErr)) '(empty)' $resOUnreadable.StdErr
+    Remove-Item -LiteralPath $opencodeFile -Recurse -Force
 
     # Cursor 1: Missing cli-config.json -> exit 0
     $cursorDir = Join-Path $preflightHome '.cursor'
@@ -650,28 +632,45 @@ try {
     $resC1 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'cursor', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
     Assert-True 'DEV-236 Cursor missing config: exit 0' ($resC1.ExitCode -eq 0) '0' ([string]$resC1.ExitCode)
 
-    # Cursor 2: Matching model (exact ordinal trimmed) -> exit 0
+    # Cursor 2: R1-C Present Valid Config With No Model Declaration
+    [System.IO.File]::WriteAllText($cursorFile, '{"other": 1}', [System.Text.UTF8Encoding]::new($false))
+    $resCNoModel = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'cursor', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 Cursor no-model config: exit 0' ($resCNoModel.ExitCode -eq 0) '0' ([string]$resCNoModel.ExitCode)
+    Assert-True 'DEV-236 Cursor no-model config: stderr empty' ([string]::IsNullOrWhiteSpace($resCNoModel.StdErr)) '(empty)' $resCNoModel.StdErr
+    Assert-True 'DEV-236 Cursor no-model config: stdout WhatIf present' (Test-TextContains $resCNoModel.StdOut 'WhatIf:   validate+resolve+construct complete; launch will not execute.') 'WhatIf' $resCNoModel.StdOut
+
+    # Cursor 3: Matching model (exact ordinal trimmed) -> exit 0
     [System.IO.File]::WriteAllText($cursorFile, '{"model": {"modelId": "  claude-3-5-sonnet  "}}', [System.Text.UTF8Encoding]::new($false))
     $resC2 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'cursor', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
     Assert-True 'DEV-236 Cursor matching model: exit 0' ($resC2.ExitCode -eq 0) '0' ([string]$resC2.ExitCode)
 
-    # Cursor 3: Extraction order precedence test (model.modelId beats selectedModel.modelId)
+    # Cursor 4: Extraction order precedence test (model.modelId beats selectedModel.modelId)
     [System.IO.File]::WriteAllText($cursorFile, '{"model": {"modelId": "claude-3-5-sonnet"}, "selectedModel": {"modelId": "gpt-4o"}}', [System.Text.UTF8Encoding]::new($false))
     $resC3 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'cursor', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
     Assert-True 'DEV-236 Cursor extraction precedence (model.modelId): exit 0' ($resC3.ExitCode -eq 0) '0' ([string]$resC3.ExitCode)
 
-    # Cursor 4: Conflicting model -> exit 1, sanitized stderr
+    # Cursor 5: Conflicting model -> exit 1, sanitized stderr
     [System.IO.File]::WriteAllText($cursorFile, '{"model": "gpt-4o"}', [System.Text.UTF8Encoding]::new($false))
     $resC4 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'cursor', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
     Assert-True 'DEV-236 Cursor conflicting model: exit 1' ($resC4.ExitCode -eq 1) '1' ([string]$resC4.ExitCode)
     Assert-True 'DEV-236 Cursor conflicting model: sanitized stderr' (Test-TextContains $resC4.StdErr 'Cursor pre-flight failed: configured model conflicts with -Model:') 'conflicts' $resC4.StdErr
 
-    # Cursor 5: Malformed/unreadable config -> fail-closed exit 1, sanitized stderr
+    # Cursor 6: Malformed config -> fail-closed exit 1, sanitized stderr
     [System.IO.File]::WriteAllText($cursorFile, '{ bad cursor json', [System.Text.UTF8Encoding]::new($false))
     $resC5 = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'cursor', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
     Assert-True 'DEV-236 Cursor malformed config: fail-closed exit 1' ($resC5.ExitCode -eq 1) '1' ([string]$resC5.ExitCode)
     Assert-True 'DEV-236 Cursor malformed config: sanitized stderr' (Test-TextContains $resC5.StdErr 'Cursor pre-flight failed: config file is not valid JSON:') 'not valid JSON' $resC5.StdErr
     Assert-True 'DEV-236 Cursor malformed config: stderr conceals raw file content' (-not (Test-TextContains $resC5.StdErr '{ bad cursor json')) 'concealed' $resC5.StdErr
+
+    # Cursor 7: R1-D Portable Unreadable Config Leg
+    if (Test-Path -LiteralPath $cursorFile) { Remove-Item -LiteralPath $cursorFile -Recurse -Force }
+    New-Item -ItemType Directory -Path $cursorFile -Force | Out-Null
+    $resCUnreadable = Invoke-IsolatedPwsh -HomeDir $preflightHome -File $probeScript -ArgumentList @('-Host', 'cursor', '-Model', 'claude-3-5-sonnet', '-Test', 'Verdict', '-WhatIf')
+    Assert-True 'DEV-236 Cursor unreadable config: exit 1' ($resCUnreadable.ExitCode -eq 1) '1' ([string]$resCUnreadable.ExitCode)
+    Assert-True 'DEV-236 Cursor unreadable config: sanitized stderr' (Test-TextContains $resCUnreadable.StdErr 'Cursor pre-flight failed: config file unreadable:') 'unreadable' $resCUnreadable.StdErr
+    Assert-True 'DEV-236 Cursor unreadable config: stderr names config path' (Test-TextContains $resCUnreadable.StdErr $cursorFile) $cursorFile $resCUnreadable.StdErr
+    Assert-True 'DEV-236 Cursor unreadable config: stderr conceals raw file content' (-not (Test-TextContains $resCUnreadable.StdErr 'System.UnauthorizedAccessException') -and -not (Test-TextContains $resCUnreadable.StdErr 'Access to the path')) 'concealed' $resCUnreadable.StdErr
+    Remove-Item -LiteralPath $cursorFile -Recurse -Force
 
 
 

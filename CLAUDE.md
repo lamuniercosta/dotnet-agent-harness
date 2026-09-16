@@ -82,7 +82,7 @@ Read down the chain to the first option you still have allowance for. **If that 
 floor, the work waits**; running below it means knowingly accepting reduced
 quality, which is the one thing the seat map exists to make visible.
 
-`scripts/local/Test-ModelProbe.ps1` auditions a candidate model on a named host against the floor-model probe kit (G1 trap, per-seat bars, cost ladder) and writes the resulting cell into the live workspace seat map. `Test-ModelProbe.ps1` launches hosts and can bill; use `-WhatIf` for non-launching validation.
+`scripts/local/Test-ModelProbe.ps1` auditions a candidate model on a named host against the floor-model probe kit (G1 trap, per-seat bars, cost ladder) and writes the resulting cell into the live workspace seat map. `Test-ModelProbe.ps1` launches hosts and can bill; use `-WhatIf` for non-launching validation. Before launching or mutating any seat state, the script runs pre-flight checks for supported hosts: Junie settings are validated for structure and required keys (missing or malformed settings block with a sanitized error); OpenCode ambient reasoning-effort configuration is detected and surfaced as a non-blocking warning on stdout; Cursor CLI configuration is inspected for model collisions, with a present but unreadable or malformed config treated as a blocking failure.
 
 ```powershell
 pwsh ./scripts/local/Test-ModelProbe.ps1 -Host cursor -Model composer-2.5 -Test Verdict -Seat conductor -Rung floor -WhatIf
