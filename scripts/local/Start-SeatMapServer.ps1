@@ -104,13 +104,59 @@ function Get-RequestToken {
     return [string]$Request.Headers['X-Seat-Map-Token']
 }
 
+function Get-SeatMapPathHomeContext {
+    param([string]$Path)
+    if ([string]::IsNullOrWhiteSpace($Path)) { return $null }
+    try {
+        $full = [System.IO.Path]::GetFullPath($Path)
+    } catch {
+        return $null
+    }
+    $wsDir = [System.IO.Path]::GetDirectoryName($full)
+    $wsRoot = [System.IO.Path]::GetDirectoryName($wsDir)
+    $maestriDir = [System.IO.Path]::GetDirectoryName($wsRoot)
+    $homeDir = [System.IO.Path]::GetDirectoryName($maestriDir)
+    if ([string]::IsNullOrWhiteSpace($wsDir) -or [string]::IsNullOrWhiteSpace($wsRoot) -or [string]::IsNullOrWhiteSpace($maestriDir) -or [string]::IsNullOrWhiteSpace($homeDir)) {
+        return $null
+    }
+    if (-not [string]::Equals([System.IO.Path]::GetFileName($wsRoot), 'workspaces', [StringComparison]::OrdinalIgnoreCase)) {
+        return $null
+    }
+    if (-not [string]::Equals([System.IO.Path]::GetFileName($maestriDir), '.maestri', [StringComparison]::OrdinalIgnoreCase)) {
+        return $null
+    }
+    return [pscustomobject]@{
+        Home        = $homeDir
+        WorkspaceId = [System.IO.Path]::GetFileName($wsDir)
+    }
+}
+
 function Stop-OtherSeatMapServerProcesses {
     $mine = $PID
-    foreach ($procName in @('pwsh.exe', 'powershell.exe')) {
-        Get-CimInstance -ClassName Win32_Process -Filter "Name = '$procName'" -ErrorAction SilentlyContinue |
-            Where-Object { $_.ProcessId -ne $mine -and ([string]$_.CommandLine -match 'Start-SeatMapServer\.ps1') } |
+    if ($IsWindows) {
+        foreach ($procName in @('pwsh.exe', 'powershell.exe')) {
+            Get-CimInstance -ClassName Win32_Process -Filter "Name = '$procName'" -ErrorAction SilentlyContinue |
+                Where-Object { $_.ProcessId -ne $mine -and ([string]$_.CommandLine -match 'Start-SeatMapServer\.ps1') } |
+                ForEach-Object {
+                    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+                }
+        }
+    } else {
+        Get-Process -Name pwsh, powershell -ErrorAction SilentlyContinue |
+            Where-Object { $_.Id -ne $mine } |
             ForEach-Object {
-                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+                $cl = ''
+                $clPath = "/proc/$($_.Id)/cmdline"
+                if (Test-Path -LiteralPath $clPath) {
+                    try {
+                        $cl = [System.IO.File]::ReadAllText($clPath)
+                    } catch {
+                        $cl = ''
+                    }
+                }
+                if ($cl -match 'Start-SeatMapServer\.ps1') {
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                }
             }
     }
     Start-Sleep -Milliseconds 400
@@ -125,6 +171,11 @@ function Invoke-SeatMapSyncChild {
     )
     $pwshExe = (Get-Command pwsh).Source
     $childScript = Join-Path $PSScriptRoot 'Sync-SeatMap.ps1'
+    $mapHome = Get-SeatMapPathHomeContext -Path $SeatMapPath
+    $childWorkspaceId = $WorkspaceId
+    if ([string]::IsNullOrWhiteSpace($childWorkspaceId) -and $null -ne $mapHome) {
+        $childWorkspaceId = [string]$mapHome.WorkspaceId
+    }
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $pwshExe
     $psi.UseShellExecute = $false
@@ -132,6 +183,10 @@ function Invoke-SeatMapSyncChild {
     $psi.RedirectStandardError = $true
     $psi.CreateNoWindow = $true
     $psi.WorkingDirectory = $repoRoot
+    if ($null -ne $mapHome) {
+        $psi.Environment['HOME'] = [string]$mapHome.Home
+        $psi.Environment['USERPROFILE'] = [string]$mapHome.Home
+    }
     foreach ($a in @(
             '-NoProfile', '-File', $childScript,
             '-SeatMapPath', $SeatMapPath,
@@ -142,9 +197,9 @@ function Invoke-SeatMapSyncChild {
         )) {
         [void]$psi.ArgumentList.Add($a)
     }
-    if (-not [string]::IsNullOrWhiteSpace($WorkspaceId)) {
+    if (-not [string]::IsNullOrWhiteSpace($childWorkspaceId)) {
         [void]$psi.ArgumentList.Add('-WorkspaceId')
-        [void]$psi.ArgumentList.Add($WorkspaceId)
+        [void]$psi.ArgumentList.Add($childWorkspaceId)
     }
     $p = [System.Diagnostics.Process]::Start($psi)
     $stdoutTask = $p.StandardOutput.ReadToEndAsync()
@@ -153,15 +208,15 @@ function Invoke-SeatMapSyncChild {
         try { $p.Kill($true) } catch { }
         [void]$p.WaitForExit(5000)
     }
-    elseif (-not $p.HasExited) {
-        try { $p.Kill($true) } catch { }
-        [void]$p.WaitForExit(5000)
-    }
+    # Parameterless WaitForExit latches ExitCode after redirected IO (Unix race:
+    # the timeout overload can return true with ExitCode still 0).
+    if ($p.HasExited) { $p.WaitForExit() }
     $out = $stdoutTask.GetAwaiter().GetResult()
     $err = $stderrTask.GetAwaiter().GetResult()
     if (-not [string]::IsNullOrWhiteSpace($out)) { Write-Host $out }
     if (-not [string]::IsNullOrWhiteSpace($err)) { Write-Warning $err }
-    return $p.ExitCode
+    if (-not $p.HasExited) { return 1 }
+    return [int]$p.ExitCode
 }
 
 function Apply-SeatRung {

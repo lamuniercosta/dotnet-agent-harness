@@ -493,14 +493,32 @@ try {
     Assert-True 'R1 A3 Start-SeatMapServer recruitCommand quoting: exit 0' ($portalQuoteRes.ExitCode -eq 0) '0' ("exit=$($portalQuoteRes.ExitCode)`n$($portalQuoteRes.StdOut)`n$($portalQuoteRes.StdErr)")
 
     # --- DEV-235 B4: Portal HTTP render + POST + activeRung readback ---
-    # B3 fixture: conductor needs a safe measured/cleared runtime-floor candidate before declared-rung POST.
-    # Probe fake write above sets alt evidence to probed; restore example map so alt stays cleared (tier 4 GEMINI).
+    # B3 fixture: conductor needs safe measured/cleared runtime-floor candidates before declared-rung POST.
+    # Probe fake write above sets alt evidence to probed; restore and pin alt cleared + floor measured.
     Copy-Item -LiteralPath $examplePath -Destination $livePath -Force
+    $b3PortalMap = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
+    $b3Conductor = @($b3PortalMap.seats | Where-Object { $_.id -eq 'conductor' })[0]
+    $b3AltRung = @($b3Conductor.rungs | Where-Object { $_.name -eq 'alt' })[0]
+    $b3FloorRung = @($b3Conductor.rungs | Where-Object { $_.name -eq 'floor' })[0]
+    $b3AltRung.evidence = 'cleared'
+    $b3FloorRung.evidence = 'measured'
+    $b3PortalJson = $b3PortalMap | ConvertTo-Json -Depth 12
+    if (-not $b3PortalJson.EndsWith("`n")) { $b3PortalJson += "`n" }
+    [System.IO.File]::WriteAllText($livePath, $b3PortalJson, [System.Text.UTF8Encoding]::new($false))
+    $livePathLiteral = $livePath.Replace("'", "''")
+    $b3WsIdLiteral = $wsId.Replace("'", "''")
     $portalScript = Join-Path $isoHome 'test-portal.ps1'
     $serverScriptLiteral = $serverScript.Replace("'", "''")
     $portalScriptBody = @(
-        "`$serverProc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8789', '-SeatMapPath', '$livePathLiteral' -PassThru -RedirectStandardOutput (Join-Path '$isoHome' 'server.log')"
-        "Start-Sleep -Seconds 2"
+        "`$serverEnv = @{ HOME = `$env:HOME; USERPROFILE = `$env:USERPROFILE }"
+        "`$serverProc = Start-Process pwsh -ArgumentList @('-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8789', '-SeatMapPath', '$livePathLiteral', '-WorkspaceId', '$b3WsIdLiteral') -PassThru -Environment `$serverEnv -RedirectStandardOutput (Join-Path '$isoHome' 'server.log')"
+        "for (`$ready = 0; `$ready -lt 50; `$ready++) {"
+        "    try {"
+        "        `$probe = Invoke-WebRequest -Uri 'http://localhost:8789/' -UseBasicParsing -TimeoutSec 2"
+        "        if (`$probe.StatusCode -eq 200) { break }"
+        "    } catch { }"
+        "    Start-Sleep -Milliseconds 200"
+        "}"
         "try {"
         "    `$resp = Invoke-WebRequest -Uri 'http://localhost:8789/' -UseBasicParsing"
         "    if (`$resp.StatusCode -ne 200) { throw 'GET failed' }"
@@ -515,6 +533,8 @@ try {
         "    `$headers = @{ 'X-Seat-Map-Token' = `$token }"
         "    `$postResp = Invoke-WebRequest -Uri 'http://localhost:8789/api/seats/set' -Method POST -Headers `$headers -Body `$body -ContentType 'application/json' -UseBasicParsing"
         "    if (`$postResp.StatusCode -ne 200) { throw 'POST failed' }"
+        "    `$postJson = `$postResp.Content | ConvertFrom-Json"
+        "    if (-not `$postJson.success) { throw 'POST success=false' }"
         "} finally {"
         "    Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue"
         "}"
