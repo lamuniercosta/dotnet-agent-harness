@@ -1,6 +1,6 @@
 {
     "schemaVersion":  2,
-    "updatedAt":  "2026-09-14",
+    "updatedAt":  "2026-09-16",
     "charterDate":  "2026-09-11",
     "invariants":  {
                        "maxCursorHeads":  4,
@@ -12,7 +12,91 @@
                        "zenFloorExceptions":  [
                                                   "Quill"
                                               ],
-                       "distinctPoolsPerSeat":  true
+                       "distinctPoolsPerSeat":  true,
+                       "tierPolicy":  {
+                                          "note":  "Operator consumption preferences (2026-09-16). Every finding from this block is a WARNING: any model may run on any seat; the validator only says which preference the choice crosses.",
+                                          "consumptionOrder":  [
+                                                                   1,
+                                                                   2,
+                                                                   3,
+                                                                   4,
+                                                                   0
+                                                               ],
+                                          "tierLabels":  {
+                                                             "1":  "generous flat-rate",
+                                                             "2":  "limited flat-rate",
+                                                             "3":  "metered, monthly refill",
+                                                             "4":  "metered, out of pocket",
+                                                             "0":  "free"
+                                                         },
+                                          "poolTiers":  {
+                                                            "CLAUDE":  1,
+                                                            "CODEX":  1,
+                                                            "CURSOR":  2,
+                                                            "AGY-G":  1,
+                                                            "AGY-C":  2,
+                                                            "GEMINI":  3,
+                                                            "JETBRAINS":  3,
+                                                            "OPENROUTER":  4,
+                                                            "DEEPSEEK":  4,
+                                                            "ZEN":  0
+                                                        },
+                                          "modelTiers":  [
+                                                             {
+                                                                 "pool":  "CODEX",
+                                                                 "modelPattern":  "^gpt-5(\\.[0-4])?(-|$)",
+                                                                 "tier":  2,
+                                                                 "why":  "codex gpt below 5.5 is the limited allowance; gpt-5.6-luna is the generous one"
+                                                             },
+                                                             {
+                                                                 "pool":  "CURSOR",
+                                                                 "modelPattern":  "^(composer|cursor-grok)",
+                                                                 "tier":  1,
+                                                                 "why":  "composer/grok run on the Cursor allowance; other-models are metered inside Cursor"
+                                                             },
+                                                             {
+                                                                 "pool":  "OPENROUTER",
+                                                                 "modelPattern":  ":free$",
+                                                                 "tier":  0,
+                                                                 "why":  "OpenRouter free endpoints"
+                                                             }
+                                                         ],
+                                          "poolModelPreference":  {
+                                                                      "CLAUDE":  [
+                                                                                     "claude-4.5-haiku"
+                                                                                 ],
+                                                                      "OPENROUTER":  [
+                                                                                         "glm-5.3-flash"
+                                                                                     ],
+                                                                      "DEEPSEEK":  [
+                                                                                       "deepseek-v4.1-flash"
+                                                                                   ]
+                                                                  },
+                                          "maxActiveSeatsPerPool":  {
+                                                                        "ZEN":  1,
+                                                                        "CODEX":  2
+                                                                    },
+                                          "poolDisallowedSeats":  {
+                                                                      "ZEN":  [
+                                                                                  "rigger"
+                                                                              ]
+                                                                  },
+                                          "seatHeadPoolPreference":  {
+                                                                         "conductor":  [
+                                                                                           "CODEX"
+                                                                                       ],
+                                                                         "keel":  [
+                                                                                      "AGY-G"
+                                                                                  ]
+                                                                     },
+                                          "seatPoolAvoid":  [
+                                                                {
+                                                                    "seat":  "cog",
+                                                                    "pool":  "AGY-G",
+                                                                    "reason":  "Cog keeps stalling on agy (observed 2026-09-16); model or tool at fault not yet known"
+                                                                }
+                                                            ]
+                                      }
                    },
     "seats":  [
                   {
@@ -31,7 +115,7 @@
                                         "evidence":  "unmeasured",
                                         "host":  "codex",
                                         "model":  "gpt-5.6-luna",
-                                        "tier":  3
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "then",
@@ -40,7 +124,7 @@
                                         "evidence":  "unmeasured",
                                         "host":  "opencode",
                                         "model":  "opencode/muse-spark-1.3-contributor-free",
-                                        "tier":  1
+                                        "tier":  0
                                     },
                                     {
                                         "name":  "alt",
@@ -49,7 +133,7 @@
                                         "evidence":  "cleared",
                                         "host":  "gemini",
                                         "model":  "gemini-3.5-flash-lite",
-                                        "tier":  4
+                                        "tier":  3
                                     },
                                     {
                                         "name":  "floor",
@@ -59,7 +143,7 @@
                                         "evidence":  "unmeasured",
                                         "host":  "cursor",
                                         "model":  "composer-2.5",
-                                        "tier":  3
+                                        "tier":  1
                                     }
                                 ]
                   },
@@ -79,7 +163,7 @@
                                         "evidence":  "measured",
                                         "host":  "cursor",
                                         "model":  "glm-5.2-high",
-                                        "tier":  3
+                                        "tier":  2
                                     },
                                     {
                                         "name":  "then",
@@ -88,7 +172,7 @@
                                         "evidence":  "unmeasured",
                                         "host":  "codex",
                                         "model":  "gpt-5.5",
-                                        "tier":  3
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "alt",
@@ -97,7 +181,7 @@
                                         "evidence":  "cleared",
                                         "host":  "gemini",
                                         "model":  "gemini-3.5-flash-lite",
-                                        "tier":  4
+                                        "tier":  3
                                     },
                                     {
                                         "name":  "floor",
@@ -127,7 +211,7 @@
                                         "evidence":  "unmeasured",
                                         "host":  "cursor",
                                         "model":  "cursor-grok-4.6-high",
-                                        "tier":  3
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "then",
@@ -136,7 +220,7 @@
                                         "evidence":  "measured",
                                         "host":  "agy",
                                         "model":  "gemini-3.7-flash-low",
-                                        "tier":  2
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "alt",
@@ -155,7 +239,7 @@
                                         "evidence":  "cleared",
                                         "host":  "gemini",
                                         "model":  "gemini-3.5-flash-lite",
-                                        "tier":  4
+                                        "tier":  3
                                     }
                                 ]
                   },
@@ -175,7 +259,7 @@
                                         "evidence":  "measured",
                                         "host":  "agy",
                                         "model":  "gemini-3.6-flash-low",
-                                        "tier":  2
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "then",
@@ -184,7 +268,7 @@
                                         "evidence":  "cleared",
                                         "host":  "gemini",
                                         "model":  "gemini-3.5-flash-lite",
-                                        "tier":  4
+                                        "tier":  3
                                     },
                                     {
                                         "name":  "alt",
@@ -193,7 +277,7 @@
                                         "evidence":  "unmeasured",
                                         "host":  "cursor",
                                         "model":  "composer-2.5",
-                                        "tier":  3
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "floor",
@@ -203,7 +287,7 @@
                                         "evidence":  "measured",
                                         "host":  "junie",
                                         "model":  "gemini-3.1-flash-lite",
-                                        "tier":  2
+                                        "tier":  3
                                     }
                                 ]
                   },
@@ -223,7 +307,7 @@
                                         "evidence":  "cleared",
                                         "host":  "gemini",
                                         "model":  "gemini-3.5-flash-lite",
-                                        "tier":  4
+                                        "tier":  3
                                     },
                                     {
                                         "name":  "then",
@@ -232,7 +316,7 @@
                                         "evidence":  "measured",
                                         "host":  "opencode",
                                         "model":  "opencode/muse-spark-1.3-contributor-free",
-                                        "tier":  1
+                                        "tier":  0
                                     },
                                     {
                                         "name":  "alt",
@@ -241,7 +325,7 @@
                                         "evidence":  "unmeasured",
                                         "host":  "cursor",
                                         "model":  "composer-2.5",
-                                        "tier":  3
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "floor",
@@ -251,7 +335,7 @@
                                         "evidence":  "measured",
                                         "host":  "opencode",
                                         "model":  "openrouter/thinkingmachines/inkling:free",
-                                        "tier":  1
+                                        "tier":  0
                                     }
                                 ]
                   },
@@ -271,7 +355,7 @@
                                         "evidence":  "unmeasured",
                                         "host":  "cursor",
                                         "model":  "composer-2.5",
-                                        "tier":  3
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "then",
@@ -280,7 +364,7 @@
                                         "evidence":  "measured",
                                         "host":  "opencode",
                                         "model":  "opencode/muse-spark-1.3-contributor-free",
-                                        "tier":  1
+                                        "tier":  0
                                     },
                                     {
                                         "name":  "alt",
@@ -299,7 +383,7 @@
                                         "evidence":  "cleared",
                                         "host":  "gemini",
                                         "model":  "gemini-3.1-flash-lite",
-                                        "tier":  4
+                                        "tier":  3
                                     }
                                 ]
                   },
@@ -328,7 +412,7 @@
                                         "evidence":  "probed",
                                         "host":  "junie",
                                         "model":  "grok-4.3",
-                                        "tier":  2
+                                        "tier":  3
                                     },
                                     {
                                         "name":  "alt",
@@ -337,7 +421,7 @@
                                         "evidence":  "cleared",
                                         "host":  "gemini",
                                         "model":  "gemini-3.5-flash-lite",
-                                        "tier":  4
+                                        "tier":  3
                                     },
                                     {
                                         "name":  "floor",
@@ -347,7 +431,7 @@
                                         "evidence":  "measured",
                                         "host":  "agy",
                                         "model":  "gemini-3.7-flash-low",
-                                        "tier":  2
+                                        "tier":  1
                                     }
                                 ]
                   },
@@ -367,7 +451,7 @@
                                         "evidence":  "probed",
                                         "host":  "codex",
                                         "model":  "gpt-5.6-luna",
-                                        "tier":  3
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "then",
@@ -376,7 +460,7 @@
                                         "evidence":  "measured",
                                         "host":  "agy",
                                         "model":  "gemini-3.7-flash-medium",
-                                        "tier":  2
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "alt",
@@ -385,7 +469,7 @@
                                         "evidence":  "unmeasured",
                                         "host":  "cursor",
                                         "model":  "composer-2.5",
-                                        "tier":  3
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "floor",
@@ -395,7 +479,7 @@
                                         "evidence":  "cleared",
                                         "host":  "gemini",
                                         "model":  "gemini-3.1-flash-lite",
-                                        "tier":  4
+                                        "tier":  3
                                     }
                                 ]
                   },
@@ -415,7 +499,7 @@
                                         "evidence":  "measured",
                                         "host":  "agy",
                                         "model":  "gemini-3.8-flash-high",
-                                        "tier":  2
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "then",
@@ -424,7 +508,7 @@
                                         "evidence":  "probed",
                                         "host":  "cursor",
                                         "model":  "muse-spark-1.3-high",
-                                        "tier":  3
+                                        "tier":  2
                                     },
                                     {
                                         "name":  "alt",
@@ -433,7 +517,7 @@
                                         "evidence":  "cleared",
                                         "host":  "gemini",
                                         "model":  "gemini-3.5-flash-lite",
-                                        "tier":  4
+                                        "tier":  3
                                     },
                                     {
                                         "name":  "floor",
@@ -472,7 +556,7 @@
                                         "evidence":  "unmeasured",
                                         "host":  "claude",
                                         "model":  "claude-sonnet-4-6",
-                                        "tier":  3
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "alt",
@@ -481,7 +565,7 @@
                                         "evidence":  "cleared",
                                         "host":  "gemini",
                                         "model":  "gemini-3.5-flash-lite",
-                                        "tier":  4
+                                        "tier":  3
                                     },
                                     {
                                         "name":  "floor",
@@ -491,7 +575,7 @@
                                         "evidence":  "measured",
                                         "host":  "opencode",
                                         "model":  "opencode/muse-spark-1.3-contributor-free",
-                                        "tier":  1
+                                        "tier":  0
                                     }
                                 ]
                   },
@@ -511,7 +595,7 @@
                                         "evidence":  "unmeasured",
                                         "host":  "cursor",
                                         "model":  "cursor-grok-4.5-low",
-                                        "tier":  3
+                                        "tier":  1
                                     },
                                     {
                                         "name":  "then",
@@ -520,7 +604,7 @@
                                         "evidence":  "measured",
                                         "host":  "opencode",
                                         "model":  "opencode/muse-spark-1.2-contributor-free",
-                                        "tier":  1
+                                        "tier":  0
                                     },
                                     {
                                         "name":  "alt",
@@ -529,7 +613,7 @@
                                         "evidence":  "cleared",
                                         "host":  "gemini",
                                         "model":  "gemini-3.5-flash-lite",
-                                        "tier":  4
+                                        "tier":  3
                                     },
                                     {
                                         "name":  "floor",

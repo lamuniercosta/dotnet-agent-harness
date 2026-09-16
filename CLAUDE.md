@@ -78,6 +78,15 @@ The live seat map is Maestri workspace state at `~/.maestri/workspaces/<workspac
 pwsh ./scripts/local/Sync-SeatMap.ps1 -Validate
 ```
 
+The map can also carry `invariants.tierPolicy` — the operator's consumption
+order and per-pool preferences (which models a pool is reserved for, how many
+seats a pool may run at once, which seats a pool must never carry, which pool a
+seat's head should sit on, seat/pool pairs seen to misbehave). Both validators
+read it and print **advisory warnings** (`TIER`, `ORDER`, `MODEL`, `SEAT`,
+`AVOID`, `HEAD`, `POOL`) that never fail the run: any model may run on any
+seat; the map's job is to say which preference a choice crosses. See ADR 0025
+(amended 2026-09-16) for the tier scheme.
+
 Read down the chain to the first option you still have allowance for. **If that lands below the
 floor, the work waits**; running below it means knowingly accepting reduced
 quality, which is the one thing the seat map exists to make visible.

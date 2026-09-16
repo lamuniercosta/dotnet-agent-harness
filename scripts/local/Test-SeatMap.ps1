@@ -45,6 +45,9 @@ if ($failures.Count -gt 0) {
     exit 1
 }
 
+# Tier-policy findings are advisory: printed, never fatal (2026-09-16).
+Write-SeatMapWarnings -Warnings @(Get-SeatMapWarnings -Map $seatMap)
+
 # --- Negative Fixtures Verification (DEV-235 B6) ---
 function Test-NegativeFixture {
     param(
@@ -103,6 +106,58 @@ Test-NegativeFixture -Name "opencode launch missing model flag" -Mutator { param
 
 # 12. Numeric schemaVersion 2.5 negative validation
 Test-NegativeFixture -Name "numeric schemaVersion 2.5" -Mutator { param($m) $m.schemaVersion = 2.5 } -ExpectedErrorSubstring "Seat map schemaVersion must be the integer 2 (got 2.5); schemaVersion 1 maps fail closed and in-place migration is not implemented."
+
+# --- Warning Fixtures: tierPolicy must warn, and must not fail ---
+function Test-WarningFixture {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][scriptblock]$Mutator,
+        [Parameter(Mandatory)][string]$ExpectedWarningSubstring
+    )
+    $json = $seatMap | ConvertTo-Json -Depth 100
+    $copy = $json | ConvertFrom-Json
+    & $Mutator $copy
+    $v = @(Get-SeatMapViolations -Map $copy)
+    if ($v.Count -gt 0) {
+        Write-Error "Warning fixture '$Name' produced a hard violation; tier policy must stay advisory. Got: $($v -join '; ')" -ErrorAction Continue
+        exit 1
+    }
+    $w = @(Get-SeatMapWarnings -Map $copy)
+    $joined = $w -join "`n"
+    if (-not $joined.Contains($ExpectedWarningSubstring)) {
+        Write-Error "Warning fixture '$Name' did not warn. Expected substring: '$ExpectedWarningSubstring', Actual: '$joined'" -ErrorAction Continue
+        exit 1
+    }
+}
+
+if (Test-JsonProperty -Object $seatMap.invariants -Name 'tierPolicy') {
+    # W1. Rung tier disagrees with the policy for its pool/model
+    Test-WarningFixture -Name "tier mismatch" -Mutator { param($m) $m.seats[0].rungs[0].tier = 4 } -ExpectedWarningSubstring "TIER  Seat"
+    # W2. A pool active on more seats than the operator caps it at (ZEN: 1)
+    Test-WarningFixture -Name "zen on two active seats" -Mutator {
+        param($m)
+        foreach ($s in $m.seats) { foreach ($r in $s.rungs) { if ($r.pool -eq 'ZEN') { $s.activeRung = $r.name } } }
+    } -ExpectedWarningSubstring "POOL  ZEN is the active rung on"
+    # W3. A model outside the pool's reserved list (CLAUDE -> haiku only)
+    Test-WarningFixture -Name "opus on the claude pool" -Mutator {
+        param($m)
+        $m.seats[0].rungs[1].pool = 'CLAUDE'; $m.seats[0].rungs[1].host = 'claude'
+        $m.seats[0].rungs[1].model = 'claude-opus-4-6'; $m.seats[0].rungs[1].launch = 'claude --model claude-opus-4-6'
+    } -ExpectedWarningSubstring "MODEL Seat"
+    # W4. A pool the operator keeps off a seat (ZEN on Rigger); the mutation keeps pools distinct
+    Test-WarningFixture -Name "zen on rigger" -Mutator {
+        param($m)
+        $rig = $m.seats | Where-Object { $_.id -eq 'rigger' } | Select-Object -First 1
+        foreach ($r in $rig.rungs) {
+            if ($r.pool -eq 'ZEN') { $r.pool = 'JETBRAINS'; $r.host = 'junie'; $r.model = 'gemini-3.1-flash-lite'; $r.launch = 'junie --model gemini-3.1-flash-lite' }
+        }
+        $rig.rungs[2].pool = 'ZEN'; $rig.rungs[2].host = 'opencode'
+        $rig.rungs[2].model = 'opencode/muse-spark-1.3-contributor-free'; $rig.rungs[2].launch = 'opencode --model opencode/muse-spark-1.3-contributor-free --auto'
+    } -ExpectedWarningSubstring "SEAT  Seat 'Rigger'"
+    # W5. Rungs out of consumption order
+    Test-WarningFixture -Name "chain out of consumption order" -Mutator { param($m) $m.seats[0].rungs[0].tier = 4; $m.seats[0].rungs[1].tier = 1 } -ExpectedWarningSubstring "ORDER Seat"
+    Write-Host "Test-SeatMap: 5 warning fixtures verified (advisory, non-fatal)." -ForegroundColor Green
+}
 
 Write-Host "Test-SeatMap: All checks PASSED ($($seatMap.seats.Count) seats, schema valid, invariants held, 12 negative fixtures verified)." -ForegroundColor Green
 exit 0

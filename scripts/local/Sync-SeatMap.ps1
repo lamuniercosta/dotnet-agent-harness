@@ -137,6 +137,7 @@ if ($Validate -or $All -or $noAction) {
     Write-Host '  [OK] At least 1 Gemini API head'
     Write-Host '  [OK] Zen floor = 0 (Quill excepted)'
     Write-Host '  [OK] Distinct pools across all declared rungs'
+    Write-SeatMapWarnings -Warnings @(Get-SeatMapWarnings -Map $seatMap)
     if ($Validate -and -not $All -and -not $Seat -and -not $SyncRoles -and -not $SyncNotes -and -not $Verify -and -not $GenerateCommands) {
         exit 0
     }

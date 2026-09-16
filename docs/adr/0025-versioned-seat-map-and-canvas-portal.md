@@ -60,14 +60,30 @@ and ends with exactly one terminal `(FLOOR).` marker on the floor rung.
 `rungs.floor`) fail closed with a diagnostic that names schemaVersion 2
 and the migration requirement. DEV-235 does not migrate in place.
 
-The `tier` field (1–4) records marginal cost:
+The `tier` field (0–4) records the pool's place in the operator's consumption
+order. **Amended 2026-09-16:** the original 1–4 table (1 free, 2 expiring
+allowances, 3 flat-rate, 4 metered) is replaced by the order the operator
+actually spends in, which puts the generous flat-rate pools first and the free
+pool last. The example map's rungs are renumbered to this scheme; the live map
+is the operator's to renumber.
 
 | Tier | Category | Examples |
 |------|----------|---------|
-| 1 | Free | Zen free pool, open-weights free endpoints |
-| 2 | Expiring allowances | JetBrains AI Pro credits, Google AI Pro weekly AGY allowance |
-| 3 | Flat-rate subscriptions | Claude Code Pro, Codex, Cursor auto pool |
-| 4 | Metered pay-as-you-go | OpenRouter wallet, Gemini API Tier 1 |
+| 1 | Generous flat-rate | Claude haiku, Codex `gpt-5.6-luna`, Cursor grok/composer, AGY gemini |
+| 2 | Limited flat-rate | Codex gpt < 5.5, Cursor other-models, AGY claude/gpt |
+| 3 | Metered, monthly-refilling | Gemini API credit, JetBrains AI Pro (Junie) |
+| 4 | Metered, out of pocket | OpenRouter wallet, DeepSeek wallet |
+| 0 | Free | Zen free pool, OpenRouter `:free` endpoints |
+
+Consumption order is 1 > 2 > 3 > 4 > 0. The order and the per-pool preferences
+are recorded in the map itself as `invariants.tierPolicy` (consumption order,
+pool and model tiers, per-pool model reservations, per-pool active-seat caps,
+seats a pool must not carry, preferred head pool per seat, and seat/pool pairs
+observed to misbehave). The validators read that block and print **advisory
+warnings** — `TIER`, `ORDER`, `MODEL`, `SEAT`, `AVOID`, `HEAD`, `POOL` — that
+never change the exit code: the operator may run any model on any seat, and the
+map's job is to say when a choice crosses a stated preference, not to refuse
+it. A map without `tierPolicy` yields no warnings.
 
 The `evidence` field records probe status: `measured` (passed the ACCEPT/REJECT
 trap probe), `cleared` (passed a lighter bar), `probed` (took the probe but
@@ -143,9 +159,12 @@ The log is untracked and machine-local.
 
 Each seat's floor rung (`role: "floor"`, last in array order) is the
 lowest-tier model that has passed that seat's
-evidence bar (`measured` or `cleared`). This is a structural property of the data
-today — the floor rung always has the lowest tier value in each seat — but
-**runtime floor anchoring** (logic that automatically re-selects the floor
+evidence bar (`measured` or `cleared`). Under the original 1–4 numbering this
+was a structural property of the data — the floor rung always had the lowest
+tier value in each seat. Under the 2026-09-16 consumption order it is not: Zen
+(tier 0) is last in the order and never a floor, so "cheapest" now means "last
+in `consumptionOrder`", and the `ORDER` warning reports rungs read out of that
+order. **Runtime floor anchoring** (logic that automatically re-selects the floor
 after a swap or pool change) is deferred. The tier field makes it mechanically
 checkable; the logic belongs in a follow-up.
 

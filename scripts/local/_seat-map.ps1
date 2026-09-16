@@ -211,7 +211,7 @@ function Get-SeatMapViolations {
 
     $knownHosts = @('claude', 'cursor', 'agy', 'junie', 'gemini', 'opencode', 'codex')
     $validEvidence = @('measured', 'cleared', 'probed', 'unmeasured')
-    $validPools = @('CLAUDE', 'CODEX', 'CURSOR', 'AGY-G', 'AGY-C', 'JETBRAINS', 'GEMINI', 'OPENROUTER', 'ZEN')
+    $validPools = @('CLAUDE', 'CODEX', 'CURSOR', 'AGY-G', 'AGY-C', 'JETBRAINS', 'GEMINI', 'OPENROUTER', 'DEEPSEEK', 'ZEN')
     $validCostSources = @('actual', 'estimated', 'unknown')
     $validRoles = @('head', 'floor')
 
@@ -395,8 +395,8 @@ function Get-SeatMapViolations {
                         $parsed = [int]::TryParse([string]$tierRaw, [ref]$tierNum)
                         if (-not $parsed) { $tierNum = 0 }
                     }
-                    if ($tierNum -lt 1 -or $tierNum -gt 4) {
-                        $failures.Add("Seat '$codename' rung '$r' has invalid tier '$tierRaw' (expected 1-4).")
+                    if ($tierNum -lt 0 -or $tierNum -gt 4) {
+                        $failures.Add("Seat '$codename' rung '$r' has invalid tier '$tierRaw' (expected 0-4).")
                     }
                 }
             }
@@ -482,6 +482,171 @@ function Get-SeatMapViolations {
     }
 
     return @($failures)
+}
+
+function Get-SeatMapExpectedTier {
+    <#
+    Resolves the tier the map's own tierPolicy expects for a rung: the first
+    modelTiers entry whose pool matches and whose modelPattern matches the model
+    wins; otherwise poolTiers[pool]; otherwise $null (policy is silent).
+    #>
+    param($Policy, [string]$Pool, [string]$Model)
+    if ($null -eq $Policy) { return $null }
+    if (Test-JsonProperty -Object $Policy -Name 'modelTiers') {
+        foreach ($mt in @($Policy.modelTiers)) {
+            if ($null -eq $mt) { continue }
+            $mtPool = if (Test-JsonProperty -Object $mt -Name 'pool') { [string]$mt.pool } else { '' }
+            $mtPattern = if (Test-JsonProperty -Object $mt -Name 'modelPattern') { [string]$mt.modelPattern } else { '' }
+            if ($mtPool -ne $Pool -or [string]::IsNullOrWhiteSpace($mtPattern)) { continue }
+            if ($Model -match $mtPattern) { return [int]$mt.tier }
+        }
+    }
+    if ((Test-JsonProperty -Object $Policy -Name 'poolTiers') -and (Test-JsonProperty -Object $Policy.poolTiers -Name $Pool)) {
+        return [int]$Policy.poolTiers.$Pool
+    }
+    return $null
+}
+
+function Get-SeatMapWarnings {
+    <#
+    Advisory checks driven by invariants.tierPolicy. Every finding here is a
+    warning: the operator may run any model on any seat, and the map must say
+    when a choice crosses a stated preference, not refuse it. A map without a
+    tierPolicy block produces no warnings. Nothing here changes the exit code.
+    #>
+    param(
+        [Parameter(Mandatory = $true)]
+        $Map
+    )
+
+    $warnings = [System.Collections.Generic.List[string]]::new()
+    if (-not (Test-JsonProperty -Object $Map -Name 'invariants')) { return @() }
+    if (-not (Test-JsonProperty -Object $Map.invariants -Name 'tierPolicy')) { return @() }
+    $policy = $Map.invariants.tierPolicy
+    if ($null -eq $policy) { return @() }
+
+    $order = @()
+    if (Test-JsonProperty -Object $policy -Name 'consumptionOrder') { $order = @($policy.consumptionOrder | ForEach-Object { [int]$_ }) }
+    $rank = @{}
+    for ($i = 0; $i -lt $order.Count; $i++) { $rank[$order[$i]] = $i }
+    $orderText = $order -join ' > '
+
+    $seats = @()
+    if (Test-JsonProperty -Object $Map -Name 'seats') { $seats = @($Map.seats) }
+
+    $activeByPool = @{}
+    foreach ($seat in $seats) {
+        $codename = if (Test-JsonProperty -Object $seat -Name 'codename') { [string]$seat.codename } else { '' }
+        $seatId = if (Test-JsonProperty -Object $seat -Name 'id') { [string]$seat.id } else { '' }
+        $label = if (-not [string]::IsNullOrWhiteSpace($codename)) { $codename } elseif (-not [string]::IsNullOrWhiteSpace($seatId)) { $seatId } else { '?' }
+        $list = Get-SeatMapRungList -Seat $seat
+        if ($null -eq $list -or $list.Count -eq 0) { continue }
+
+        $activeName = if (Test-JsonProperty -Object $seat -Name 'activeRung') { [string]$seat.activeRung } else { '' }
+        $prevRank = $null
+        $prevName = ''
+        $prevTier = $null
+        foreach ($cell in $list) {
+            if ($null -eq $cell) { continue }
+            $r = if (Test-JsonProperty -Object $cell -Name 'name') { [string]$cell.name } else { '?' }
+            $pool = if (Test-JsonProperty -Object $cell -Name 'pool') { [string]$cell.pool } else { '' }
+            $model = if (Test-JsonProperty -Object $cell -Name 'model') { [string]$cell.model } else { '' }
+            $tier = $null
+            if ((Test-JsonProperty -Object $cell -Name 'tier') -and $null -ne $cell.tier -and [string]$cell.tier -ne '') {
+                $parsedTier = 0
+                if ([int]::TryParse([string]$cell.tier, [ref]$parsedTier)) { $tier = $parsedTier }
+            }
+
+            # tier-mismatch: the rung claims a tier the policy does not give that pool/model
+            $expected = Get-SeatMapExpectedTier -Policy $policy -Pool $pool -Model $model
+            if ($null -ne $expected -and $null -ne $tier -and $expected -ne $tier) {
+                $warnings.Add("TIER  Seat '$label' rung '$r' declares tier $tier but tierPolicy puts $pool/$model at tier $expected.")
+            }
+
+            # chain-order: rungs should be read in consumption order (best first)
+            $effective = if ($null -ne $tier) { $tier } else { $expected }
+            if ($null -ne $effective -and $rank.ContainsKey($effective)) {
+                $thisRank = $rank[$effective]
+                if ($null -ne $prevRank -and $thisRank -lt $prevRank) {
+                    $warnings.Add("ORDER Seat '$label' rung '$r' (tier $effective) sits below rung '$prevName' (tier $prevTier); consumption order is $orderText.")
+                }
+                $prevRank = $thisRank; $prevName = $r; $prevTier = $effective
+            }
+
+            # pool-model-preference: a pool the operator reserved for specific models
+            if ((Test-JsonProperty -Object $policy -Name 'poolModelPreference') -and (Test-JsonProperty -Object $policy.poolModelPreference -Name $pool)) {
+                $allowed = @($policy.poolModelPreference.$pool)
+                $hit = $false
+                foreach ($a in $allowed) { if ($model -like "*$a*") { $hit = $true; break } }
+                if (-not $hit) {
+                    $warnings.Add("MODEL Seat '$label' rung '$r' runs '$model' on $pool; the operator reserves $pool for: $($allowed -join ', ').")
+                }
+            }
+
+            # pool-disallowed-seats: e.g. Zen never carries Rigger
+            if ((Test-JsonProperty -Object $policy -Name 'poolDisallowedSeats') -and (Test-JsonProperty -Object $policy.poolDisallowedSeats -Name $pool)) {
+                $banned = @($policy.poolDisallowedSeats.$pool)
+                if ($banned -contains $seatId -or $banned -contains $codename) {
+                    $warnings.Add("SEAT  Seat '$label' rung '$r' is on $pool, which the operator keeps off this seat.")
+                }
+            }
+
+            # seat-pool-avoid: a pool observed to misbehave on this seat
+            if (Test-JsonProperty -Object $policy -Name 'seatPoolAvoid') {
+                foreach ($av in @($policy.seatPoolAvoid)) {
+                    if ($null -eq $av) { continue }
+                    $avSeat = if (Test-JsonProperty -Object $av -Name 'seat') { [string]$av.seat } else { '' }
+                    $avPool = if (Test-JsonProperty -Object $av -Name 'pool') { [string]$av.pool } else { '' }
+                    $avReason = if (Test-JsonProperty -Object $av -Name 'reason') { [string]$av.reason } else { 'no reason recorded' }
+                    if ($avPool -eq $pool -and ($avSeat -eq $seatId -or $avSeat -eq $codename)) {
+                        $warnings.Add("AVOID Seat '$label' rung '$r' is on ${pool}: $avReason")
+                    }
+                }
+            }
+
+            if ($r -eq $activeName -and -not [string]::IsNullOrWhiteSpace($pool)) {
+                if (-not $activeByPool.ContainsKey($pool)) { $activeByPool[$pool] = [System.Collections.Generic.List[string]]::new() }
+                $activeByPool[$pool].Add($label)
+            }
+        }
+
+        # seat-head-pool-preference: which pool the operator wants at the head of this seat
+        if (Test-JsonProperty -Object $policy -Name 'seatHeadPoolPreference') {
+            $prefKey = $null
+            if (Test-JsonProperty -Object $policy.seatHeadPoolPreference -Name $seatId) { $prefKey = $seatId }
+            elseif (Test-JsonProperty -Object $policy.seatHeadPoolPreference -Name $codename) { $prefKey = $codename }
+            if ($prefKey) {
+                $preferred = @($policy.seatHeadPoolPreference.$prefKey)
+                $headCell = Get-SeatMapRungByRole -Seat $seat -Role 'head'
+                $headPool = if ($null -ne $headCell -and (Test-JsonProperty -Object $headCell -Name 'pool')) { [string]$headCell.pool } else { '' }
+                if ($preferred -notcontains $headPool) {
+                    $warnings.Add("HEAD  Seat '$label' head is on $headPool; the operator prefers $($preferred -join ' or ') for this seat.")
+                }
+            }
+        }
+    }
+
+    # max-active-seats-per-pool: e.g. one Zen seat at a time, Codex = Conductor + one verifier
+    if (Test-JsonProperty -Object $policy -Name 'maxActiveSeatsPerPool') {
+        foreach ($p in $policy.maxActiveSeatsPerPool.PSObject.Properties) {
+            $limit = [int]$p.Value
+            [object[]]$on = @()
+            if ($activeByPool.ContainsKey($p.Name)) { $on = @($activeByPool[$p.Name]) }
+            if ($on.Count -gt $limit) {
+                $warnings.Add("POOL  $($p.Name) is the active rung on $($on.Count) seats ($($on -join ', ')); the operator caps it at $limit.")
+            }
+        }
+    }
+
+    return @($warnings)
+}
+
+function Write-SeatMapWarnings {
+    param([object[]]$Warnings)
+    $list = @($Warnings)
+    if ($list.Count -eq 0) { return }
+    Write-Host "=== Tier policy warnings ($($list.Count)) - advisory only, the map still validates ===" -ForegroundColor Yellow
+    foreach ($w in $list) { Write-Warning ([string]$w) }
 }
 
 function Resolve-MaestriWorkspaceId {
