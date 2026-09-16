@@ -99,7 +99,12 @@ translating before you run it here:
 | `./scripts/hooks/` | `./hooks/` |
 
 `./scripts/local/` is the exception: it is genuinely repo-local tooling for the
-harness itself and is not installed anywhere.
+harness itself and is not installed anywhere. Seat-map sync and workspace drift
+checks are among that tooling — including `Sync-SeatMap.ps1 -Verify`. The
+operator contract (head-rung comparison, redacted output, workspace-level
+fatals vs seat-level collection, CI fixture proof vs optional real
+`~/.maestri` proof) lives in root [CLAUDE.md](CLAUDE.md) under **Which host and
+model to run a command on**; read it there rather than duplicating it here.
 
 ## Limitations under Codex
 

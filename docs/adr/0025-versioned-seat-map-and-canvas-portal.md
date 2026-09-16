@@ -128,6 +128,23 @@ They cannot be CI-proved. The synchronizer writes them at runtime; CI proves
 only that the example seat map itself is valid and that `-Validate` enforces the
 invariants.
 
+`-Verify` is a read-only drift check (DEV-237). It validates the seat map
+first, then compares each seat's **head-rung** launch to the terminal command
+in `workspace.json` for the same `roleId`/`assignedRoleId`. It does not use
+`activeRung` or runtime-floor substitution. Any failure exits 1. Workspace-level
+fatals — unresolved workspace, missing or unreadable `workspace.json`,
+malformed workspace payload, or zero parsed terminal records — stop before seat
+comparison. Seat-level findings — drift, missing or duplicate terminal per
+seat — are collected in `seatMap.seats` order, reported together, then one
+final exit. Output is redacted (codename, roleId, hashes only). `-All`
+runs the existing sync phases first, then verify; on verify failure it prints
+`Sync phases completed before verify failure; workspace drift remains.` and
+exits 1 without rollback. CI proves failure and success behavior through
+`Test-SeatMapLive.ps1` with an isolated HOME fixture against
+`seat-map.example.json`; a green fixture proves the repository contract, not
+the operator's live workspace. Real `~/.maestri` verification is optional
+machine-local operator proof, not a merge-bar item.
+
 The swap log at `~/.maestri/seat-map-swaps.jsonl` is per-workspace-keyed history
 (`workspaceId` on each entry). git history retains all prior values of scripts/local/seat-map.json; history rewriting is out of scope for DEV-239.
 
@@ -271,9 +288,6 @@ PR body.
 - **Pre-flight validations** — Junie `effortPerModel` existence check, OpenCode
   global reasoning-effort collision warning, Cursor `cli-config.json` collision
   detection.
-- **Workspace verification** — `Sync-SeatMap.ps1 -Verify` drift check against
-  `workspace.json`. Included as a switch in the shipped script but not in the
-  merge bar (machine-local state).
 - **Probe-evidence re-anchor (DEV-244)** — broader than target-swap runtime
   floor anchoring: re-anchor from probe evidence across seats, candidate-pool
   expansion, and schema/evidence changes. Out of scope for DEV-234.
