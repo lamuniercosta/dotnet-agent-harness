@@ -278,11 +278,15 @@ function New-ServerStartProcessLines {
     param(
         [Parameter(Mandatory)][string]$ArgumentListLiteral,
         [Parameter(Mandatory)][string]$RedirectLiteral,
-        [string]$EnvironmentLiteral
+        [string]$EnvironmentLiteral,
+        [string]$RedirectErrorLiteral
     )
     $lines = @(
         "`$startParams = @{ FilePath = 'pwsh'; ArgumentList = $ArgumentListLiteral; PassThru = `$true; RedirectStandardOutput = $RedirectLiteral }"
     )
+    if (-not [string]::IsNullOrWhiteSpace($RedirectErrorLiteral)) {
+        $lines += "`$startParams['RedirectStandardError'] = $RedirectErrorLiteral"
+    }
     if (-not [string]::IsNullOrWhiteSpace($EnvironmentLiteral)) {
         $lines += "`$startParams['Environment'] = $EnvironmentLiteral"
     }
@@ -324,7 +328,9 @@ function New-Dev246PortalLiveChildLines {
         [Parameter(Mandatory)][string]$LogName,
         [bool]$RequireFakeExists,
         [bool]$ExpectLiveSwapped,
-        [bool]$ExpectSentinel
+        [bool]$ExpectSentinel,
+        [string]$ExpectSwapDetailExact,
+        [string]$ExpectSwapDetailPrefix
     )
     $liveExpect = if ($ExpectLiveSwapped) { '$true' } else { '$false' }
     $existsAssert = if ($RequireFakeExists) {
@@ -339,11 +345,30 @@ function New-Dev246PortalLiveChildLines {
     } else {
         @()
     }
+    $stderrLogName = $LogName -replace '\.log$', '.stderr.log'
+    $swapAssert = @()
+    if (-not [string]::IsNullOrEmpty($ExpectSwapDetailExact) -or -not [string]::IsNullOrEmpty($ExpectSwapDetailPrefix)) {
+        $swapAssert += @(
+            "`$swapPath = Join-Path `$env:HOME '.maestri' 'seat-map-swaps.jsonl'"
+            "if (-not (Test-Path -LiteralPath `$swapPath)) { throw 'DEV-246 swap log missing' }"
+            "`$swapEntries = @(Get-Content -LiteralPath `$swapPath | Where-Object { `$_ } | ForEach-Object { `$_ | ConvertFrom-Json } | Where-Object { `$_.workspaceId -eq '$WorkspaceIdLiteral' })"
+            "if (`$swapEntries.Count -eq 0) { throw 'no DEV-246 swap entry' }"
+            "`$swapDetail = [string]`$swapEntries[-1].detail"
+        )
+        if (-not [string]::IsNullOrEmpty($ExpectSwapDetailExact)) {
+            $exactLiteral = $ExpectSwapDetailExact.Replace("'", "''")
+            $swapAssert += "if (`$swapDetail -ne '$exactLiteral') { throw ""swap detail expected '$exactLiteral' got `$swapDetail"" }"
+        }
+        if (-not [string]::IsNullOrEmpty($ExpectSwapDetailPrefix)) {
+            $prefixLiteral = $ExpectSwapDetailPrefix.Replace("'", "''")
+            $swapAssert += "if (-not `$swapDetail.StartsWith('$prefixLiteral')) { throw ""swap detail prefix expected '$prefixLiteral' got `$swapDetail"" }"
+        }
+    }
     $lines = @(
         $existsAssert
         "`$serverEnv = @{ HOME = `$env:HOME; USERPROFILE = `$env:USERPROFILE; MAESTRI_PIPE = '1'; MAESTRI_CLI = '$FakeCliLiteral' }"
     ) + @(
-        New-ServerStartProcessLines -ArgumentListLiteral "@('-NoProfile', '-File', '$ServerScriptLiteral', '-Port', '$Port', '-SeatMapPath', '$MapPathLiteral', '-WorkspaceId', '$WorkspaceIdLiteral')" -RedirectLiteral "(Join-Path '$IsoHomeLiteral' '$LogName')" -EnvironmentLiteral '$serverEnv'
+        New-ServerStartProcessLines -ArgumentListLiteral "@('-NoProfile', '-File', '$ServerScriptLiteral', '-Port', '$Port', '-SeatMapPath', '$MapPathLiteral', '-WorkspaceId', '$WorkspaceIdLiteral')" -RedirectLiteral "(Join-Path '$IsoHomeLiteral' '$LogName')" -RedirectErrorLiteral "(Join-Path '$IsoHomeLiteral' '$stderrLogName')" -EnvironmentLiteral '$serverEnv'
     ) + @(
         "for (`$ready = 0; `$ready -lt 50; `$ready++) {"
         "    try {"
@@ -382,8 +407,10 @@ function New-Dev246PortalLiveChildLines {
         "    if (`$null -ne `$postJson.PSObject.Properties['detail']) { `$errText += [string]`$postJson.detail }"
         "    `$logPath = Join-Path '$IsoHomeLiteral' '$LogName'"
         "    if (Test-Path -LiteralPath `$logPath) { `$errText += [System.IO.File]::ReadAllText(`$logPath) }"
+        "    `$errLogPath = Join-Path '$IsoHomeLiteral' '$stderrLogName'"
+        "    if (Test-Path -LiteralPath `$errLogPath) { `$errText += [System.IO.File]::ReadAllText(`$errLogPath) }"
         "    if (`$errText.Contains(""The property 'success' cannot be found"")) { throw 'missing-success-property handler error' }"
-    ) + $sentinelAssert + @(
+    ) + $swapAssert + $sentinelAssert + @(
         "} finally {"
         "    if (`$null -ne `$serverProc) { Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue }"
         "}"
@@ -1079,31 +1106,37 @@ try {
 
     $dev246Cases = @(
         [pscustomobject]@{
-            Name               = 'F1-ok'
-            Port               = '8794'
-            CreateFake         = $true
-            FakeExitCode       = 0
-            RequireFakeExists  = $true
-            ExpectLiveSwapped  = $true
-            ExpectSentinel     = $true
+            Name                    = 'F1-ok'
+            Port                    = '8794'
+            CreateFake              = $true
+            FakeExitCode            = 0
+            RequireFakeExists       = $true
+            ExpectLiveSwapped       = $true
+            ExpectSentinel          = $true
+            ExpectSwapDetailExact   = ''
+            ExpectSwapDetailPrefix  = ''
         }
         [pscustomobject]@{
-            Name               = 'F3-exit1'
-            Port               = '8795'
-            CreateFake         = $true
-            FakeExitCode       = 1
-            RequireFakeExists  = $true
-            ExpectLiveSwapped  = $false
-            ExpectSentinel     = $false
+            Name                    = 'F3-exit1'
+            Port                    = '8795'
+            CreateFake              = $true
+            FakeExitCode            = 1
+            RequireFakeExists       = $true
+            ExpectLiveSwapped       = $false
+            ExpectSentinel          = $false
+            ExpectSwapDetailExact   = 'recruit exit 1'
+            ExpectSwapDetailPrefix  = ''
         }
         [pscustomobject]@{
-            Name               = 'F3-missing'
-            Port               = '8796'
-            CreateFake         = $false
-            FakeExitCode       = 1
-            RequireFakeExists  = $false
-            ExpectLiveSwapped  = $false
-            ExpectSentinel     = $false
+            Name                    = 'F3-missing'
+            Port                    = '8796'
+            CreateFake              = $false
+            FakeExitCode            = 1
+            RequireFakeExists       = $false
+            ExpectLiveSwapped       = $false
+            ExpectSentinel          = $false
+            ExpectSwapDetailExact   = ''
+            ExpectSwapDetailPrefix  = 'recruit failed:'
         }
     )
     foreach ($dev246Case in $dev246Cases) {
@@ -1132,7 +1165,9 @@ try {
             -LogName ('server-dev246-' + $dev246Case.Name + '.log') `
             -RequireFakeExists $dev246Case.RequireFakeExists `
             -ExpectLiveSwapped $dev246Case.ExpectLiveSwapped `
-            -ExpectSentinel $dev246Case.ExpectSentinel
+            -ExpectSentinel $dev246Case.ExpectSentinel `
+            -ExpectSwapDetailExact $dev246Case.ExpectSwapDetailExact `
+            -ExpectSwapDetailPrefix $dev246Case.ExpectSwapDetailPrefix
         [System.IO.File]::WriteAllText($dev246Child, (($dev246ChildLines -join [Environment]::NewLine) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
         $dev246Res = Invoke-IsolatedPwsh -HomeDir $isoHome -File $dev246Child
         Assert-True ("DEV-246 $($dev246Case.Name): isolated POST exit 0") ($dev246Res.ExitCode -eq 0) '0' ("exit=$($dev246Res.ExitCode)`n$($dev246Res.StdOut)`n$($dev246Res.StdErr)")
