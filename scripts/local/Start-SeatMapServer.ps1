@@ -205,8 +205,13 @@ function Invoke-SeatMapSyncChild {
     $stdoutTask = $p.StandardOutput.ReadToEndAsync()
     $stderrTask = $p.StandardError.ReadToEndAsync()
     if (-not $p.WaitForExit(120000)) {
+        $reapId = $p.Id
         try { $p.Kill($true) } catch { }
         [void]$p.WaitForExit(5000)
+        if (-not $p.HasExited) {
+            Stop-Process -Id $reapId -Force -ErrorAction SilentlyContinue
+            [void]$p.WaitForExit(2000)
+        }
     }
     # Parameterless WaitForExit latches ExitCode after redirected IO (Unix race:
     # the timeout overload can return true with ExitCode still 0).
