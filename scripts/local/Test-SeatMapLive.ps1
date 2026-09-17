@@ -468,7 +468,7 @@ try {
     $quoteMapPathLiteral = $quoteMapPath.Replace("'", "''")
     $serverScriptLiteral = $serverScript.Replace("'", "''")
     $portalQuoteScriptBody = @(
-        "`$serverProc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8792', '-SeatMapPath', '$quoteMapPathLiteral' -PassThru -RedirectStandardOutput (Join-Path '$isoHome' 'server-quote.log')"
+        "`$serverProc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8792', '-SeatMapPath', '$quoteMapPathLiteral' -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path '$isoHome' 'server-quote.log')"
         "Start-Sleep -Seconds 2"
         "try {"
         "    `$resp = Invoke-WebRequest -Uri 'http://localhost:8792/' -UseBasicParsing"
@@ -511,7 +511,7 @@ try {
     $serverScriptLiteral = $serverScript.Replace("'", "''")
     $portalScriptBody = @(
         "`$serverEnv = @{ HOME = `$env:HOME; USERPROFILE = `$env:USERPROFILE }"
-        "`$serverProc = Start-Process pwsh -ArgumentList @('-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8789', '-SeatMapPath', '$livePathLiteral', '-WorkspaceId', '$b3WsIdLiteral') -PassThru -Environment `$serverEnv -RedirectStandardOutput (Join-Path '$isoHome' 'server.log')"
+        "`$serverProc = Start-Process pwsh -ArgumentList @('-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8789', '-SeatMapPath', '$livePathLiteral', '-WorkspaceId', '$b3WsIdLiteral') -WindowStyle Hidden -PassThru -Environment `$serverEnv -RedirectStandardOutput (Join-Path '$isoHome' 'server.log')"
         "for (`$ready = 0; `$ready -lt 50; `$ready++) {"
         "    try {"
         "        `$probe = Invoke-WebRequest -Uri 'http://localhost:8789/' -UseBasicParsing -TimeoutSec 2"
@@ -586,7 +586,7 @@ try {
     $tw1MapPathLiteral = $tw1MapPath.Replace("'", "''")
     $tw1PortalFailScript = Join-Path $isoHome 'test-portal-fail.ps1'
     $tw1PortalFailBody = @(
-        "`$serverProc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8793', '-SeatMapPath', '$tw1MapPathLiteral' -PassThru -RedirectStandardOutput (Join-Path '$isoHome' 'server-tw1.log')"
+        "`$serverProc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8793', '-SeatMapPath', '$tw1MapPathLiteral' -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path '$isoHome' 'server-tw1.log')"
         "Start-Sleep -Seconds 2"
         "try {"
         "    `$resp = Invoke-WebRequest -Uri 'http://localhost:8793/' -UseBasicParsing"
