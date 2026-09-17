@@ -468,7 +468,11 @@ try {
     $quoteMapPathLiteral = $quoteMapPath.Replace("'", "''")
     $serverScriptLiteral = $serverScript.Replace("'", "''")
     $portalQuoteScriptBody = @(
-        "`$serverProc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8792', '-SeatMapPath', '$quoteMapPathLiteral' -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path '$isoHome' 'server-quote.log')"
+        "`$serverArgs = @('-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8792', '-SeatMapPath', '$quoteMapPathLiteral')"
+        "`$startParams = @{ FilePath = 'pwsh'; ArgumentList = `$serverArgs; PassThru = `$true; RedirectStandardOutput = (Join-Path '$isoHome' 'server-quote.log') }"
+        "if (`$IsWindows) { `$startParams.WindowStyle = 'Hidden' }"
+        "`$serverProc = Start-Process @startParams"
+        "if (`$null -eq `$serverProc) { throw 'seat-map server failed to start' }"
         "Start-Sleep -Seconds 2"
         "try {"
         "    `$resp = Invoke-WebRequest -Uri 'http://localhost:8792/' -UseBasicParsing"
@@ -485,7 +489,7 @@ try {
         "    `$expected = [System.IO.File]::ReadAllText((Join-Path '$isoHome' 'expected-recruit.txt'))"
         "    if (`$postJson.recruitCommand -ne `$expected) { throw ""recruitCommand mismatch: got `$(`$postJson.recruitCommand)"" }"
         "} finally {"
-        "    Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue"
+        "    if (`$null -ne `$serverProc) { Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue }"
         "}"
     ) -join [Environment]::NewLine
     [System.IO.File]::WriteAllText($portalQuoteScript, $portalQuoteScriptBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
@@ -511,7 +515,11 @@ try {
     $serverScriptLiteral = $serverScript.Replace("'", "''")
     $portalScriptBody = @(
         "`$serverEnv = @{ HOME = `$env:HOME; USERPROFILE = `$env:USERPROFILE }"
-        "`$serverProc = Start-Process pwsh -ArgumentList @('-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8789', '-SeatMapPath', '$livePathLiteral', '-WorkspaceId', '$b3WsIdLiteral') -WindowStyle Hidden -PassThru -Environment `$serverEnv -RedirectStandardOutput (Join-Path '$isoHome' 'server.log')"
+        "`$serverArgs = @('-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8789', '-SeatMapPath', '$livePathLiteral', '-WorkspaceId', '$b3WsIdLiteral')"
+        "`$startParams = @{ FilePath = 'pwsh'; ArgumentList = `$serverArgs; PassThru = `$true; Environment = `$serverEnv; RedirectStandardOutput = (Join-Path '$isoHome' 'server.log') }"
+        "if (`$IsWindows) { `$startParams.WindowStyle = 'Hidden' }"
+        "`$serverProc = Start-Process @startParams"
+        "if (`$null -eq `$serverProc) { throw 'seat-map server failed to start' }"
         "for (`$ready = 0; `$ready -lt 50; `$ready++) {"
         "    try {"
         "        `$probe = Invoke-WebRequest -Uri 'http://localhost:8789/' -UseBasicParsing -TimeoutSec 2"
@@ -536,7 +544,7 @@ try {
         "    `$postJson = `$postResp.Content | ConvertFrom-Json"
         "    if (-not `$postJson.success) { throw 'POST success=false' }"
         "} finally {"
-        "    Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue"
+        "    if (`$null -ne `$serverProc) { Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue }"
         "}"
     ) -join [Environment]::NewLine
     [System.IO.File]::WriteAllText($portalScript, $portalScriptBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
@@ -586,7 +594,11 @@ try {
     $tw1MapPathLiteral = $tw1MapPath.Replace("'", "''")
     $tw1PortalFailScript = Join-Path $isoHome 'test-portal-fail.ps1'
     $tw1PortalFailBody = @(
-        "`$serverProc = Start-Process pwsh -ArgumentList '-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8793', '-SeatMapPath', '$tw1MapPathLiteral' -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path '$isoHome' 'server-tw1.log')"
+        "`$serverArgs = @('-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8793', '-SeatMapPath', '$tw1MapPathLiteral')"
+        "`$startParams = @{ FilePath = 'pwsh'; ArgumentList = `$serverArgs; PassThru = `$true; RedirectStandardOutput = (Join-Path '$isoHome' 'server-tw1.log') }"
+        "if (`$IsWindows) { `$startParams.WindowStyle = 'Hidden' }"
+        "`$serverProc = Start-Process @startParams"
+        "if (`$null -eq `$serverProc) { throw 'seat-map server failed to start' }"
         "Start-Sleep -Seconds 2"
         "try {"
         "    `$resp = Invoke-WebRequest -Uri 'http://localhost:8793/' -UseBasicParsing"
@@ -599,7 +611,7 @@ try {
         "    if (`$postResp.StatusCode -eq 200) { throw 'POST should fail' }"
         "    if (-not `$postResp.Content.Contains('Seat ''Anvil'' has no capable runtime floor')) { throw 'missing capable-floor error' }"
         "} finally {"
-        "    Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue"
+        "    if (`$null -ne `$serverProc) { Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue }"
         "}"
     ) -join [Environment]::NewLine
     [System.IO.File]::WriteAllText($tw1PortalFailScript, $tw1PortalFailBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
