@@ -98,24 +98,37 @@ function Invoke-IsolatedPwsh {
     $psi.Environment['MAESTRI_PIPE'] = ''
 
     $p = [System.Diagnostics.Process]::Start($psi)
+    $childId = $p.Id
     $stdoutTask = $p.StandardOutput.ReadToEndAsync()
     $stderrTask = $p.StandardError.ReadToEndAsync()
     if (-not $p.WaitForExit($TimeoutMs)) {
         try { $p.Kill($true) } catch { }
         [void]$p.WaitForExit(5000)
+        if (-not $p.HasExited) {
+            Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue
+            [void]$p.WaitForExit(2000)
+        }
         return [pscustomobject]@{
-            ExitCode = 124
-            StdOut   = $stdoutTask.GetAwaiter().GetResult()
-            StdErr   = $stderrTask.GetAwaiter().GetResult()
-            TimedOut = $true
+            ExitCode  = 124
+            StdOut    = $stdoutTask.GetAwaiter().GetResult()
+            StdErr    = $stderrTask.GetAwaiter().GetResult()
+            TimedOut  = $true
+            ProcessId = $childId
         }
     }
     return [pscustomobject]@{
-        ExitCode = $p.ExitCode
-        StdOut   = $stdoutTask.GetAwaiter().GetResult()
-        StdErr   = $stderrTask.GetAwaiter().GetResult()
-        TimedOut = $false
+        ExitCode  = $p.ExitCode
+        StdOut    = $stdoutTask.GetAwaiter().GetResult()
+        StdErr    = $stderrTask.GetAwaiter().GetResult()
+        TimedOut  = $false
+        ProcessId = $childId
     }
+}
+
+function Test-SeatMapProcessGone {
+    param([int]$ProcessId)
+    if ($ProcessId -le 0) { return $true }
+    return $null -eq (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
 }
 
 function New-WorkspaceDir {
@@ -295,6 +308,105 @@ function New-ServerStartProcessLines {
     $lines += "if (`$null -eq `$serverProc) { throw 'seat-map server failed to start' }"
     return $lines
 }
+
+function Get-SeatMapStartProcessWindowStyleValue {
+    param([bool]$WindowsHost)
+    if ($WindowsHost) { return 'Hidden' }
+    return $null
+}
+
+#region DEV247LaunchScan
+function Get-SeatMapLaunchScanLines {
+    param([Parameter(Mandatory)][string]$Path)
+    $inIgnore = $false
+    $n = 0
+    foreach ($line in [System.IO.File]::ReadAllLines($Path)) {
+        $n++
+        $trim = $line.Trim()
+        if ($trim -eq '#region DEV247LaunchScan') {
+            $inIgnore = $true
+            continue
+        }
+        if ($inIgnore -and $trim -eq '#endregion DEV247LaunchScan') {
+            $inIgnore = $false
+            continue
+        }
+        if ($inIgnore) { continue }
+        if ($trim.StartsWith('#')) { continue }
+        [pscustomobject]@{ Number = $n; Text = $line }
+    }
+}
+
+function Get-SeatMapLaunchNeighborhood {
+    param(
+        [object[]]$Lines,
+        [int]$Index,
+        [int]$Before = 0,
+        [int]$After = 0
+    )
+    $start = [Math]::Max(0, $Index - $Before)
+    $end = [Math]::Min($Lines.Count - 1, $Index + $After)
+    return ($Lines[$start..$end].Text -join "`n")
+}
+
+function Assert-SeatMapHiddenLaunchContracts {
+    $livePath = Join-Path $PSScriptRoot 'Test-SeatMapLive.ps1'
+    $serverPath = Join-Path $PSScriptRoot 'Start-SeatMapServer.ps1'
+    $syncPath = Join-Path $PSScriptRoot 'Sync-SeatMap.ps1'
+    $files = @(
+        [pscustomobject]@{ Path = $livePath; Name = 'Test-SeatMapLive.ps1'; MinPsi = 1; MinStart = 1 }
+        [pscustomobject]@{ Path = $serverPath; Name = 'Start-SeatMapServer.ps1'; MinPsi = 1; MinStart = 0 }
+        [pscustomobject]@{ Path = $syncPath; Name = 'Sync-SeatMap.ps1'; MinPsi = 0; MinStart = 0 }
+    )
+    foreach ($file in $files) {
+        $scanLines = @(Get-SeatMapLaunchScanLines -Path $file.Path)
+        $psiSites = @()
+        $startSites = @()
+        for ($i = 0; $i -lt $scanLines.Count; $i++) {
+            $text = $scanLines[$i].Text
+            if ($text -match 'ProcessStartInfo') {
+                $psiSites += $i
+            }
+            if ($text -match '\bStart-Process\b') {
+                $startSites += $i
+            }
+        }
+        Assert-True "DEV-247 $($file.Name): ProcessStartInfo site count" ($psiSites.Count -ge $file.MinPsi) ">= $($file.MinPsi)" ([string]$psiSites.Count)
+        Assert-True "DEV-247 $($file.Name): Start-Process site count" ($startSites.Count -ge $file.MinStart) ">= $($file.MinStart)" ([string]$startSites.Count)
+        foreach ($idx in $psiSites) {
+            $block = Get-SeatMapLaunchNeighborhood -Lines $scanLines -Index $idx -Before 0 -After 35
+            $lineNo = $scanLines[$idx].Number
+            Assert-True "DEV-247 $($file.Name):$lineNo ProcessStartInfo CreateNoWindow" ($block -match 'CreateNoWindow\s*=\s*\$true') '$true' $block
+            Assert-True "DEV-247 $($file.Name):$lineNo ProcessStartInfo UseShellExecute false" ($block -match 'UseShellExecute\s*=\s*\$false') '$false' $block
+            Assert-True "DEV-247 $($file.Name):$lineNo ProcessStartInfo redirected stdout" ($block -match 'RedirectStandardOutput\s*=\s*\$true') '$true' $block
+            Assert-True "DEV-247 $($file.Name):$lineNo ProcessStartInfo redirected stderr" ($block -match 'RedirectStandardError\s*=\s*\$true') '$true' $block
+            Assert-True "DEV-247 $($file.Name):$lineNo ProcessStartInfo has no WindowStyle proof" ($block -notmatch '\$psi\.WindowStyle') 'absent $psi.WindowStyle' $block
+        }
+        foreach ($idx in $startSites) {
+            $block = Get-SeatMapLaunchNeighborhood -Lines $scanLines -Index $idx -Before 15 -After 2
+            $lineNo = $scanLines[$idx].Number
+            $hasHidden = ($block -match "WindowStyle'\]\s*=\s*'Hidden'") -or ($block -match '-WindowStyle\s+Hidden')
+            Assert-True "DEV-247 $($file.Name):$lineNo Start-Process WindowStyle Hidden" $hasHidden "WindowStyle Hidden" $block
+            Assert-True "DEV-247 $($file.Name):$lineNo Start-Process `$IsWindows guard" ($block -match '\$IsWindows') '$IsWindows' $block
+            Assert-True "DEV-247 $($file.Name):$lineNo Start-Process has no NoNewWindow" ($block -notmatch 'NoNewWindow') 'absent NoNewWindow' $block
+        }
+        $joined = ($scanLines.Text -join "`n")
+        Assert-True "DEV-247 $($file.Name): no NoNewWindow in launch scan" ($joined -notmatch 'NoNewWindow') 'absent NoNewWindow' $joined
+    }
+
+    $sample = (New-ServerStartProcessLines -ArgumentListLiteral "'-NoProfile'" -RedirectLiteral "'out.log'") -join "`n"
+    Assert-True 'DEV-247 New-ServerStartProcessLines: Windows-guarded WindowStyle Hidden' (
+        (Test-TextContains $sample 'if ($IsWindows) { $startParams[''WindowStyle''] = ''Hidden'' }')
+    ) 'if ($IsWindows) { $startParams[''WindowStyle''] = ''Hidden'' }' $sample
+    Assert-True 'DEV-247 New-ServerStartProcessLines: no NoNewWindow' ($sample -notmatch 'NoNewWindow') 'absent NoNewWindow' $sample
+    Assert-True 'DEV-247 New-ServerStartProcessLines: Start-Process splat' ($sample -match 'Start-Process @startParams') 'Start-Process @startParams' $sample
+
+    $winStyle = Get-SeatMapStartProcessWindowStyleValue -WindowsHost $true
+    Assert-True 'DEV-247 WindowStyle value on Windows host' ($winStyle -eq 'Hidden') 'Hidden' ([string]$winStyle)
+    $nonWinStyle = Get-SeatMapStartProcessWindowStyleValue -WindowsHost $false
+    Assert-True 'DEV-247 WindowStyle value on non-Windows host' ($null -eq $nonWinStyle) 'null' ([string]$nonWinStyle)
+}
+#endregion DEV247LaunchScan
 
 function Write-FakeMaestriCli {
     param(
@@ -486,11 +598,59 @@ $dev234AnvilRoleDirExisted = $false
 
 Write-Host 'Test-SeatMapLive (isolated HOME)'
 
+Assert-SeatMapHiddenLaunchContracts
+
 try {
     New-Item -ItemType Directory -Path $isoHome -Force | Out-Null
     [void](Install-RoleFixtures -RepoRoot $repoRoot -ExamplePath $examplePath)
+    Assert-True 'DEV-247 role fixtures installed' (Test-Path -LiteralPath (Join-Path $repoRoot '.maestri' 'roles')) (Join-Path $repoRoot '.maestri' 'roles') 'missing'
 
     Assert-True 'example file exists' (Test-Path -LiteralPath $examplePath) $examplePath 'missing'
+
+    $dev247Dir = Join-Path $isoHome 'dev247-launch'
+    New-Item -ItemType Directory -Path $dev247Dir -Force | Out-Null
+    $dev247Echo = Join-Path $dev247Dir 'echo.ps1'
+    [System.IO.File]::WriteAllText($dev247Echo, @(
+        'Set-StrictMode -Version Latest'
+        "Write-Output 'DEV-247 echo stdout'"
+        "[Console]::Error.WriteLine('DEV-247 echo stderr')"
+        '[Console]::Out.Flush()'
+        '[Console]::Error.Flush()'
+        'exit 7'
+    ) -join [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $dev247EchoRes = Invoke-IsolatedPwsh -HomeDir $isoHome -File $dev247Echo
+    Assert-True 'DEV-247 echo: exit 7' ($dev247EchoRes.ExitCode -eq 7) '7' ([string]$dev247EchoRes.ExitCode)
+    Assert-True 'DEV-247 echo: not timed out' (-not $dev247EchoRes.TimedOut) 'TimedOut=false' ([string]$dev247EchoRes.TimedOut)
+    Assert-True 'DEV-247 echo: stdout captured' (Test-TextContains $dev247EchoRes.StdOut 'DEV-247 echo stdout') 'DEV-247 echo stdout' $dev247EchoRes.StdOut
+    Assert-True 'DEV-247 echo: stderr captured' (Test-TextContains $dev247EchoRes.StdErr 'DEV-247 echo stderr') 'DEV-247 echo stderr' $dev247EchoRes.StdErr
+    Assert-True 'DEV-247 echo: child not orphaned' (Test-SeatMapProcessGone -ProcessId $dev247EchoRes.ProcessId) 'gone' ([string]$dev247EchoRes.ProcessId)
+
+    $dev247PidFile = Join-Path $dev247Dir 'hang.pid'
+    $dev247PidLiteral = $dev247PidFile.Replace("'", "''")
+    $dev247Hang = Join-Path $dev247Dir 'hang.ps1'
+    [System.IO.File]::WriteAllText($dev247Hang, @(
+        'Set-StrictMode -Version Latest'
+        "Write-Output 'DEV-247 hang stdout'"
+        "[Console]::Error.WriteLine('DEV-247 hang stderr')"
+        '[Console]::Out.Flush()'
+        '[Console]::Error.Flush()'
+        "[System.IO.File]::WriteAllText('$dev247PidLiteral', `$PID)"
+        'Start-Sleep -Seconds 60'
+        'exit 0'
+    ) -join [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $dev247HangRes = Invoke-IsolatedPwsh -HomeDir $isoHome -File $dev247Hang -TimeoutMs 2500
+    Assert-True 'DEV-247 timeout: TimedOut' $dev247HangRes.TimedOut 'TimedOut=true' ([string]$dev247HangRes.TimedOut)
+    Assert-True 'DEV-247 timeout: exit 124' ($dev247HangRes.ExitCode -eq 124) '124' ([string]$dev247HangRes.ExitCode)
+    Assert-True 'DEV-247 timeout: stdout captured' (Test-TextContains $dev247HangRes.StdOut 'DEV-247 hang stdout') 'DEV-247 hang stdout' $dev247HangRes.StdOut
+    Assert-True 'DEV-247 timeout: stderr captured' (Test-TextContains $dev247HangRes.StdErr 'DEV-247 hang stderr') 'DEV-247 hang stderr' $dev247HangRes.StdErr
+    Assert-True 'DEV-247 timeout: pid file written' (Test-Path -LiteralPath $dev247PidFile) $dev247PidFile 'missing'
+    $dev247HangPid = 0
+    if (Test-Path -LiteralPath $dev247PidFile) {
+        $dev247HangPid = [int]([System.IO.File]::ReadAllText($dev247PidFile).Trim())
+    }
+    Assert-True 'DEV-247 timeout: hang pid recorded' ($dev247HangPid -gt 0) '>0' ([string]$dev247HangPid)
+    Assert-True 'DEV-247 timeout: isolated child not orphaned' (Test-SeatMapProcessGone -ProcessId $dev247HangRes.ProcessId) 'gone' ([string]$dev247HangRes.ProcessId)
+    Assert-True 'DEV-247 timeout: hang pid not orphaned' (Test-SeatMapProcessGone -ProcessId $dev247HangPid) 'gone' ([string]$dev247HangPid)
 
     $wsId = [guid]::NewGuid().ToString()
     $wsDir = New-WorkspaceDir -HomeDir $isoHome -WorkspaceId $wsId -RepoRootHint $repoRoot
