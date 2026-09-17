@@ -1,8 +1,9 @@
 # Shared seat-map helpers. Dot-sourced by Test-SeatMap, Sync-SeatMap,
 # Start-SeatMapServer, and Test-ModelProbe so charter invariants (including the
-# Quill ZEN-floor exception), advisory tier-policy warnings, and target-swap
-# runtime FLOOR selection cannot drift between the CI gate, the synchronizer,
-# the portal, and the probe writer.
+# Quill ZEN-floor exception), advisory tier-policy warnings, target-swap
+# runtime FLOOR selection, and the per-canonical-SeatMapPath process lock
+# cannot drift between the CI gate, the synchronizer, the portal, and the
+# probe writer.
 
 . (Join-Path $PSScriptRoot '_json-property.ps1')
 
@@ -866,6 +867,82 @@ function Get-SeatActiveLaunchCell {
     return $activeCell
 }
 
+function Get-SeatMapTargetSwapDecision {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Seat,
+        [Parameter(Mandatory = $true)]
+        [string]$RungName,
+        $RuntimeFloor
+    )
+    $rungCell = Get-SeatMapRungByName -Seat $Seat -Name $RungName
+    $useFloor = ($null -ne $RuntimeFloor -and [bool]$RuntimeFloor.Ok -and (Test-SeatMapRungIsFloorRole -Seat $Seat -RungName $RungName -Cell $rungCell))
+    $launch = ''
+    $pool = ''
+    if ($useFloor) {
+        $launch = [string]$RuntimeFloor.Launch
+        $pool = [string]$RuntimeFloor.Pool
+    }
+    else {
+        if ($null -ne $rungCell -and (Test-JsonProperty -Object $rungCell -Name 'launch')) { $launch = [string]$rungCell.launch }
+        if ($null -ne $rungCell -and (Test-JsonProperty -Object $rungCell -Name 'pool')) { $pool = [string]$rungCell.pool }
+    }
+    $previousRung = Get-SeatActiveRungName -Seat $Seat
+    $previousLaunch = ''
+    $previousPool = ''
+    $prevCell = Get-SeatMapRungByName -Seat $Seat -Name $previousRung
+    if ($null -ne $prevCell) {
+        if (Test-JsonProperty -Object $prevCell -Name 'launch') { $previousLaunch = [string]$prevCell.launch }
+        if (Test-JsonProperty -Object $prevCell -Name 'pool') { $previousPool = [string]$prevCell.pool }
+    }
+    $codeName = if (Test-JsonProperty -Object $Seat -Name 'codename') { [string]$Seat.codename } else { '' }
+    $preset = if (Test-JsonProperty -Object $Seat -Name 'preset') { [string]$Seat.preset } else { '' }
+    $seatId = if (Test-JsonProperty -Object $Seat -Name 'id') { [string]$Seat.id } else { '' }
+    return [pscustomobject]@{
+        SeatId             = $seatId
+        Codename           = $codeName
+        Preset             = $preset
+        ActiveRung         = $RungName
+        Launch             = $launch
+        Pool               = $pool
+        PreviousActiveRung = $previousRung
+        PreviousLaunch     = $previousLaunch
+        PreviousPool       = $previousPool
+    }
+}
+
+function Format-SeatMapLockedSwapLine {
+    param(
+        [Parameter(Mandatory = $true)]
+        $Decision
+    )
+    $payload = [ordered]@{
+        seat               = [string]$Decision.Codename
+        seatId             = [string]$Decision.SeatId
+        activeRung         = [string]$Decision.ActiveRung
+        launch             = [string]$Decision.Launch
+        pool               = [string]$Decision.Pool
+        previousActiveRung = [string]$Decision.PreviousActiveRung
+        previousLaunch     = [string]$Decision.PreviousLaunch
+        previousPool       = [string]$Decision.PreviousPool
+        preset             = [string]$Decision.Preset
+    } | ConvertTo-Json -Compress
+    return "[SEAT-MAP LOCKED-SWAP] $payload"
+}
+
+function Read-SeatMapLockedSwapReceipt {
+    param([string]$Text)
+    if ([string]::IsNullOrWhiteSpace($Text)) { return $null }
+    $prefix = '[SEAT-MAP LOCKED-SWAP] '
+    foreach ($line in ($Text -split "`r?`n")) {
+        $trim = [string]$line
+        if ($trim.StartsWith($prefix)) {
+            return ($trim.Substring($prefix.Length) | ConvertFrom-Json)
+        }
+    }
+    return $null
+}
+
 function Resolve-MaestriWorkspaceId {
     param(
         [string]$WorkspaceId,
@@ -1021,6 +1098,76 @@ function Write-SeatMapResolutionFailureMessage {
         $reason = $reason.Substring(0, $reason.Length - 1)
     }
     [Console]::Error.WriteLine("Seat map workspace could not be resolved: $reason. Pass -WorkspaceId or -SeatMapPath.")
+}
+
+# DEV-241: cross-process exclusive FileStream (FileShare.None) keyed to a
+# canonical target path. The OS releases the handle when the holder exits, so
+# there is no PID file, no stale-mtime reclaim, and no unreadable-lock denial.
+# A leftover sibling `.lock` file is only a token; the next opener succeeds.
+# Contention is fail-fast (IOException / sharing violation) rather than wait.
+function Get-ExclusiveFileLockPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPath
+    )
+    return [System.IO.Path]::GetFullPath($TargetPath) + '.lock'
+}
+
+function Enter-ExclusiveFileLock {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetPath,
+        [Parameter(Mandatory = $true)]
+        [string]$HeldMessage
+    )
+    $lockPath = Get-ExclusiveFileLockPath -TargetPath $TargetPath
+    $dir = [System.IO.Path]::GetDirectoryName($lockPath)
+    if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    try {
+        return [System.IO.File]::Open(
+            $lockPath,
+            [System.IO.FileMode]::OpenOrCreate,
+            [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::None
+        )
+    }
+    catch [System.IO.IOException] {
+        [Console]::Error.WriteLine("$HeldMessage ($lockPath).")
+        exit 1
+    }
+    catch [System.UnauthorizedAccessException] {
+        [Console]::Error.WriteLine("Lock open denied ($lockPath).")
+        exit 1
+    }
+}
+
+function Exit-ExclusiveFileLock {
+    param($Handle)
+    if ($null -eq $Handle) { return }
+    try { $Handle.Dispose() } catch { }
+}
+
+function Get-SeatMapProcessLockPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SeatMapPath
+    )
+    return Get-ExclusiveFileLockPath -TargetPath $SeatMapPath
+}
+
+function Enter-SeatMapProcessLock {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$SeatMapPath
+    )
+    return Enter-ExclusiveFileLock -TargetPath $SeatMapPath -HeldMessage 'Seat-map lock held'
+}
+
+function Exit-SeatMapProcessLock {
+    param($Handle)
+    Exit-ExclusiveFileLock -Handle $Handle
 }
 
 function Save-SeatMapFile {
