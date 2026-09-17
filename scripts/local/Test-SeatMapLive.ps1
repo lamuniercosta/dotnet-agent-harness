@@ -274,6 +274,24 @@ function Test-BindTimeThrow {
     return [bool]($blob -match 'ParameterBindingException|ParameterBindingValidationException')
 }
 
+function New-ServerStartProcessLines {
+    param(
+        [Parameter(Mandatory)][string]$ArgumentListLiteral,
+        [Parameter(Mandatory)][string]$RedirectLiteral,
+        [string]$EnvironmentLiteral
+    )
+    $lines = @(
+        "`$startParams = @{ FilePath = 'pwsh'; ArgumentList = $ArgumentListLiteral; PassThru = `$true; RedirectStandardOutput = $RedirectLiteral }"
+    )
+    if (-not [string]::IsNullOrWhiteSpace($EnvironmentLiteral)) {
+        $lines += "`$startParams['Environment'] = $EnvironmentLiteral"
+    }
+    $lines += "if (`$IsWindows) { `$startParams['WindowStyle'] = 'Hidden' }"
+    $lines += "`$serverProc = Start-Process @startParams"
+    $lines += "if (`$null -eq `$serverProc) { throw 'seat-map server failed to start' }"
+    return $lines
+}
+
 function Get-PrimaryWorktreePath {
     param([string]$RepoRoot)
     $porcelain = & git -C $RepoRoot worktree list --porcelain 2>$null
@@ -853,11 +871,8 @@ try {
     $quoteMapPathLiteral = $quoteMapPath.Replace("'", "''")
     $serverScriptLiteral = $serverScript.Replace("'", "''")
     $portalQuoteScriptBody = @(
-        "`$serverArgs = @('-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8792', '-SeatMapPath', '$quoteMapPathLiteral')"
-        "`$startParams = @{ FilePath = 'pwsh'; ArgumentList = `$serverArgs; PassThru = `$true; RedirectStandardOutput = (Join-Path '$isoHome' 'server-quote.log') }"
-        "if (`$IsWindows) { `$startParams.WindowStyle = 'Hidden' }"
-        "`$serverProc = Start-Process @startParams"
-        "if (`$null -eq `$serverProc) { throw 'seat-map server failed to start' }"
+        (New-ServerStartProcessLines -ArgumentListLiteral "'-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8792', '-SeatMapPath', '$quoteMapPathLiteral'" -RedirectLiteral "(Join-Path '$isoHome' 'server-quote.log')")
+    ) + @(
         "Start-Sleep -Seconds 2"
         "try {"
         "    `$resp = Invoke-WebRequest -Uri 'http://localhost:8792/' -UseBasicParsing"
@@ -900,11 +915,9 @@ try {
     $serverScriptLiteral = $serverScript.Replace("'", "''")
     $portalScriptBody = @(
         "`$serverEnv = @{ HOME = `$env:HOME; USERPROFILE = `$env:USERPROFILE }"
-        "`$serverArgs = @('-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8789', '-SeatMapPath', '$livePathLiteral', '-WorkspaceId', '$b3WsIdLiteral')"
-        "`$startParams = @{ FilePath = 'pwsh'; ArgumentList = `$serverArgs; PassThru = `$true; Environment = `$serverEnv; RedirectStandardOutput = (Join-Path '$isoHome' 'server.log') }"
-        "if (`$IsWindows) { `$startParams.WindowStyle = 'Hidden' }"
-        "`$serverProc = Start-Process @startParams"
-        "if (`$null -eq `$serverProc) { throw 'seat-map server failed to start' }"
+    ) + @(
+        New-ServerStartProcessLines -ArgumentListLiteral "@('-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8789', '-SeatMapPath', '$livePathLiteral', '-WorkspaceId', '$b3WsIdLiteral')" -RedirectLiteral "(Join-Path '$isoHome' 'server.log')" -EnvironmentLiteral '$serverEnv'
+    ) + @(
         "for (`$ready = 0; `$ready -lt 50; `$ready++) {"
         "    try {"
         "        `$probe = Invoke-WebRequest -Uri 'http://localhost:8789/' -UseBasicParsing -TimeoutSec 2"
@@ -928,6 +941,12 @@ try {
         "    if (`$postResp.StatusCode -ne 200) { throw 'POST failed' }"
         "    `$postJson = `$postResp.Content | ConvertFrom-Json"
         "    if (-not `$postJson.success) { throw 'POST success=false' }"
+        "    for (`$wait = 0; `$wait -lt 50; `$wait++) {"
+        "        `$rbMap = Get-Content -LiteralPath '$livePathLiteral' -Raw | ConvertFrom-Json"
+        "        `$rbSeat = @(`$rbMap.seats | Where-Object { `$_.id -eq 'conductor' })[0]"
+        "        if (`$rbSeat.activeRung -eq 'alt') { break }"
+        "        Start-Sleep -Milliseconds 100"
+        "    }"
         "} finally {"
         "    if (`$null -ne `$serverProc) { Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue }"
         "}"
@@ -979,11 +998,8 @@ try {
     $tw1MapPathLiteral = $tw1MapPath.Replace("'", "''")
     $tw1PortalFailScript = Join-Path $isoHome 'test-portal-fail.ps1'
     $tw1PortalFailBody = @(
-        "`$serverArgs = @('-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8793', '-SeatMapPath', '$tw1MapPathLiteral')"
-        "`$startParams = @{ FilePath = 'pwsh'; ArgumentList = `$serverArgs; PassThru = `$true; RedirectStandardOutput = (Join-Path '$isoHome' 'server-tw1.log') }"
-        "if (`$IsWindows) { `$startParams.WindowStyle = 'Hidden' }"
-        "`$serverProc = Start-Process @startParams"
-        "if (`$null -eq `$serverProc) { throw 'seat-map server failed to start' }"
+        (New-ServerStartProcessLines -ArgumentListLiteral "'-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8793', '-SeatMapPath', '$tw1MapPathLiteral'" -RedirectLiteral "(Join-Path '$isoHome' 'server-tw1.log')")
+    ) + @(
         "Start-Sleep -Seconds 2"
         "try {"
         "    `$resp = Invoke-WebRequest -Uri 'http://localhost:8793/' -UseBasicParsing"
