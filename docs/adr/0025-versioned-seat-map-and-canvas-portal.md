@@ -89,10 +89,10 @@ The `evidence` field records probe status: `measured` (passed the ACCEPT/REJECT
 trap probe), `cleared` (passed a lighter bar), `probed` (took the probe but
 evidence is partial), or `unmeasured`.
 
-### Charter invariants are tested in CI
+### Charter invariants are contract-tested
 
 `Test-SeatMap.ps1` validates the schema and enforces the invariants from the
-seat charter. CI runs it against `scripts/local/seat-map.example.json` (the
+seat charter. It runs against `scripts/local/seat-map.example.json` (the
 contract); the live map is workspace state under `~/.maestri/workspaces/<id>/`
 and is not a CI artefact:
 
@@ -104,8 +104,10 @@ and is not a CI artefact:
 - Every OpenCode launch line contains `-m` or `--model` (the shared-config trap).
 - Tier values, when present, are integers 0–4 (runtime FLOOR selection still requires 1–4).
 
-This gate runs in `lint-harness.yml` on both Windows and Ubuntu. It replaces the
-`Test-RouteMap.ps1` gate.
+This gate is defined in `lint-harness.yml` on both Windows and Ubuntu behind
+`vars.RUN_LOCAL_SELF_TESTS == 'true'` (DEV-260 parked it while DEV-253-259
+relocates the tooling; it no longer runs on every push by default). It replaced
+the `Test-RouteMap.ps1` gate (DEV-64).
 
 ### A 4-way synchronizer propagates changes
 
@@ -124,9 +126,9 @@ after helpers load, so a missing workspace degrades to a missing-file message
 rather than a bind-time throw.
 
 Targets 2–4 are Maestri canvas notes and terminal state, not tracked files.
-They cannot be CI-proved. The synchronizer writes them at runtime; CI proves
-only that the example seat map itself is valid and that `-Validate` enforces the
-invariants.
+They cannot be CI-proved. The synchronizer writes them at runtime; when
+`RUN_LOCAL_SELF_TESTS` is enabled, CI proves only that the example seat map
+itself is valid and that `-Validate` enforces the invariants.
 
 `-Verify` is a read-only drift check (DEV-237). It validates the seat map
 first, then compares each seat's **head-rung** launch to the terminal command
@@ -145,8 +147,8 @@ the existing sync phases first, handles syncMisses (including
 `Restore-SwapRollback`) before taking a verify exit, then verify; on verify
 failure with no pending sync misses it prints
 `Sync phases completed before verify failure; workspace drift remains.` and
-exits 1. CI proves failure and success behavior through
-`Test-SeatMapLive.ps1` with an isolated HOME fixture against
+exits 1. When `RUN_LOCAL_SELF_TESTS` is enabled, CI proves failure and success
+behavior through `Test-SeatMapLive.ps1` with an isolated HOME fixture against
 `seat-map.example.json`; a green fixture proves the repository contract, not
 the operator's live workspace. Real `~/.maestri` verification is optional
 machine-local operator proof, not a merge-bar item.
@@ -272,8 +274,9 @@ The live seat map embeds per-machine workspace state: role UUIDs from `.maestri/
 at runtime, the active-rung selection. On any machine other than the author's,
 role-sync and note-sync silently no-op because the UUIDs do not match. This is
 accepted because the live map is workspace state, not a CI artefact:
-CI proves the schema and invariants against `scripts/local/seat-map.example.json`, and synchronization is a convenience for
-the machine that runs the team. The live path is discovered from `~/.maestri/workspaces/<id>/`.
+the schema and invariants are proven against `scripts/local/seat-map.example.json`
+when `RUN_LOCAL_SELF_TESTS` is enabled; the scripts remain in-tree for local
+runs. Synchronization is a convenience for the machine that runs the team. The live path is discovered from `~/.maestri/workspaces/<id>/`.
 
 The portal's security model is session-token authentication over localhost. This
 is weaker than mutual TLS or a Unix socket, but the threat model is cross-origin
