@@ -35,10 +35,14 @@
   Kit resolution: $env:PROBE_KIT_ROOT, then <repo>/artifacts/probe-kit.
   A missing kit is an error; the probe will not launch.
 
-  The seat-map lock is scripts-local in name only: it lives under
-  [IO.Path]::GetTempPath() as .seat-map.lock. Enter-SeatMapLock checks then
-  writes (a TOCTOU window; acceptable for a human-operated tool). Stale locks
-  whose PID is not running and whose mtime is older than 10 minutes are reclaimed.
+  Seat-map writes take a per-canonical-SeatMapPath exclusive FileStream lock
+  from _seat-map.ps1 (FileShare.None). A contender fails fast with the literal
+  `Seat-map lock held` and does not mutate the map. The lock holder re-reads
+  the map inside the critical section before saving. -WhatIf and validation
+  failures exit before lock acquisition. Junie settings mutation uses a
+  separate process-safe lock on `$HOME/.junie/settings.json`. The OS releases
+  both handles when the holder exits; leftover `.lock` files are not PID/stale
+  tokens.
 
 .PARAMETER Host
   Canonical platform name. cursor maps to binary agent.
@@ -99,11 +103,6 @@ $BlockedModels = @('openai/gpt-oss-120b')
 $TimeoutSeconds = 600
 $JunieProbeEffort = 'high'
 # $SeatMapPath is a param; live path is resolved lazily after _seat-map.ps1.
-# Lock is under GetTempPath so scripts/local/ stays clean of runtime files.
-# Enter-SeatMapLock is Test-Path then WriteAllText: a TOCTOU window exists
-# between the stale check and create. Acceptable for a human-operated tool.
-$LockPath = Join-Path ([System.IO.Path]::GetTempPath()) '.seat-map.lock'
-$LockStaleMinutes = 10
 
 $hostBinaries = @{
     agy      = 'agy'
@@ -209,38 +208,6 @@ function Stop-ProbeProcessTree {
         Write-Warning "PID $ProcessId still alive after tree-kill and 3 polls."
     }
     return $result
-}
-
-function Enter-SeatMapLock {
-    if (Test-Path -LiteralPath $LockPath) {
-        $raw = (Get-Content -LiteralPath $LockPath -Raw -ErrorAction SilentlyContinue)
-        $holder = 0
-        $parsed = $false
-        if ($raw) { $parsed = [int]::TryParse($raw.Trim(), [ref]$holder) }
-        $alive = $parsed -and $holder -gt 0 -and (Test-ProcessAlive -ProcessId $holder)
-        if ($alive) {
-            Write-ProbeError "Seat-map lock held by PID $holder ($LockPath)."
-        }
-        $mtime = (Get-Item -LiteralPath $LockPath).LastWriteTimeUtc
-        $ageMinutes = ([DateTime]::UtcNow - $mtime).TotalMinutes
-        $stale = (-not $alive) -and ($ageMinutes -gt $LockStaleMinutes)
-        if (-not $stale -and $parsed -and -not $alive) {
-            # Dead PID: reclaim. Young locks with a live PID already returned above.
-            $stale = $true
-        }
-        if (-not $stale -and -not $parsed -and $ageMinutes -le $LockStaleMinutes) {
-            Write-ProbeError "Seat-map lock unreadable and younger than $LockStaleMinutes min ($LockPath)."
-        }
-    }
-    [System.IO.File]::WriteAllText($LockPath, [string]$PID, [System.Text.UTF8Encoding]::new($false))
-}
-
-function Exit-SeatMapLock {
-    if (-not (Test-Path -LiteralPath $LockPath)) { return }
-    $raw = (Get-Content -LiteralPath $LockPath -Raw -ErrorAction SilentlyContinue)
-    if ($raw -and $raw.Trim() -eq [string]$PID) {
-        Remove-Item -LiteralPath $LockPath -Force -ErrorAction SilentlyContinue
-    }
 }
 
 function Resolve-ProbePool {
@@ -1130,6 +1097,25 @@ if ($WhatIf) {
     exit 0
 }
 
+function Wait-SeatMapLockBarrierIfRequested {
+    # Isolated-test barrier (SEAT_MAP_LOCK_BARRIER_DIR): fake-launch only.
+    # Child writes ready, waits for go, then takes the per-map lock so
+    # Test-SeatMapLive can force a write into the pre-lock window.
+    $barrierDir = [string]$env:SEAT_MAP_LOCK_BARRIER_DIR
+    if ([string]::IsNullOrWhiteSpace($barrierDir)) { return }
+    $readyPath = Join-Path $barrierDir 'ready'
+    $goPath = Join-Path $barrierDir 'go'
+    New-Item -ItemType Directory -Path $barrierDir -Force | Out-Null
+    [System.IO.File]::WriteAllText($readyPath, 'ready', [System.Text.UTF8Encoding]::new($false))
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    while (-not (Test-Path -LiteralPath $goPath)) {
+        if ([DateTime]::UtcNow -gt $deadline) {
+            Write-ProbeError 'SEAT_MAP_LOCK_BARRIER_DIR timed out waiting for go.'
+        }
+        Start-Sleep -Milliseconds 50
+    }
+}
+
 $fakeLaunch = [string]$env:SEAT_MAP_PROBE_FAKE_LAUNCH -eq '1'
 if ($fakeLaunch) {
     if (-not $hasSeat) {
@@ -1138,10 +1124,10 @@ if ($fakeLaunch) {
     if (-not $resolvedMap.Explicit) {
         Write-ProbeError 'SEAT_MAP_PROBE_FAKE_LAUNCH requires an explicit -SeatMapPath; it will not write the default live map.'
     }
-    $locked = $false
+    Wait-SeatMapLockBarrierIfRequested
+    $mapLock = Enter-SeatMapProcessLock -SeatMapPath $SeatMapPath
     try {
-        Enter-SeatMapLock
-        $locked = $true
+        $resolvedSeat = Resolve-SeatCell -SeatName $Seat -RungName $Rung -MapPath $SeatMapPath
         $cost = New-CostRecord -Source 'unknown'
         $evidence = 'probed'
         $metadata = [pscustomobject]@{
@@ -1153,7 +1139,7 @@ if ($fakeLaunch) {
         exit 0
     }
     finally {
-        if ($locked) { Exit-SeatMapLock }
+        Exit-SeatMapProcessLock -Handle $mapLock
     }
 }
 
@@ -1163,12 +1149,16 @@ if ($kitWarning) {
 
 $junieSettings = Join-Path (Join-Path $HOME '.junie') 'settings.json'
 $junieBackup = $null
-$locked = $false
+$mapLock = $null
+$junieLock = $null
 try {
-    Enter-SeatMapLock
-    $locked = $true
+    if ($hasSeat) {
+        $mapLock = Enter-SeatMapProcessLock -SeatMapPath $SeatMapPath
+        $resolvedSeat = Resolve-SeatCell -SeatName $Seat -RungName $Rung -MapPath $SeatMapPath
+    }
 
     if ($ProbeHost -eq 'junie') {
+        $junieLock = Enter-ExclusiveFileLock -TargetPath $junieSettings -HeldMessage 'Junie settings lock held'
         $junieBackup = Read-JunieEffortOnly -SettingsPath $junieSettings -ModelName $Model
         Write-JunieEffortOnly -SettingsPath $junieSettings -ModelName $Model -Effort $JunieProbeEffort
     }
@@ -1233,5 +1223,6 @@ finally {
     if ($ProbeHost -eq 'junie') {
         Restore-JunieEffort -Backup $junieBackup -SettingsPath $junieSettings -ModelName $Model
     }
-    if ($locked) { Exit-SeatMapLock }
+    Exit-ExclusiveFileLock -Handle $junieLock
+    Exit-SeatMapProcessLock -Handle $mapLock
 }

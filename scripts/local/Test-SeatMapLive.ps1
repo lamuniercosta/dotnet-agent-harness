@@ -1,16 +1,20 @@
 #!/usr/bin/env pwsh
-# Bar-proves DEV-239 A1, A3, A5, override precedence, and DEV-237 -Verify
-# against an isolated HOME. Does not touch the real user profile's ~/.maestri.
-# Cleanup is enforced.
+# Bar-proves DEV-239 A1, A3, A5, override precedence, DEV-237 -Verify,
+# and DEV-241 per-map process lock against an isolated HOME. Does not touch
+# the real user profile's ~/.maestri. Cleanup is enforced.
 #
 #   pwsh -NoProfile ./scripts/local/Test-SeatMapLive.ps1
+#   pwsh -NoProfile ./scripts/local/Test-SeatMapLive.ps1 -LockOnly
 #
+# -LockOnly runs only DEV-241 lock invariants (hosted unskipped proof).
 # Path assertions are separator-normalized (no $IsWindows branch, no '\'-only
 # expected literals). HOME and USERPROFILE are both set on the child so the
 # same probe runs on Windows and Ubuntu.
 
 [CmdletBinding()]
-param()
+param(
+    [switch]$LockOnly
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -72,13 +76,15 @@ function Get-Porcelain {
     return (@($raw) | ForEach-Object { "$_" }) -join "`n"
 }
 
-function Invoke-IsolatedPwsh {
+function New-IsolatedPwshStartInfo {
     param(
         [Parameter(Mandatory)][string]$HomeDir,
         [Parameter(Mandatory)][string]$File,
         [string[]]$ArgumentList = @(),
-        [int]$TimeoutMs = 120000
+        [hashtable]$ExtraEnvironment = @{}
     )
+    $isoTemp = Join-Path $HomeDir 'tmp'
+    New-Item -ItemType Directory -Path $isoTemp -Force | Out-Null
     $pwsh = (Get-Command pwsh).Source
     $psi = [System.Diagnostics.ProcessStartInfo]::new()
     $psi.FileName = $pwsh
@@ -96,32 +102,77 @@ function Invoke-IsolatedPwsh {
     $psi.Environment['HOME'] = $HomeDir
     $psi.Environment['USERPROFILE'] = $HomeDir
     $psi.Environment['MAESTRI_PIPE'] = ''
+    $psi.Environment['TEMP'] = $isoTemp
+    $psi.Environment['TMP'] = $isoTemp
+    $psi.Environment['TMPDIR'] = $isoTemp
+    foreach ($key in @($ExtraEnvironment.Keys)) {
+        $psi.Environment[$key] = [string]$ExtraEnvironment[$key]
+    }
+    return $psi
+}
 
+function Wait-IsolatedPwsh {
+    param(
+        [Parameter(Mandatory)]$Process,
+        [Parameter(Mandatory)]$StdoutTask,
+        [Parameter(Mandatory)]$StderrTask,
+        [int]$ChildId,
+        [int]$TimeoutMs = 120000
+    )
+    if (-not $Process.WaitForExit($TimeoutMs)) {
+        try { $Process.Kill($true) } catch { }
+        [void]$Process.WaitForExit(5000)
+        if (-not $Process.HasExited) {
+            Stop-Process -Id $ChildId -Force -ErrorAction SilentlyContinue
+            [void]$Process.WaitForExit(2000)
+        }
+        return [pscustomobject]@{
+            ExitCode  = 124
+            StdOut    = $StdoutTask.GetAwaiter().GetResult()
+            StdErr    = $StderrTask.GetAwaiter().GetResult()
+            TimedOut  = $true
+            ProcessId = $ChildId
+        }
+    }
+    return [pscustomobject]@{
+        ExitCode  = $Process.ExitCode
+        StdOut    = $StdoutTask.GetAwaiter().GetResult()
+        StdErr    = $StderrTask.GetAwaiter().GetResult()
+        TimedOut  = $false
+        ProcessId = $ChildId
+    }
+}
+
+function Invoke-IsolatedPwsh {
+    param(
+        [Parameter(Mandatory)][string]$HomeDir,
+        [Parameter(Mandatory)][string]$File,
+        [string[]]$ArgumentList = @(),
+        [int]$TimeoutMs = 120000,
+        [hashtable]$ExtraEnvironment = @{}
+    )
+    $psi = New-IsolatedPwshStartInfo -HomeDir $HomeDir -File $File -ArgumentList $ArgumentList -ExtraEnvironment $ExtraEnvironment
     $p = [System.Diagnostics.Process]::Start($psi)
     $childId = $p.Id
     $stdoutTask = $p.StandardOutput.ReadToEndAsync()
     $stderrTask = $p.StandardError.ReadToEndAsync()
-    if (-not $p.WaitForExit($TimeoutMs)) {
-        try { $p.Kill($true) } catch { }
-        [void]$p.WaitForExit(5000)
-        if (-not $p.HasExited) {
-            Stop-Process -Id $childId -Force -ErrorAction SilentlyContinue
-            [void]$p.WaitForExit(2000)
-        }
-        return [pscustomobject]@{
-            ExitCode  = 124
-            StdOut    = $stdoutTask.GetAwaiter().GetResult()
-            StdErr    = $stderrTask.GetAwaiter().GetResult()
-            TimedOut  = $true
-            ProcessId = $childId
-        }
-    }
+    return Wait-IsolatedPwsh -Process $p -StdoutTask $stdoutTask -StderrTask $stderrTask -ChildId $childId -TimeoutMs $TimeoutMs
+}
+
+function Start-IsolatedPwsh {
+    param(
+        [Parameter(Mandatory)][string]$HomeDir,
+        [Parameter(Mandatory)][string]$File,
+        [string[]]$ArgumentList = @(),
+        [hashtable]$ExtraEnvironment = @{}
+    )
+    $psi = New-IsolatedPwshStartInfo -HomeDir $HomeDir -File $File -ArgumentList $ArgumentList -ExtraEnvironment $ExtraEnvironment
+    $p = [System.Diagnostics.Process]::Start($psi)
     return [pscustomobject]@{
-        ExitCode  = $p.ExitCode
-        StdOut    = $stdoutTask.GetAwaiter().GetResult()
-        StdErr    = $stderrTask.GetAwaiter().GetResult()
-        TimedOut  = $false
-        ProcessId = $childId
+        Process    = $p
+        StdOutTask = $p.StandardOutput.ReadToEndAsync()
+        StdErrTask = $p.StandardError.ReadToEndAsync()
+        ProcessId  = $p.Id
     }
 }
 
@@ -242,10 +293,18 @@ function Get-RecursiveFileSnapshot {
 }
 
 function Get-TargetedMaestriSnapshot {
-    param([Parameter(Mandatory)][string]$Root)
+    param(
+        [Parameter(Mandatory)][string]$Root,
+        [string[]]$ExcludeNames = @()
+    )
     if (-not (Test-Path -LiteralPath $Root)) { return '<missing>' }
     $want = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    $skip = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    foreach ($n in @($ExcludeNames)) {
+        if (-not [string]::IsNullOrWhiteSpace($n)) { [void]$skip.Add($n) }
+    }
     foreach ($n in @('workspace.json', 'seat-map.json', 'harness-team-charter.md', 'team-restart.md', 'seat-map-swaps.jsonl', 'role.json')) {
+        if ($skip.Contains($n)) { continue }
         [void]$want.Add($n)
     }
     $items = @(
@@ -405,6 +464,258 @@ function Assert-SeatMapHiddenLaunchContracts {
     Assert-True 'DEV-247 WindowStyle value on Windows host' ($winStyle -eq 'Hidden') 'Hidden' ([string]$winStyle)
     $nonWinStyle = Get-SeatMapStartProcessWindowStyleValue -WindowsHost $false
     Assert-True 'DEV-247 WindowStyle value on non-Windows host' ($null -eq $nonWinStyle) 'null' ([string]$nonWinStyle)
+}
+
+function Assert-SeatMapLockContracts {
+    $probeSrc = [System.IO.File]::ReadAllText($probeScript)
+    $syncSrc = [System.IO.File]::ReadAllText($syncScript)
+    $serverSrc = [System.IO.File]::ReadAllText($serverScript)
+    $helperSrc = [System.IO.File]::ReadAllText($helperPath)
+
+    Assert-True 'DEV-241 helper: exclusive FileShare.None lock' ($helperSrc -match 'FileShare\]::None') 'FileShare.None' 'missing'
+    Assert-True 'DEV-241 helper: documents OS-released handle (no PID stale file)' ($helperSrc -match 'no PID file') 'no PID file' 'missing'
+    Assert-True 'DEV-241 helper: IOException keeps Seat-map lock held' ($helperSrc -match 'catch \[System\.IO\.IOException\][\s\S]{0,180}\$HeldMessage') '$HeldMessage' 'missing'
+    Assert-True 'DEV-241 helper: UnauthorizedAccessException is lock-open denied' ($helperSrc -match 'catch \[System\.UnauthorizedAccessException\][\s\S]{0,180}Lock open denied') 'Lock open denied' 'missing'
+    Assert-True 'DEV-241 probe: no GetTempPath .seat-map.lock' ($probeSrc -notmatch "GetTempPath\(\)[\s\S]{0,80}\.seat-map\.lock") 'absent global temp lock' 'present'
+    Assert-True 'DEV-241 probe: no Enter-SeatMapLock' ($probeSrc -notmatch 'function Enter-SeatMapLock') 'absent Enter-SeatMapLock' 'present'
+    $lockOrderExpected = 'Enter-SeatMapProcessLock -> Resolve-SeatCell -> Write-SeatCell'
+    $fakeSlice = Get-SeatMapSourceSlice -Source $probeSrc -StartText '$fakeLaunch = [string]$env:SEAT_MAP_PROBE_FAKE_LAUNCH' -EndText 'if ($kitWarning)'
+    $realSlice = Get-SeatMapSourceSlice -Source $probeSrc -StartText '$junieSettings = Join-Path (Join-Path $HOME ''.junie'') ''settings.json''' -EndText 'finally {'
+    $fakeOrder = Get-SeatMapNamedCallOrder -Source $fakeSlice -Names @('Enter-SeatMapProcessLock', 'Resolve-SeatCell', 'Write-SeatCell')
+    $realOrder = Get-SeatMapNamedCallOrder -Source $realSlice -Names @('Enter-SeatMapProcessLock', 'Resolve-SeatCell', 'Write-SeatCell')
+    Assert-True 'DEV-241 probe fake branch order' ($fakeOrder -eq $lockOrderExpected) $lockOrderExpected $fakeOrder
+    Assert-True 'DEV-241 probe real branch order' ($realOrder -eq $lockOrderExpected) $lockOrderExpected $realOrder
+    Assert-True 'DEV-241 probe: Junie settings exclusive lock' ($probeSrc -match 'Junie settings lock held') 'Junie settings lock held' 'missing'
+    $junieLockIdx = $probeSrc.IndexOf('Junie settings lock held')
+    $junieWriteIdx = $probeSrc.LastIndexOf('Write-JunieEffortOnly')
+    Assert-True 'DEV-241 probe: Junie mutate follows Junie lock in source' ($junieLockIdx -ge 0 -and $junieWriteIdx -gt $junieLockIdx) 'lock before Write-JunieEffortOnly' "lock=$junieLockIdx write=$junieWriteIdx"
+    $syncEnters = [regex]::Matches($syncSrc, 'Enter-SeatMapProcessLock').Count
+    Assert-True 'DEV-241 sync: Init and swap call Enter-SeatMapProcessLock' ($syncEnters -ge 2) '>=2' ([string]$syncEnters)
+    Assert-True 'DEV-241 sync: emits LOCKED-SWAP receipt' ($syncSrc -match 'Format-SeatMapLockedSwapLine') 'Format-SeatMapLockedSwapLine' 'missing'
+    Assert-True 'DEV-241 server: no direct map lock' ([regex]::Matches($serverSrc, 'Enter-SeatMapProcessLock').Count -eq 0) '0' 'present'
+    Assert-True 'DEV-241 server: portal swap still uses Sync child' ($serverSrc -match 'Sync-SeatMap\.ps1') 'Sync-SeatMap.ps1' 'missing'
+    Assert-True 'DEV-241 server: no Save-SeatMapFile' ($serverSrc -notmatch 'Save-SeatMapFile') 'absent Save-SeatMapFile' 'present'
+    $syncChildIdx = $serverSrc.IndexOf('$sync = Invoke-SeatMapSyncChild')
+    $afterSync = if ($syncChildIdx -ge 0) { $serverSrc.Substring($syncChildIdx) } else { '' }
+    Assert-True 'DEV-241 server: consumes locked-swap receipt after Sync' ($afterSync -match 'Read-SeatMapLockedSwapReceipt') 'Read-SeatMapLockedSwapReceipt' 'missing'
+    Assert-True 'DEV-241 server: no stale `$resolvedFloor after Sync' ($afterSync -notmatch '\$resolvedFloor') 'absent $resolvedFloor' $afterSync
+    $wfPath = Join-Path $repoRoot '.github' 'workflows' 'lint-harness.yml'
+    $wfSrc = [System.IO.File]::ReadAllText($wfPath)
+    Assert-True 'DEV-241 hosted lock step uses -LockOnly' ($wfSrc -match 'Test-SeatMapLive\.ps1 -LockOnly') './scripts/local/Test-SeatMapLive.ps1 -LockOnly' 'missing'
+}
+
+function Get-SeatMapSourceSlice {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$StartText,
+        [Parameter(Mandatory)][string]$EndText
+    )
+    $start = $Source.IndexOf($StartText)
+    $end = $Source.IndexOf($EndText, [Math]::Max(0, $start))
+    if ($start -lt 0 -or $end -le $start) { return '' }
+    return $Source.Substring($start, $end - $start)
+}
+
+function Get-SeatMapNamedCallOrder {
+    param(
+        [string]$Source,
+        [string[]]$Names
+    )
+    if ([string]::IsNullOrWhiteSpace($Source)) { return 'missing-slice' }
+    $missing = @($Names | Where-Object { $Source.IndexOf($_) -lt 0 })
+    if ($missing.Count -gt 0) {
+        return 'missing:' + ($missing -join ',')
+    }
+    $ordered = @($Names | Sort-Object { $Source.IndexOf($_) })
+    return ($ordered -join ' -> ')
+}
+
+function Get-SeatMapTestCell {
+    param(
+        [Parameter(Mandatory)][string]$MapPath,
+        [Parameter(Mandatory)][string]$SeatId,
+        [Parameter(Mandatory)][string]$RungName
+    )
+    $map = Get-Content -LiteralPath $MapPath -Raw | ConvertFrom-Json
+    $seat = Find-SeatMapSeat -Map $map -Name $SeatId
+    $cell = Get-SeatMapRungByName -Seat $seat -Name $RungName
+    return [pscustomobject]@{ Map = $map; Seat = $seat; Cell = $cell }
+}
+
+function Invoke-SeatMapLockProofs {
+    $fakeProbeEnv = @{ SEAT_MAP_PROBE_FAKE_LAUNCH = '1' }
+    $fakeProbeArgs = {
+        param([string]$SeatName, [string]$RungName)
+        @('-Host', 'gemini', '-Model', 'gemini-3.5-flash-lite', '-Test', 'Verdict', '-Seat', $SeatName, '-Rung', $RungName, '-SeatMapPath', $livePath)
+    }
+    Copy-Item -LiteralPath $examplePath -Destination $livePath -Force
+    $conductorFake = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'conductor' 'alt') -ExtraEnvironment $fakeProbeEnv
+    Assert-True 'DEV-241 sequential fake conductor: exit 0' ($conductorFake.ExitCode -eq 0) '0' ("exit=$($conductorFake.ExitCode)`n$($conductorFake.StdOut)`n$($conductorFake.StdErr)")
+    $anvilFakeRes = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'anvil' 'alt') -ExtraEnvironment $fakeProbeEnv
+    Assert-True 'DEV-241 sequential fake anvil: exit 0' ($anvilFakeRes.ExitCode -eq 0) '0' ("exit=$($anvilFakeRes.ExitCode)`n$($anvilFakeRes.StdOut)`n$($anvilFakeRes.StdErr)")
+    $bothCells = Get-SeatMapTestCell -MapPath $livePath -SeatId 'conductor' -RungName 'alt'
+    $anvilCellAfter = Get-SeatMapTestCell -MapPath $livePath -SeatId 'anvil' -RungName 'alt'
+    Assert-True 'DEV-241 two writers: conductor alt still probed' ([string]$bothCells.Cell.evidence -eq 'probed') 'probed' ([string]$bothCells.Cell.evidence)
+    Assert-True 'DEV-241 two writers: anvil alt still probed' ([string]$anvilCellAfter.Cell.evidence -eq 'probed') 'probed' ([string]$anvilCellAfter.Cell.evidence)
+
+    $mapLockPath = Get-SeatMapProcessLockPath -SeatMapPath $livePath
+    Assert-True 'DEV-241 lock path is under isolated HOME' (Test-TextContains $mapLockPath $isoHome) $isoHome $mapLockPath
+    $isoTmpLock = Join-Path (Join-Path $isoHome 'tmp') '.seat-map.lock'
+    Assert-True 'DEV-241 isolated temp has no global .seat-map.lock name' (-not (Test-Path -LiteralPath $isoTmpLock)) 'absent' $isoTmpLock
+
+    Copy-Item -LiteralPath $examplePath -Destination $livePath -Force
+    $hashBeforeHeld = (Get-FileHash -LiteralPath $livePath -Algorithm SHA256).Hash
+    $heldDir = [System.IO.Path]::GetDirectoryName($mapLockPath)
+    if (-not [string]::IsNullOrWhiteSpace($heldDir) -and -not (Test-Path -LiteralPath $heldDir)) {
+        New-Item -ItemType Directory -Path $heldDir -Force | Out-Null
+    }
+    $heldLock = [System.IO.File]::Open(
+        $mapLockPath,
+        [System.IO.FileMode]::OpenOrCreate,
+        [System.IO.FileAccess]::ReadWrite,
+        [System.IO.FileShare]::None
+    )
+    try {
+        $heldContender = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'conductor' 'alt') -ExtraEnvironment $fakeProbeEnv
+        $heldCombined = "$($heldContender.StdOut)`n$($heldContender.StdErr)"
+        Assert-True 'DEV-241 held-lock probe: exit 1' ($heldContender.ExitCode -eq 1) '1' ("exit=$($heldContender.ExitCode)`n$heldCombined")
+        Assert-True 'DEV-241 held-lock probe: Seat-map lock held' (Test-TextContains $heldCombined 'Seat-map lock held') 'Seat-map lock held' $heldCombined
+        $hashAfterHeldProbe = (Get-FileHash -LiteralPath $livePath -Algorithm SHA256).Hash
+        Assert-True 'DEV-241 held-lock probe: map unchanged' ($hashAfterHeldProbe -eq $hashBeforeHeld) $hashBeforeHeld $hashAfterHeldProbe
+
+        $heldWhatIf = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList @(
+            '-Host', 'gemini', '-Model', 'gemini-3.5-flash-lite', '-Test', 'Verdict',
+            '-Seat', 'conductor', '-Rung', 'alt', '-SeatMapPath', $livePath, '-WhatIf'
+        )
+        $heldWhatIfCombined = "$($heldWhatIf.StdOut)`n$($heldWhatIf.StdErr)"
+        Assert-True 'DEV-241 held-lock WhatIf: exit 0' ($heldWhatIf.ExitCode -eq 0) '0' ("exit=$($heldWhatIf.ExitCode)`n$heldWhatIfCombined")
+        Assert-True 'DEV-241 held-lock WhatIf: no Seat-map lock held' (-not (Test-TextContains $heldWhatIfCombined 'Seat-map lock held')) 'absent lock held' $heldWhatIfCombined
+
+        $heldValidate = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Validate', '-SeatMapPath', $livePath)
+        $heldValidateCombined = "$($heldValidate.StdOut)`n$($heldValidate.StdErr)"
+        Assert-True 'DEV-241 held-lock Sync -Validate: exit 0' ($heldValidate.ExitCode -eq 0) '0' ("exit=$($heldValidate.ExitCode)`n$heldValidateCombined")
+        Assert-True 'DEV-241 held-lock Sync -Validate: no Seat-map lock held' (-not (Test-TextContains $heldValidateCombined 'Seat-map lock held')) 'absent lock held' $heldValidateCombined
+
+        $heldBadSeat = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList @(
+            '-Host', 'gemini', '-Model', 'gemini-3.5-flash-lite', '-Test', 'Verdict',
+            '-Seat', 'no-such-seat', '-Rung', 'head', '-SeatMapPath', $livePath
+        )
+        $heldBadCombined = "$($heldBadSeat.StdOut)`n$($heldBadSeat.StdErr)"
+        Assert-True 'DEV-241 held-lock missing seat: exit 1' ($heldBadSeat.ExitCode -eq 1) '1' ("exit=$($heldBadSeat.ExitCode)`n$heldBadCombined")
+        Assert-True 'DEV-241 held-lock missing seat: names missing seat' (Test-TextContains $heldBadCombined "Seat 'no-such-seat' not found") "Seat 'no-such-seat' not found" $heldBadCombined
+        Assert-True 'DEV-241 held-lock missing seat: no Seat-map lock held' (-not (Test-TextContains $heldBadCombined 'Seat-map lock held')) 'absent lock held' $heldBadCombined
+
+        $heldSync = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Seat', 'conductor', '-Rung', 'alt', '-SeatMapPath', $livePath)
+        $heldSyncCombined = "$($heldSync.StdOut)`n$($heldSync.StdErr)"
+        Assert-True 'DEV-241 held-lock Sync swap: exit 1' ($heldSync.ExitCode -eq 1) '1' ("exit=$($heldSync.ExitCode)`n$heldSyncCombined")
+        Assert-True 'DEV-241 held-lock Sync swap: Seat-map lock held' (Test-TextContains $heldSyncCombined 'Seat-map lock held') 'Seat-map lock held' $heldSyncCombined
+        $hashAfterHeldSync = (Get-FileHash -LiteralPath $livePath -Algorithm SHA256).Hash
+        Assert-True 'DEV-241 held-lock Sync swap: map unchanged' ($hashAfterHeldSync -eq $hashBeforeHeld) $hashBeforeHeld $hashAfterHeldSync
+    }
+    finally {
+        $heldLock.Dispose()
+    }
+
+    Copy-Item -LiteralPath $examplePath -Destination $livePath -Force
+    $barrierDir = Join-Path $isoHome 'dev241-barrier'
+    New-Item -ItemType Directory -Path $barrierDir -Force | Out-Null
+    $barrierEnv = @{
+        SEAT_MAP_PROBE_FAKE_LAUNCH = '1'
+        SEAT_MAP_LOCK_BARRIER_DIR  = $barrierDir
+    }
+    $barrierHandle = Start-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'conductor' 'alt') -ExtraEnvironment $barrierEnv
+    $readyPath = Join-Path $barrierDir 'ready'
+    $goPath = Join-Path $barrierDir 'go'
+    $readyDeadline = [DateTime]::UtcNow.AddSeconds(20)
+    while (-not (Test-Path -LiteralPath $readyPath)) {
+        if ([DateTime]::UtcNow -gt $readyDeadline) { break }
+        Start-Sleep -Milliseconds 50
+    }
+    Assert-True 'DEV-241 barrier: child ready file appeared' (Test-Path -LiteralPath $readyPath) $readyPath 'missing'
+    $overlapRes = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'anvil' 'alt') -ExtraEnvironment $fakeProbeEnv
+    Assert-True 'DEV-241 barrier overlap writer: exit 0' ($overlapRes.ExitCode -eq 0) '0' ("exit=$($overlapRes.ExitCode)`n$($overlapRes.StdOut)`n$($overlapRes.StdErr)")
+    [System.IO.File]::WriteAllText($goPath, 'go', [System.Text.UTF8Encoding]::new($false))
+    $barrierRes = Wait-IsolatedPwsh -Process $barrierHandle.Process -StdoutTask $barrierHandle.StdOutTask -StderrTask $barrierHandle.StdErrTask -ChildId $barrierHandle.ProcessId
+    Assert-True 'DEV-241 barrier child: exit 0' ($barrierRes.ExitCode -eq 0) '0' ("exit=$($barrierRes.ExitCode)`n$($barrierRes.StdOut)`n$($barrierRes.StdErr)")
+    $barrierConductor = Get-SeatMapTestCell -MapPath $livePath -SeatId 'conductor' -RungName 'alt'
+    $barrierAnvil = Get-SeatMapTestCell -MapPath $livePath -SeatId 'anvil' -RungName 'alt'
+    Assert-True 'DEV-241 barrier: conductor alt probed (no lost update)' ([string]$barrierConductor.Cell.evidence -eq 'probed') 'probed' ([string]$barrierConductor.Cell.evidence)
+    Assert-True 'DEV-241 barrier: anvil alt probed (no lost update)' ([string]$barrierAnvil.Cell.evidence -eq 'probed') 'probed' ([string]$barrierAnvil.Cell.evidence)
+
+    Copy-Item -LiteralPath $examplePath -Destination $livePath -Force
+    $staleMap = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
+    $staleConductor = @($staleMap.seats | Where-Object { $_.id -eq 'conductor' })[0]
+    $staleAlt = @($staleConductor.rungs | Where-Object { $_.name -eq 'alt' })[0]
+    $staleFloor = @($staleConductor.rungs | Where-Object { $_.name -eq 'floor' })[0]
+    $staleAlt.launch = 'STALECMD'
+    $staleAlt.evidence = 'cleared'
+    $staleFloor.evidence = 'measured'
+    $staleJson = $staleMap | ConvertTo-Json -Depth 12
+    if (-not $staleJson.EndsWith("`n")) { $staleJson += "`n" }
+    [System.IO.File]::WriteAllText($livePath, $staleJson, [System.Text.UTF8Encoding]::new($false))
+
+    $portalBarrierDir = Join-Path $isoHome 'dev241-portal-barrier'
+    New-Item -ItemType Directory -Path $portalBarrierDir -Force | Out-Null
+    $portalReady = Join-Path $portalBarrierDir 'ready'
+    $portalGo = Join-Path $portalBarrierDir 'go'
+    $staleLaunchPath = Join-Path $isoHome 'stale-launch.json'
+    $livePathLiteral = $livePath.Replace("'", "''")
+    $serverScriptLiteral = $serverScript.Replace("'", "''")
+    $portalBarrierLiteral = $portalBarrierDir.Replace("'", "''")
+    $wsIdLiteral = $wsId.Replace("'", "''")
+    $isoHomeLiteral = $isoHome.Replace("'", "''")
+    $portalServerScript = Join-Path $isoHome 'dev241-portal-server.ps1'
+    $portalServerBody = @(
+        "`$serverEnv = @{ HOME = `$env:HOME; USERPROFILE = `$env:USERPROFILE; SEAT_MAP_PORTAL_SWAP_BARRIER_DIR = '$portalBarrierLiteral' }"
+    ) + @(
+        New-ServerStartProcessLines -ArgumentListLiteral "@('-NoProfile', '-File', '$serverScriptLiteral', '-Port', '8794', '-SeatMapPath', '$livePathLiteral', '-WorkspaceId', '$wsIdLiteral')" -RedirectLiteral "(Join-Path '$isoHomeLiteral' 'dev241-portal-server.log')" -EnvironmentLiteral '$serverEnv'
+    ) + @(
+        "for (`$ready = 0; `$ready -lt 50; `$ready++) {"
+        "    try {"
+        "        `$probe = Invoke-WebRequest -Uri 'http://localhost:8794/' -UseBasicParsing -TimeoutSec 2"
+        "        if (`$probe.StatusCode -eq 200) { break }"
+        "    } catch { }"
+        "    Start-Sleep -Milliseconds 200"
+        "}"
+        "try {"
+        "    `$resp = Invoke-WebRequest -Uri 'http://localhost:8794/' -UseBasicParsing"
+        "    `$tokenMatch = [regex]::Match(`$resp.Content, '<meta name=""seat-map-token"" content=""([^""]+)""')"
+        "    if (-not `$tokenMatch.Success) { throw 'Token missing' }"
+        "    `$token = `$tokenMatch.Groups[1].Value"
+        "    `$body = @{ seatId = 'conductor'; rung = 'alt' } | ConvertTo-Json"
+        "    `$headers = @{ 'X-Seat-Map-Token' = `$token }"
+        "    `$postResp = Invoke-WebRequest -Uri 'http://localhost:8794/api/seats/set' -Method POST -Headers `$headers -Body `$body -ContentType 'application/json' -UseBasicParsing"
+        "    [System.IO.File]::WriteAllText((Join-Path '$isoHomeLiteral' 'stale-launch.json'), `$postResp.Content, [System.Text.UTF8Encoding]::new(`$false))"
+        "    if (`$postResp.StatusCode -ne 200) { throw 'POST failed' }"
+        "} finally {"
+        "    if (`$null -ne `$serverProc) { Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue }"
+        "}"
+    ) -join [Environment]::NewLine
+    [System.IO.File]::WriteAllText($portalServerScript, $portalServerBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+    $portalHandle = Start-IsolatedPwsh -HomeDir $isoHome -File $portalServerScript
+    $portalReadyDeadline = [DateTime]::UtcNow.AddSeconds(25)
+    while (-not (Test-Path -LiteralPath $portalReady)) {
+        if ([DateTime]::UtcNow -gt $portalReadyDeadline) { break }
+        Start-Sleep -Milliseconds 50
+    }
+    Assert-True 'DEV-241 portal stale: barrier ready appeared' (Test-Path -LiteralPath $portalReady) $portalReady 'missing'
+    $lockedMap = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
+    $lockedConductor = @($lockedMap.seats | Where-Object { $_.id -eq 'conductor' })[0]
+    $lockedAlt = @($lockedConductor.rungs | Where-Object { $_.name -eq 'alt' })[0]
+    $lockedAlt.launch = 'LOCKEDCMD'
+    $lockedJson = $lockedMap | ConvertTo-Json -Depth 12
+    if (-not $lockedJson.EndsWith("`n")) { $lockedJson += "`n" }
+    [System.IO.File]::WriteAllText($livePath, $lockedJson, [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($portalGo, 'go', [System.Text.UTF8Encoding]::new($false))
+    $portalRes = Wait-IsolatedPwsh -Process $portalHandle.Process -StdoutTask $portalHandle.StdOutTask -StderrTask $portalHandle.StdErrTask -ChildId $portalHandle.ProcessId -TimeoutMs 120000
+    Assert-True 'DEV-241 portal stale: POST child exit 0' ($portalRes.ExitCode -eq 0) '0' ("exit=$($portalRes.ExitCode)`n$($portalRes.StdOut)`n$($portalRes.StdErr)")
+    Assert-True 'DEV-241 portal stale: launch JSON written' (Test-Path -LiteralPath $staleLaunchPath) $staleLaunchPath 'missing'
+    $postJson = Get-Content -LiteralPath $staleLaunchPath -Raw | ConvertFrom-Json
+    Assert-True 'DEV-241 portal stale: launch from locked map' ([string]$postJson.launch -eq 'LOCKEDCMD') 'LOCKEDCMD' ([string]$postJson.launch)
+    $swapLogPath = Join-Path $isoHome '.maestri' 'seat-map-swaps.jsonl'
+    Assert-True 'DEV-241 portal stale: swap-log exists' (Test-Path -LiteralPath $swapLogPath) $swapLogPath 'missing'
+    $swapLast = @(Get-Content -LiteralPath $swapLogPath)[-1] | ConvertFrom-Json
+    Assert-True 'DEV-241 portal stale: swap-log launch from locked map' ([string]$swapLast.launch -eq 'LOCKEDCMD') 'LOCKEDCMD' ([string]$swapLast.launch)
 }
 #endregion DEV247LaunchScan
 
@@ -580,7 +891,14 @@ if ($realSwapExistsBefore) {
     $realSwapLenBefore = $item.Length
 }
 
-$realMaestriSnapBefore = Get-TargetedMaestriSnapshot -Root $realMaestri
+$legacyTempLock = Join-Path ([System.IO.Path]::GetTempPath()) '.seat-map.lock'
+$legacyTempLockExisted = Test-Path -LiteralPath $legacyTempLock
+
+# Long-window isolation proof covers harness-owned files only. Live
+# workspace.json is Maestri canvas state: an active session rewrites it
+# (often same length, new hash) without any harness writer. Gauge F1 on
+# DEV-241 was that flake. The short DEV-237 -Verify window still hashes it.
+$realMaestriSnapBefore = Get-TargetedMaestriSnapshot -Root $realMaestri -ExcludeNames @('workspace.json')
 
 $isoHome = Join-Path ([System.IO.Path]::GetTempPath()) ('seat-map-live-' + [guid]::NewGuid().ToString('N'))
 if ([string]::Equals((ConvertTo-Fwd $isoHome).TrimEnd('/'), (ConvertTo-Fwd $realProfile).TrimEnd('/'), [StringComparison]::OrdinalIgnoreCase)) {
@@ -596,9 +914,14 @@ $dev234AnvilRoleHadFile = $false
 $dev234AnvilRolePriorBytes = $null
 $dev234AnvilRoleDirExisted = $false
 
-Write-Host 'Test-SeatMapLive (isolated HOME)'
-
-Assert-SeatMapHiddenLaunchContracts
+if ($LockOnly) {
+    Write-Host 'Test-SeatMapLive -LockOnly (isolated HOME)'
+}
+else {
+    Write-Host 'Test-SeatMapLive (isolated HOME)'
+    Assert-SeatMapHiddenLaunchContracts
+}
+Assert-SeatMapLockContracts
 
 try {
     New-Item -ItemType Directory -Path $isoHome -Force | Out-Null
@@ -606,6 +929,16 @@ try {
     Assert-True 'DEV-247 role fixtures installed' (Test-Path -LiteralPath (Join-Path $repoRoot '.maestri' 'roles')) (Join-Path $repoRoot '.maestri' 'roles') 'missing'
 
     Assert-True 'example file exists' (Test-Path -LiteralPath $examplePath) $examplePath 'missing'
+
+    if ($LockOnly) {
+        $wsId = [guid]::NewGuid().ToString()
+        $wsDir = New-WorkspaceDir -HomeDir $isoHome -WorkspaceId $wsId -RepoRootHint $repoRoot
+        Write-NoteStubs -WsDir $wsDir
+        $livePath = Join-Path $wsDir 'seat-map.json'
+        Copy-Item -LiteralPath $examplePath -Destination $livePath
+        Invoke-SeatMapLockProofs
+    }
+    else {
 
     $dev247Dir = Join-Path $isoHome 'dev247-launch'
     New-Item -ItemType Directory -Path $dev247Dir -Force | Out-Null
@@ -1081,6 +1414,8 @@ try {
     Assert-True 'fake probe cell readback: pool' ([string]$altCell.pool -eq 'GEMINI') 'GEMINI' ([string]$altCell.pool)
     Assert-True 'fake probe cell readback: evidence' ([string]$altCell.evidence -eq 'probed') 'probed' ([string]$altCell.evidence)
     Assert-True 'fake probe cell readback: cost.source' ([string]$altCell.cost.source -eq 'unknown') 'unknown' ([string]$altCell.cost.source)
+
+    Invoke-SeatMapLockProofs
 
     # --- R1 A1 & A2: Consumer fail-closed tests (schemaVersion 1 & 2.5) ---
     $v1MapPath = Join-Path $isoHome 'v1-seat-map.json'
@@ -1812,6 +2147,7 @@ try {
     $tw5SyncNotes = Invoke-IsolatedPwsh -HomeDir $tw5Home -File $syncScript -ArgumentList @('-SyncNotes', '-SeatMapPath', $tw5MapPath)
     Assert-True 'TW5 -SyncNotes with unrelated incapable seat: exit 0' ($tw5SyncNotes.ExitCode -eq 0) '0' ([string]$tw5SyncNotes.ExitCode)
     Assert-True 'TW5 -SyncNotes: no target runtime-floor error' (-not (Test-TextContains "$($tw5SyncNotes.StdOut)`n$($tw5SyncNotes.StdErr)" $dev234NoFloorLiteral)) "no $dev234NoFloorLiteral" "$($tw5SyncNotes.StdOut)`n$($tw5SyncNotes.StdErr)"
+    }
 }
 finally {
     if ($null -ne $dev234AnvilRoleFile) {
@@ -1855,8 +2191,12 @@ else {
     Assert-True 'real home swap log not created' (-not $realSwapExistsAfter) 'absent' ([string]$realSwapExistsAfter)
 }
 
-$realMaestriSnapAfter = Get-TargetedMaestriSnapshot -Root $realMaestri
+$realMaestriSnapAfter = Get-TargetedMaestriSnapshot -Root $realMaestri -ExcludeNames @('workspace.json')
 Assert-True 'real profile .maestri targeted snapshot unchanged' ($realMaestriSnapBefore -eq $realMaestriSnapAfter) $realMaestriSnapBefore $realMaestriSnapAfter
+
+if (-not $legacyTempLockExisted) {
+    Assert-True 'DEV-241 did not create GetTempPath .seat-map.lock' (-not (Test-Path -LiteralPath $legacyTempLock)) 'absent' $legacyTempLock
+}
 
 Write-Host ''
 Write-Host "Test-SeatMapLive: $checks checks, $failures failures."

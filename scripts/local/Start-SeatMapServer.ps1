@@ -220,8 +220,28 @@ function Invoke-SeatMapSyncChild {
     $err = $stderrTask.GetAwaiter().GetResult()
     if (-not [string]::IsNullOrWhiteSpace($out)) { Write-Host $out }
     if (-not [string]::IsNullOrWhiteSpace($err)) { Write-Warning $err }
-    if (-not $p.HasExited) { return 1 }
-    return [int]$p.ExitCode
+    $code = if (-not $p.HasExited) { 1 } else { [int]$p.ExitCode }
+    return [pscustomobject]@{
+        ExitCode = $code
+        StdOut   = $out
+        StdErr   = $err
+    }
+}
+
+function Wait-PortalSwapBarrierIfRequested {
+    $barrierDir = [string]$env:SEAT_MAP_PORTAL_SWAP_BARRIER_DIR
+    if ([string]::IsNullOrWhiteSpace($barrierDir)) { return }
+    $readyPath = Join-Path $barrierDir 'ready'
+    $goPath = Join-Path $barrierDir 'go'
+    New-Item -ItemType Directory -Path $barrierDir -Force | Out-Null
+    [System.IO.File]::WriteAllText($readyPath, 'ready', [System.Text.UTF8Encoding]::new($false))
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    while (-not (Test-Path -LiteralPath $goPath)) {
+        if ([DateTime]::UtcNow -gt $deadline) {
+            throw 'SEAT_MAP_PORTAL_SWAP_BARRIER_DIR timed out waiting for go.'
+        }
+        Start-Sleep -Milliseconds 50
+    }
 }
 
 function Apply-SeatRung {
@@ -246,15 +266,6 @@ function Apply-SeatRung {
         return @{ success = $false; error = "Seat '$SeatId' has no '$RungName' rung" }
     }
 
-    $previousRung = Get-SeatActiveRungName -Seat $target
-    $previousLaunch = ''
-    $previousPool = ''
-    $prevCell = Get-SeatMapRungByName -Seat $target -Name $previousRung
-    if ($null -ne $prevCell) {
-        if (Test-JsonProperty -Object $prevCell -Name 'launch') { $previousLaunch = [string]$prevCell.launch }
-        if (Test-JsonProperty -Object $prevCell -Name 'pool') { $previousPool = [string]$prevCell.pool }
-    }
-
     $resolvedFloor = Resolve-SeatRuntimeFloor -Map $map -Seat $target
     if (-not $resolvedFloor.Ok) {
         return @{ success = $false; error = [string]$resolvedFloor.Error }
@@ -266,27 +277,32 @@ function Apply-SeatRung {
     }
 
     $targetId = [string]$target.id
-    $syncExit = Invoke-SeatMapSyncChild -SeatMapPath $seatMapPath -SeatId $targetId -RungName $RungName -WorkspaceId $workspaceIdForLog
-    if ($syncExit -ne 0) {
+    Wait-PortalSwapBarrierIfRequested
+    $sync = Invoke-SeatMapSyncChild -SeatMapPath $seatMapPath -SeatId $targetId -RungName $RungName -WorkspaceId $workspaceIdForLog
+    if ($sync.ExitCode -ne 0) {
         return @{
             success = $false
-            error   = "Sync-SeatMap.ps1 exited $syncExit"
+            error   = "Sync-SeatMap.ps1 exited $($sync.ExitCode)"
             seat    = $target.codename
         }
     }
 
-    # $target still has the pre-sync activeRung; rungs are unchanged. When the
-    # requested rung is the floor-role rung, the portal launch is the resolved runtime FLOOR.
-    $rungCell = Get-SeatMapRungByName -Seat $target -Name $RungName
-    if (Test-SeatMapRungIsFloorRole -Seat $target -RungName $RungName -Cell $rungCell) {
-        $launch = [string]$resolvedFloor.Launch
-        $pool = [string]$resolvedFloor.Pool
-    } else {
-        $launch = if ($null -ne $rungCell -and (Test-JsonProperty -Object $rungCell -Name 'launch')) { [string]$rungCell.launch } else { '' }
-        $pool = if ($null -ne $rungCell -and (Test-JsonProperty -Object $rungCell -Name 'pool')) { [string]$rungCell.pool } else { '' }
+    $receipt = Read-SeatMapLockedSwapReceipt -Text $sync.StdOut
+    if ($null -eq $receipt) {
+        return @{
+            success = $false
+            error   = 'Sync-SeatMap.ps1 returned no locked-swap receipt'
+            seat    = $target.codename
+        }
     }
-    $codeName = if (Test-JsonProperty -Object $target -Name 'codename') { [string]$target.codename } else { '' }
-    $preset = if (Test-JsonProperty -Object $target -Name 'preset') { [string]$target.preset } else { '' }
+
+    $launch = [string]$receipt.launch
+    $pool = [string]$receipt.pool
+    $codeName = [string]$receipt.seat
+    $preset = [string]$receipt.preset
+    $previousRung = [string]$receipt.previousActiveRung
+    $previousLaunch = [string]$receipt.previousLaunch
+    $previousPool = [string]$receipt.previousPool
     $recruitCmd = Get-SeatMapRecruitCommand -Codename $codeName -Preset $preset -Launch $launch
     $liveSwapped = $false
     $detail = 'map+roles+notes'
@@ -297,7 +313,7 @@ function Apply-SeatRung {
             # return value. The portal handler reads .success; extra success-stream
             # objects turn $result into an array and StrictMode throws
             # "The property 'success' cannot be found on this object."
-            $null = & $cliPath recruit $target.codename --preset $target.preset --command $launch --replace $target.codename
+            $null = & $cliPath recruit $codeName --preset $preset --command $launch --replace $codeName
             $liveSwapped = ($LASTEXITCODE -eq 0)
             $detail = if ($liveSwapped) { 'recruit --replace' } else { "recruit exit $LASTEXITCODE" }
         } catch {
@@ -305,12 +321,12 @@ function Apply-SeatRung {
             Write-Warning $detail
         }
     }
-    Write-SeatMapSwapLog -Seat $target.codename -Rung $RungName -Launch $launch -Pool $pool -PreviousActiveRung $previousRung -PreviousLaunch $previousLaunch -PreviousPool $previousPool -LiveSwapped $liveSwapped -Detail $detail -WorkspaceId $workspaceIdForLog
+    Write-SeatMapSwapLog -Seat $codeName -Rung $RungName -Launch $launch -Pool $pool -PreviousActiveRung $previousRung -PreviousLaunch $previousLaunch -PreviousPool $previousPool -LiveSwapped $liveSwapped -Detail $detail -WorkspaceId $workspaceIdForLog
 
     return @{
         success        = $true
-        seat           = $target.codename
-        activeRung     = $RungName
+        seat           = $codeName
+        activeRung     = [string]$receipt.activeRung
         launch         = $launch
         pool           = $pool
         liveSwapped    = $liveSwapped

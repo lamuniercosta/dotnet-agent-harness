@@ -78,24 +78,30 @@ if ($Init) {
         Write-SeatMapResolutionFailureMessage -ResolverError ([string]$resolvedMap.Error)
         exit 1
     }
-    if (Test-Path -LiteralPath $SeatMapPath) {
-        Write-Error "Refusing -Init: target already exists at: $SeatMapPath" -ErrorAction Continue
-        exit 1
-    }
-    Write-Host 'Creating from example; not restoring previous state. Swap log: ~/.maestri/seat-map-swaps.jsonl'
-    $swapLogPath = Join-Path $HOME '.maestri' 'seat-map-swaps.jsonl'
-    if ((Test-Path -LiteralPath $swapLogPath) -and ((Get-Item -LiteralPath $swapLogPath).Length -gt 0)) {
-        Write-Warning "Swap log is non-empty at $swapLogPath; -Init copies the example and does not restore previous state."
-    }
     $examplePath = Get-SeatMapExamplePath
     if (-not (Test-Path -LiteralPath $examplePath)) {
         Write-Error "Seat map example not found at: $examplePath" -ErrorAction Continue
         exit 1
     }
-    $utf8 = [System.Text.UTF8Encoding]::new($false)
-    $exampleContent = [System.IO.File]::ReadAllText($examplePath, $utf8)
-    Save-SeatMapFile -Path $SeatMapPath -Content $exampleContent
-    exit 0
+    $mapLock = Enter-SeatMapProcessLock -SeatMapPath $SeatMapPath
+    try {
+        if (Test-Path -LiteralPath $SeatMapPath) {
+            Write-Error "Refusing -Init: target already exists at: $SeatMapPath" -ErrorAction Continue
+            exit 1
+        }
+        Write-Host 'Creating from example; not restoring previous state. Swap log: ~/.maestri/seat-map-swaps.jsonl'
+        $swapLogPath = Join-Path $HOME '.maestri' 'seat-map-swaps.jsonl'
+        if ((Test-Path -LiteralPath $swapLogPath) -and ((Get-Item -LiteralPath $swapLogPath).Length -gt 0)) {
+            Write-Warning "Swap log is non-empty at $swapLogPath; -Init copies the example and does not restore previous state."
+        }
+        $utf8 = [System.Text.UTF8Encoding]::new($false)
+        $exampleContent = [System.IO.File]::ReadAllText($examplePath, $utf8)
+        Save-SeatMapFile -Path $SeatMapPath -Content $exampleContent
+        exit 0
+    }
+    finally {
+        Exit-SeatMapProcessLock -Handle $mapLock
+    }
 }
 
 if (-not $resolvedMap.Ok) {
@@ -465,33 +471,69 @@ if ($Seat -and $Rung) {
         Write-ViolationsAndExit -Violations @(Get-TargetSwapNoteMisses -NotePaths $preflightNotes)
     }
 
-    $script:swapRollback = [ordered]@{}
-    Add-SwapRollbackPath -Path $SeatMapPath
-    Add-SwapRollbackPath -Path $swapRoleFile
-    if ($SyncRoles -or $All) {
-        $rolesDirForRollback = Join-Path $repoRoot '.maestri' 'roles'
-        foreach ($s in @($seatMap.seats)) {
-            if (Test-JsonProperty -Object $s -Name 'roleId') {
-                Add-SwapRollbackPath -Path (Join-Path $rolesDirForRollback $s.roleId 'role.json')
+    $mapLock = Enter-SeatMapProcessLock -SeatMapPath $SeatMapPath
+    try {
+        $seatMap = Get-Content -LiteralPath $SeatMapPath -Raw | ConvertFrom-Json
+        $swapTarget = Get-SeatByName -Map $seatMap -Name $Seat
+        if ($null -eq $swapTarget) {
+            throw "Seat '$Seat' not found in seat map."
+        }
+        if ($null -eq (Get-SeatMapRungByName -Seat $swapTarget -Name $Rung)) {
+            throw "Seat '$Seat' has no declared rung '$Rung'."
+        }
+        $targetRuntimeFloor = Resolve-SeatRuntimeFloor -Map $seatMap -Seat $swapTarget
+        if (-not $targetRuntimeFloor.Ok) {
+            Write-Error $targetRuntimeFloor.Error -ErrorAction Continue
+            exit 1
+        }
+        $lockedDecision = Get-SeatMapTargetSwapDecision -Seat $swapTarget -RungName $Rung -RuntimeFloor $targetRuntimeFloor
+        $swapTarget.activeRung = $Rung
+        Write-ViolationsAndExit -Violations @(Get-SeatMapViolations -Map $seatMap)
+
+        $swapRoleJson = $null
+        $swapChainLine = $null
+        if (Test-Path -LiteralPath $swapRoleFile) {
+            $swapRoleJson = Get-Content -LiteralPath $swapRoleFile -Raw | ConvertFrom-Json
+            $swapChainLine = Get-ModelChainLine -Seat $swapTarget -FloorLaunch $targetRuntimeFloor.Launch
+            if ($swapRoleJson.prompt -notmatch '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
+                Write-Error "Seat '$($swapTarget.codename)' role file has no Model chain line; refusing target swap before writes." -ErrorAction Continue
+                exit 1
+            }
+            $swapRoleJson.prompt = Replace-LiteralRegex -InputText $swapRoleJson.prompt -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $swapChainLine
+        }
+
+        $script:swapRollback = [ordered]@{}
+        Add-SwapRollbackPath -Path $SeatMapPath
+        Add-SwapRollbackPath -Path $swapRoleFile
+        if ($SyncRoles -or $All) {
+            $rolesDirForRollback = Join-Path $repoRoot '.maestri' 'roles'
+            foreach ($s in @($seatMap.seats)) {
+                if (Test-JsonProperty -Object $s -Name 'roleId') {
+                    Add-SwapRollbackPath -Path (Join-Path $rolesDirForRollback $s.roleId 'role.json')
+                }
             }
         }
-    }
-    if ($SyncNotes -or $All) {
-        Add-SwapRollbackPath -Path $preflightNotes.CharterPath
-        Add-SwapRollbackPath -Path $preflightNotes.RestartPath
-    }
-    trap {
-        Restore-SwapRollback
-        exit 1
-    }
+        if ($SyncNotes -or $All) {
+            Add-SwapRollbackPath -Path $preflightNotes.CharterPath
+            Add-SwapRollbackPath -Path $preflightNotes.RestartPath
+        }
+        trap {
+            Restore-SwapRollback
+            exit 1
+        }
 
-    Save-SeatMap -Map $seatMap -Path $SeatMapPath
-    if ($null -ne $swapRoleJson) {
-        Save-SeatMap -Map $swapRoleJson -Path $swapRoleFile
+        Save-SeatMap -Map $seatMap -Path $SeatMapPath
+        if ($null -ne $swapRoleJson) {
+            Save-SeatMap -Map $swapRoleJson -Path $swapRoleFile
+        }
+        [Console]::Out.WriteLine((Format-SeatMapLockedSwapLine -Decision $lockedDecision))
+        Write-Host "Updated seat '$($swapTarget.codename)' activeRung to '$Rung'." -ForegroundColor Green
+        if ($null -ne $swapRoleJson) {
+            Write-Host "  Updated role model-chain FLOOR for $($swapTarget.codename) to runtime floor '$($targetRuntimeFloor.Launch)'." -ForegroundColor Green
+        }
     }
-    Write-Host "Updated seat '$($swapTarget.codename)' activeRung to '$Rung'." -ForegroundColor Green
-    if ($null -ne $swapRoleJson) {
-        Write-Host "  Updated role model-chain FLOOR for $($swapTarget.codename) to runtime floor '$($targetRuntimeFloor.Launch)'." -ForegroundColor Green
+    finally {
+        Exit-SeatMapProcessLock -Handle $mapLock
     }
 }
 
