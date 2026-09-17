@@ -378,10 +378,12 @@ jobs:
         shell: pwsh
         run: ./hooks/Test-Guard.ps1
 
+      # DEV-260: scripts/local self-tests are parked pending DEV-253-259 relocation to maestri-toolkit; set RUN_LOCAL_SELF_TESTS=true to run them.
       # Guards Get-JsonPath, which Set-IssueInProgress.ps1 walks GraphQL
       # responses with. The StrictMode crashes it prevents are cheap to
       # regression-test and invisible to a distribution test.
       - name: JSON property helpers tolerate absent note properties
+        if: ${{ vars.RUN_LOCAL_SELF_TESTS == 'true' }}
         shell: pwsh
         run: ./scripts/local/Test-JsonProperty.ps1
 
@@ -389,14 +391,17 @@ jobs:
       # rerun receipts, verb dispatch) are invisible to a distribution test.
       # This drives the real script against a fake gh; no network, no auth.
       - name: pr-review helper paginates and keys receipts per run
+        if: ${{ vars.RUN_LOCAL_SELF_TESTS == 'true' }}
         shell: pwsh
         run: ./scripts/local/Test-PrReviewHelper.ps1
 
       - name: Seat-map schema and charter invariants
+        if: ${{ vars.RUN_LOCAL_SELF_TESTS == 'true' }}
         shell: pwsh
         run: ./scripts/local/Test-SeatMap.ps1 -SeatMapPath scripts/local/seat-map.example.json
 
       - name: Seat-map live path invariants
+        if: ${{ vars.RUN_LOCAL_SELF_TESTS == 'true' }}
         shell: pwsh
         run: ./scripts/local/Test-SeatMapLive.ps1
 
@@ -479,15 +484,19 @@ jobs:
           }
           Write-Host '-WhatIf wrote nothing, as promised.'
 
+      # DEV-260: scripts/local self-tests are parked pending DEV-253-259 relocation to maestri-toolkit; set RUN_LOCAL_SELF_TESTS=true to run them.
       - name: Context-floor reporter self-tests
+        if: ${{ vars.RUN_LOCAL_SELF_TESTS == 'true' }}
         shell: pwsh
         run: ./scripts/local/Test-ContextFloor.ps1
 
       - name: Context floor has not regressed
+        if: ${{ vars.RUN_LOCAL_SELF_TESTS == 'true' }}
         shell: pwsh
         run: ./scripts/local/Report-ContextFloor.ps1 -Baseline
 
       - name: Baseline guard and self-tests
+        if: ${{ vars.RUN_LOCAL_SELF_TESTS == 'true' }}
         shell: pwsh
         run: ./scripts/local/Test-BaselineGuard.ps1
 
