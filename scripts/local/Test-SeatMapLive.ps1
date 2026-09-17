@@ -292,6 +292,105 @@ function New-ServerStartProcessLines {
     return $lines
 }
 
+function Write-FakeMaestriCli {
+    param(
+        [Parameter(Mandatory)][string]$CliPath,
+        [Parameter(Mandatory)][string]$SentinelPath,
+        [int]$ExitCode = 0
+    )
+    $dir = Split-Path -Parent $CliPath
+    if (-not [string]::IsNullOrWhiteSpace($dir) -and -not (Test-Path -LiteralPath $dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $sentinelLiteral = $SentinelPath.Replace("'", "''")
+    $body = @(
+        'Set-StrictMode -Version Latest',
+        "[System.IO.File]::WriteAllText('$sentinelLiteral', 'ran')",
+        "Write-Output 'fake maestri recruit stdout'",
+        "exit $ExitCode"
+    ) -join [Environment]::NewLine
+    [System.IO.File]::WriteAllText($CliPath, $body + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+}
+
+function New-Dev246PortalLiveChildLines {
+    param(
+        [Parameter(Mandatory)][string]$Port,
+        [Parameter(Mandatory)][string]$MapPathLiteral,
+        [Parameter(Mandatory)][string]$WorkspaceIdLiteral,
+        [Parameter(Mandatory)][string]$ServerScriptLiteral,
+        [Parameter(Mandatory)][string]$IsoHomeLiteral,
+        [Parameter(Mandatory)][string]$FakeCliLiteral,
+        [Parameter(Mandatory)][string]$SentinelLiteral,
+        [Parameter(Mandatory)][string]$LogName,
+        [bool]$RequireFakeExists,
+        [bool]$ExpectLiveSwapped,
+        [bool]$ExpectSentinel
+    )
+    $liveExpect = if ($ExpectLiveSwapped) { '$true' } else { '$false' }
+    $existsAssert = if ($RequireFakeExists) {
+        "if ((Test-Path -LiteralPath '$FakeCliLiteral') -ne `$true) { throw 'fake MAESTRI_CLI exists equals `$false' }"
+    } else {
+        "if (Test-Path -LiteralPath '$FakeCliLiteral') { throw 'nonexistent MAESTRI_CLI unexpectedly exists' }"
+    }
+    $sentinelAssert = if ($ExpectSentinel) {
+        @(
+            "if ((Test-Path -LiteralPath '$SentinelLiteral') -ne `$true) { throw 'fake-CLI sentinel exists equals `$false' }"
+        )
+    } else {
+        @()
+    }
+    $lines = @(
+        $existsAssert
+        "`$serverEnv = @{ HOME = `$env:HOME; USERPROFILE = `$env:USERPROFILE; MAESTRI_PIPE = '1'; MAESTRI_CLI = '$FakeCliLiteral' }"
+    ) + @(
+        New-ServerStartProcessLines -ArgumentListLiteral "@('-NoProfile', '-File', '$ServerScriptLiteral', '-Port', '$Port', '-SeatMapPath', '$MapPathLiteral', '-WorkspaceId', '$WorkspaceIdLiteral')" -RedirectLiteral "(Join-Path '$IsoHomeLiteral' '$LogName')" -EnvironmentLiteral '$serverEnv'
+    ) + @(
+        "for (`$ready = 0; `$ready -lt 50; `$ready++) {"
+        "    try {"
+        "        `$probe = Invoke-WebRequest -Uri 'http://localhost:$Port/' -UseBasicParsing -TimeoutSec 2"
+        "        if (`$probe.StatusCode -eq 200) { break }"
+        "    } catch { }"
+        "    Start-Sleep -Milliseconds 200"
+        "}"
+        "try {"
+        "    `$resp = Invoke-WebRequest -Uri 'http://localhost:$Port/' -UseBasicParsing"
+        "    if (`$resp.StatusCode -ne 200) { throw 'GET failed' }"
+        "    `$html = `$resp.Content"
+        "    `$tokenMatch = [regex]::Match(`$html, '<meta name=""seat-map-token"" content=""([^""]+)""')"
+        "    if (-not `$tokenMatch.Success) { throw 'Token missing' }"
+        "    `$token = `$tokenMatch.Groups[1].Value"
+        "    `$body = @{ seatId = 'conductor'; rung = 'alt' } | ConvertTo-Json"
+        "    `$headers = @{ 'X-Seat-Map-Token' = `$token }"
+        "    `$postResp = Invoke-WebRequest -Uri 'http://localhost:$Port/api/seats/set' -Method POST -Headers `$headers -Body `$body -ContentType 'application/json' -UseBasicParsing -SkipHttpErrorCheck"
+        "    if (`$postResp.StatusCode -ne 200) { throw 'POST failed' }"
+        "    `$raw = [string]`$postResp.Content"
+        "    `$trim = `$raw.Trim()"
+        "    if (-not `$trim.StartsWith('{')) { throw 'POST body is not one JSON object' }"
+        "    `$postJson = `$trim | ConvertFrom-Json"
+        "    if (`$postJson -is [System.Array]) { throw 'POST body parsed as array' }"
+        "    if (-not `$postJson.success) { throw 'POST success=false' }"
+        "    if (`$postJson.success -ne `$true) { throw 'success -eq `$true failed' }"
+        "    if (`$postJson.liveSwapped -ne $liveExpect) { throw 'liveSwapped -eq $liveExpect failed' }"
+        "    `$want = @('success', 'seat', 'activeRung', 'launch', 'pool', 'liveSwapped', 'recruitCommand')"
+        "    foreach (`$m in `$want) {"
+        "        if (`$null -eq `$postJson.PSObject.Properties[`$m]) { throw ""missing member `$m"" }"
+        "    }"
+        "    `$extra = @(`$postJson.PSObject.Properties.Name | Where-Object { `$_ -notin `$want })"
+        "    if (`$extra.Count -ne 0) { throw ""unexpected members: `$(`$extra -join ',')"" }"
+        "    `$errText = `$raw"
+        "    if (`$null -ne `$postJson.PSObject.Properties['error']) { `$errText += [string]`$postJson.error }"
+        "    if (`$null -ne `$postJson.PSObject.Properties['detail']) { `$errText += [string]`$postJson.detail }"
+        "    `$logPath = Join-Path '$IsoHomeLiteral' '$LogName'"
+        "    if (Test-Path -LiteralPath `$logPath) { `$errText += [System.IO.File]::ReadAllText(`$logPath) }"
+        "    if (`$errText.Contains(""The property 'success' cannot be found"")) { throw 'missing-success-property handler error' }"
+    ) + $sentinelAssert + @(
+        "} finally {"
+        "    if (`$null -ne `$serverProc) { Stop-Process -Id `$serverProc.Id -Force -ErrorAction SilentlyContinue }"
+        "}"
+    )
+    return $lines
+}
+
 function Get-PrimaryWorktreePath {
     param([string]$RepoRoot)
     $porcelain = & git -C $RepoRoot worktree list --porcelain 2>$null
@@ -957,6 +1056,91 @@ try {
     $portalReadbackMap = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
     $portalCondSeat = @($portalReadbackMap.seats | Where-Object { $_.id -eq 'conductor' })[0]
     Assert-True 'portal HTTP POST: activeRung readback confirmed alt' ($portalCondSeat.activeRung -eq 'alt') 'alt' ([string]$portalCondSeat.activeRung)
+
+    # --- DEV-246: portal POST with truthy MAESTRI_PIPE and fake MAESTRI_CLI ---
+    $dev246WsId = [guid]::NewGuid().ToString()
+    $dev246WsDir = New-WorkspaceDir -HomeDir $isoHome -WorkspaceId $dev246WsId -RepoRootHint $repoRoot
+    Write-NoteStubs -WsDir $dev246WsDir
+    $dev246MapPath = Join-Path $dev246WsDir 'seat-map.json'
+    Copy-Item -LiteralPath $examplePath -Destination $dev246MapPath -Force
+    $dev246Map = Get-Content -LiteralPath $dev246MapPath -Raw | ConvertFrom-Json
+    $dev246Conductor = @($dev246Map.seats | Where-Object { $_.id -eq 'conductor' })[0]
+    $dev246AltRung = @($dev246Conductor.rungs | Where-Object { $_.name -eq 'alt' })[0]
+    $dev246FloorRung = @($dev246Conductor.rungs | Where-Object { $_.name -eq 'floor' })[0]
+    $dev246AltRung.evidence = 'cleared'
+    $dev246FloorRung.evidence = 'measured'
+    $dev246MapJson = $dev246Map | ConvertTo-Json -Depth 12
+    if (-not $dev246MapJson.EndsWith("`n")) { $dev246MapJson += "`n" }
+    [System.IO.File]::WriteAllText($dev246MapPath, $dev246MapJson, [System.Text.UTF8Encoding]::new($false))
+    $dev246MapLiteral = $dev246MapPath.Replace("'", "''")
+    $dev246WsIdLiteral = $dev246WsId.Replace("'", "''")
+    $dev246IsoLiteral = $isoHome.Replace("'", "''")
+    $dev246ServerLiteral = $serverScript.Replace("'", "''")
+
+    $dev246Cases = @(
+        [pscustomobject]@{
+            Name               = 'F1-ok'
+            Port               = '8794'
+            CreateFake         = $true
+            FakeExitCode       = 0
+            RequireFakeExists  = $true
+            ExpectLiveSwapped  = $true
+            ExpectSentinel     = $true
+        }
+        [pscustomobject]@{
+            Name               = 'F3-exit1'
+            Port               = '8795'
+            CreateFake         = $true
+            FakeExitCode       = 1
+            RequireFakeExists  = $true
+            ExpectLiveSwapped  = $false
+            ExpectSentinel     = $false
+        }
+        [pscustomobject]@{
+            Name               = 'F3-missing'
+            Port               = '8796'
+            CreateFake         = $false
+            FakeExitCode       = 1
+            RequireFakeExists  = $false
+            ExpectLiveSwapped  = $false
+            ExpectSentinel     = $false
+        }
+    )
+    foreach ($dev246Case in $dev246Cases) {
+        $dev246CaseDir = Join-Path $isoHome ('dev246-' + $dev246Case.Name)
+        New-Item -ItemType Directory -Path $dev246CaseDir -Force | Out-Null
+        $dev246FakeCli = Join-Path $dev246CaseDir 'fake-maestri.ps1'
+        $dev246Sentinel = Join-Path $dev246CaseDir 'sentinel.txt'
+        if ($dev246Case.CreateFake) {
+            Write-FakeMaestriCli -CliPath $dev246FakeCli -SentinelPath $dev246Sentinel -ExitCode $dev246Case.FakeExitCode
+        }
+        $fakeExistsBefore = Test-Path -LiteralPath $dev246FakeCli
+        if ($dev246Case.RequireFakeExists) {
+            Assert-True ("DEV-246 $($dev246Case.Name): fake MAESTRI_CLI exists before server start") ($fakeExistsBefore -eq $true) '$true' ([string]$fakeExistsBefore)
+        } else {
+            Assert-True ("DEV-246 $($dev246Case.Name): fake MAESTRI_CLI missing before server start") ($fakeExistsBefore -eq $false) '$false' ([string]$fakeExistsBefore)
+        }
+        $dev246Child = Join-Path $isoHome ('test-dev246-' + $dev246Case.Name + '.ps1')
+        $dev246ChildLines = New-Dev246PortalLiveChildLines `
+            -Port $dev246Case.Port `
+            -MapPathLiteral $dev246MapLiteral `
+            -WorkspaceIdLiteral $dev246WsIdLiteral `
+            -ServerScriptLiteral $dev246ServerLiteral `
+            -IsoHomeLiteral $dev246IsoLiteral `
+            -FakeCliLiteral $dev246FakeCli.Replace("'", "''") `
+            -SentinelLiteral $dev246Sentinel.Replace("'", "''") `
+            -LogName ('server-dev246-' + $dev246Case.Name + '.log') `
+            -RequireFakeExists $dev246Case.RequireFakeExists `
+            -ExpectLiveSwapped $dev246Case.ExpectLiveSwapped `
+            -ExpectSentinel $dev246Case.ExpectSentinel
+        [System.IO.File]::WriteAllText($dev246Child, (($dev246ChildLines -join [Environment]::NewLine) + [Environment]::NewLine), [System.Text.UTF8Encoding]::new($false))
+        $dev246Res = Invoke-IsolatedPwsh -HomeDir $isoHome -File $dev246Child
+        Assert-True ("DEV-246 $($dev246Case.Name): isolated POST exit 0") ($dev246Res.ExitCode -eq 0) '0' ("exit=$($dev246Res.ExitCode)`n$($dev246Res.StdOut)`n$($dev246Res.StdErr)")
+        if ($dev246Case.ExpectSentinel) {
+            $sentinelExists = Test-Path -LiteralPath $dev246Sentinel
+            Assert-True ("DEV-246 $($dev246Case.Name): fake-CLI sentinel exists equals `$true") ($sentinelExists -eq $true) '$true' ([string]$sentinelExists)
+        }
+    }
 
     # --- TW1: Portal failure atomicity (no-capable-floor fixture) ---
     $tw1Home = Join-Path $isoHome 'tw1-portal-fail'

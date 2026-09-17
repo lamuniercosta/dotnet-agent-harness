@@ -288,7 +288,11 @@ function Apply-SeatRung {
     if ($env:MAESTRI_PIPE) {
         try {
             $cliPath = if ($env:MAESTRI_CLI) { $env:MAESTRI_CLI } else { 'maestri' }
-            & $cliPath recruit $target.codename --preset $target.preset --command $launch --replace $target.codename
+            # Discard recruit stdout so CLI chatter cannot join this function's
+            # return value. The portal handler reads .success; extra success-stream
+            # objects turn $result into an array and StrictMode throws
+            # "The property 'success' cannot be found on this object."
+            $null = & $cliPath recruit $target.codename --preset $target.preset --command $launch --replace $target.codename
             $liveSwapped = ($LASTEXITCODE -eq 0)
             $detail = if ($liveSwapped) { 'recruit --replace' } else { "recruit exit $LASTEXITCODE" }
         } catch {
