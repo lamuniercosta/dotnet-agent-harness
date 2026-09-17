@@ -31,6 +31,7 @@
 .PARAMETER Verify
     Read-only drift check of each seat-map head launch against workspace.json
     terminals. Exit 1 on drift, missing/duplicate terminals, or workspace errors.
+    Cannot be combined with -Seat/-Rung; use -All for write/sync then verify.
     Not a merge-bar gate.
 .PARAMETER GenerateCommands
     Print maestri recruit --replace commands.
@@ -61,6 +62,11 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot '_seat-map.ps1')
+
+if ($Verify -and -not $All -and (-not [string]::IsNullOrWhiteSpace($Seat) -or -not [string]::IsNullOrWhiteSpace($Rung))) {
+    Write-Error '-Verify cannot be combined with -Seat/-Rung because -Verify is read-only. Use -All for write/sync then verify.' -ErrorAction Continue
+    exit 1
+}
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
 $resolvedMap = Resolve-LiveSeatMapPath -SeatMapPath $SeatMapPath -WorkspaceId $WorkspaceId -RepoRoot $repoRoot
@@ -264,7 +270,13 @@ function Get-WorkspaceTerminalParseResult {
         $hasRole = Test-JsonProperty -Object $t0 -Name 'assignedRoleId'
         $hasCommand = Test-JsonProperty -Object $t0 -Name 'command'
         $roleId = if ($hasRole) { [string]$t0.assignedRoleId } else { '' }
-        if (-not $hasRole -or [string]::IsNullOrEmpty($roleId) -or -not $hasCommand) {
+        if (-not $hasRole -or [string]::IsNullOrEmpty($roleId)) {
+            # Unassigned operator terminal (command, no assignedRoleId): skip.
+            # Assigned seat terminals still require command; empty _0 stays fatal.
+            if ($hasCommand) { continue }
+            return [pscustomobject]@{ Malformed = $true; Records = @() }
+        }
+        if (-not $hasCommand) {
             return [pscustomobject]@{ Malformed = $true; Records = @() }
         }
         $records.Add([pscustomobject]@{
@@ -298,17 +310,15 @@ function Invoke-SeatMapWorkspaceVerify {
             $wsId = Resolve-MaestriWorkspaceId -WorkspaceId $WorkspaceIdParam -RepoRoot $RepoRootParam
         }
         catch {
-            Write-VerifyReceiptIfAll
             Write-SeatMapResolutionFailureMessage -ResolverError ([string]$_.Exception.Message)
-            exit 1
+            return $false
         }
     }
 
     $wsPath = Join-Path $HOME '.maestri' 'workspaces' $wsId 'workspace.json'
     if (-not (Test-Path -LiteralPath $wsPath)) {
-        Write-VerifyReceiptIfAll
-        [Console]::Error.WriteLine("Verify workspace.json not found at: $wsPath")
-        exit 1
+        [Console]::Error.WriteLine("Verify workspace.json not found for workspaceId=$wsId")
+        return $false
     }
 
     $ws = $null
@@ -317,27 +327,23 @@ function Invoke-SeatMapWorkspaceVerify {
         $ws = $raw | ConvertFrom-Json
     }
     catch {
-        Write-VerifyReceiptIfAll
-        [Console]::Error.WriteLine("Verify workspace.json unreadable at: $wsPath")
-        exit 1
+        [Console]::Error.WriteLine("Verify workspace.json unreadable for workspaceId=$wsId")
+        return $false
     }
     if ($null -eq $ws) {
-        Write-VerifyReceiptIfAll
-        [Console]::Error.WriteLine("Verify workspace.json unreadable at: $wsPath")
-        exit 1
+        [Console]::Error.WriteLine("Verify workspace.json unreadable for workspaceId=$wsId")
+        return $false
     }
 
     $parsed = Get-WorkspaceTerminalParseResult -Workspace $ws
     if ($parsed.Malformed) {
-        Write-VerifyReceiptIfAll
         [Console]::Error.WriteLine('[VERIFY ERROR] workspace terminal payload malformed')
-        exit 1
+        return $false
     }
     $records = @($parsed.Records)
     if ($records.Count -eq 0) {
-        Write-VerifyReceiptIfAll
         [Console]::Error.WriteLine('[VERIFY ERROR] no terminal records found in workspace.json')
-        exit 1
+        return $false
     }
 
     $issueCount = 0
@@ -380,12 +386,12 @@ function Invoke-SeatMapWorkspaceVerify {
     }
 
     if ($issueCount -gt 0) {
-        Write-VerifyReceiptIfAll
-        [Console]::Error.WriteLine("VERIFY FAILED: $issueCount issue(s); workspaceId=$wsId path=$wsPath")
-        exit 1
+        [Console]::Error.WriteLine("VERIFY FAILED: $issueCount issue(s); workspaceId=$wsId")
+        return $false
     }
 
-    [Console]::Out.WriteLine("VERIFY OK: $matchCount seat(s) matched; workspaceId=$wsId path=$wsPath")
+    [Console]::Out.WriteLine("VERIFY OK: $matchCount seat(s) matched; workspaceId=$wsId")
+    return $true
 }
 
 $violations = @(Get-SeatMapViolations -Map $seatMap)
@@ -604,8 +610,9 @@ if ($SyncNotes -or $All) {
     }
 }
 
+$verifyFailed = $false
 if ($Verify -or $All) {
-    Invoke-SeatMapWorkspaceVerify -Map $seatMap -WorkspaceIdParam $WorkspaceId -ResolvedWorkspaceIdParam $resolvedWorkspaceId -RepoRootParam $repoRoot
+    $verifyFailed = -not (Invoke-SeatMapWorkspaceVerify -Map $seatMap -WorkspaceIdParam $WorkspaceId -ResolvedWorkspaceIdParam $resolvedWorkspaceId -RepoRootParam $repoRoot)
 }
 
 if ($syncMisses.Count -gt 0) {
@@ -616,12 +623,24 @@ if ($syncMisses.Count -gt 0) {
     )
     # Target-swap notes miss: restore map/role/notes/swap-log (B1/A7). Missing
     # other seats' role files stay non-fatal for a committed target swap (A9).
+    # Process this before taking a verify exit so swap+syncMiss+drift cannot
+    # skip Restore-SwapRollback or the A9 warning path.
     if ($null -ne $swapTarget -and $noteFatal.Count -eq 0) {
         foreach ($m in $syncMisses) { Write-Warning ([string]$m) }
-        exit 0
+        if (-not $verifyFailed) {
+            exit 0
+        }
+    } else {
+        Restore-SwapRollback
+        Write-ViolationsAndExit -Violations @($syncMisses)
     }
-    Restore-SwapRollback
-    Write-ViolationsAndExit -Violations @($syncMisses)
+}
+
+if ($verifyFailed) {
+    if ($syncMisses.Count -eq 0) {
+        Write-VerifyReceiptIfAll
+    }
+    exit 1
 }
 
 exit 0

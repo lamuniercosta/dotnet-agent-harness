@@ -55,6 +55,17 @@ function Test-TextContains {
     return (ConvertTo-Fwd $Haystack).Contains((ConvertTo-Fwd $Needle))
 }
 
+function Assert-VerifyOutputRedacted {
+    param(
+        [string]$Name,
+        [string]$Combined,
+        [string]$WorkspaceJsonPath
+    )
+    Assert-True "$Name : no C:\Users\" (-not (Test-TextContains $Combined 'C:\Users\')) 'absent C:\Users\' $Combined
+    Assert-True "$Name : no `$HOME literal" (-not (Test-TextContains $Combined '$HOME')) 'absent $HOME' $Combined
+    Assert-True "$Name : no full workspace.json path" (-not (Test-TextContains $Combined $WorkspaceJsonPath)) "absent $WorkspaceJsonPath" $Combined
+}
+
 function Get-Porcelain {
     $raw = & git -C $repoRoot status --porcelain 2>&1
     if ($null -eq $raw) { return '' }
@@ -467,6 +478,21 @@ try {
     Assert-True 'DEV-237 read-only: isolated HOME snapshot unchanged' ($homeBeforeVerify -eq $homeAfterVerify) $homeBeforeVerify $homeAfterVerify
     Assert-True 'DEV-237 read-only: real .maestri targeted snapshot unchanged' ($realBeforeVerify -eq $realAfterVerify) $realBeforeVerify $realAfterVerify
 
+    $unassignedRecords = @(Get-HeadLaunchRecords -SeatMapPath $livePath)
+    $unassignedRecords += [pscustomobject]@{
+        AssignedRoleId = ''
+        Command        = 'operator-unassigned-terminal'
+        MissingRoleId  = $true
+    }
+    Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath -Terminals $unassignedRecords
+    $verifyUnassigned = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify')
+    $verifyUnassignedCombined = "$($verifyUnassigned.StdOut)`n$($verifyUnassigned.StdErr)"
+    Assert-True 'DEV-237 unassigned terminal: exit 0' ($verifyUnassigned.ExitCode -eq 0) '0' ("exit=$($verifyUnassigned.ExitCode)`n$verifyUnassignedCombined")
+    Assert-True 'DEV-237 unassigned terminal: no malformed abort' (-not (Test-TextContains $verifyUnassignedCombined $malformedLiteral)) "absent $malformedLiteral" $verifyUnassignedCombined
+    Assert-True 'DEV-237 unassigned terminal: Anvil MATCH' (Test-TextContains $verifyUnassigned.StdOut $anvilMatch) $anvilMatch $verifyUnassigned.StdOut
+    Assert-True 'DEV-237 unassigned terminal: Cog MATCH' (Test-TextContains $verifyUnassigned.StdOut $cogMatch) $cogMatch $verifyUnassigned.StdOut
+    Assert-True 'DEV-237 unassigned terminal: VERIFY OK:' (Test-TextContains $verifyUnassigned.StdOut 'VERIFY OK:') 'VERIFY OK:' $verifyUnassigned.StdOut
+
     $crlfRecords = @(Get-HeadLaunchRecords -SeatMapPath $livePath)
     foreach ($row in $crlfRecords) {
         if ($row.AssignedRoleId -eq $anvilRoleId) {
@@ -491,6 +517,7 @@ try {
     Assert-True 'DEV-237 drift: VERIFY FAILED:' (Test-TextContains $verifyDriftCombined 'VERIFY FAILED:') 'VERIFY FAILED:' $verifyDriftCombined
     Assert-True 'DEV-237 drift: expected launch redacted' (-not (Test-TextContains $verifyDriftCombined $anvilLaunch)) "absent $anvilLaunch" $verifyDriftCombined
     Assert-True 'DEV-237 drift: actual launch redacted' (-not (Test-TextContains $verifyDriftCombined $anvilDriftLaunch)) "absent $anvilDriftLaunch" $verifyDriftCombined
+    Assert-VerifyOutputRedacted -Name 'DEV-237 drift final failure' -Combined $verifyDriftCombined -WorkspaceJsonPath (Join-Path $wsDir 'workspace.json')
 
     $missingRecords = @(Get-HeadLaunchRecords -SeatMapPath $livePath | Where-Object { $_.AssignedRoleId -ne $cogRoleId })
     Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath -Terminals $missingRecords
@@ -531,11 +558,22 @@ try {
 
     $wjPath = Join-Path $wsDir 'workspace.json'
     $wjBackup = [System.IO.File]::ReadAllBytes($wjPath)
+    $missingWsLiteral = "Verify workspace.json not found for workspaceId=$wsId"
     Remove-Item -LiteralPath $wjPath -Force
     $verifyMissingWs = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify', '-WorkspaceId', $wsId)
     $verifyMissingWsCombined = "$($verifyMissingWs.StdOut)`n$($verifyMissingWs.StdErr)"
     Assert-True 'DEV-237 missing workspace.json: exit 1' ($verifyMissingWs.ExitCode -eq 1) '1' ("exit=$($verifyMissingWs.ExitCode)`n$verifyMissingWsCombined")
-    Assert-True 'DEV-237 missing workspace.json: not found at' (Test-TextContains $verifyMissingWsCombined 'Verify workspace.json not found at:') 'Verify workspace.json not found at:' $verifyMissingWsCombined
+    Assert-True 'DEV-237 missing workspace.json: workspaceId wording' (Test-TextContains $verifyMissingWsCombined $missingWsLiteral) $missingWsLiteral $verifyMissingWsCombined
+    Assert-VerifyOutputRedacted -Name 'DEV-237 missing workspace.json' -Combined $verifyMissingWsCombined -WorkspaceJsonPath $wjPath
+    [System.IO.File]::WriteAllBytes($wjPath, $wjBackup)
+
+    $unreadableLiteral = "Verify workspace.json unreadable for workspaceId=$wsId"
+    [System.IO.File]::WriteAllText($wjPath, '{ not-json', [System.Text.UTF8Encoding]::new($false))
+    $verifyUnreadable = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify', '-WorkspaceId', $wsId)
+    $verifyUnreadableCombined = "$($verifyUnreadable.StdOut)`n$($verifyUnreadable.StdErr)"
+    Assert-True 'DEV-237 unreadable workspace.json: exit 1' ($verifyUnreadable.ExitCode -eq 1) '1' ("exit=$($verifyUnreadable.ExitCode)`n$verifyUnreadableCombined")
+    Assert-True 'DEV-237 unreadable workspace.json: workspaceId wording' (Test-TextContains $verifyUnreadableCombined $unreadableLiteral) $unreadableLiteral $verifyUnreadableCombined
+    Assert-VerifyOutputRedacted -Name 'DEV-237 unreadable workspace.json' -Combined $verifyUnreadableCombined -WorkspaceJsonPath $wjPath
     [System.IO.File]::WriteAllBytes($wjPath, $wjBackup)
 
     $accumRecords = @(Get-HeadLaunchRecords -SeatMapPath $livePath | Where-Object { $_.AssignedRoleId -ne $cogRoleId })
@@ -585,6 +623,65 @@ try {
     Assert-True 'DEV-237 -All drift: partial-write receipt' (Test-TextContains $allDriftCombined 'Sync phases completed before verify failure; workspace drift remains.') 'Sync phases completed before verify failure; workspace drift remains.' $allDriftCombined
     Assert-True 'DEV-237 -All drift: VERIFY DRIFT' (Test-TextContains $allDriftCombined '[VERIFY DRIFT]') '[VERIFY DRIFT]' $allDriftCombined
     Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath
+
+    $completedReceipt = 'Sync phases completed before verify failure; workspace drift remains.'
+    $cogRoleFile = Join-Path $repoRoot '.maestri' 'roles' $cogRoleId 'role.json'
+    $anvilRoleFileForCombo = Join-Path $repoRoot '.maestri' 'roles' $anvilRoleId 'role.json'
+    $cogRoleHadFile = Test-Path -LiteralPath $cogRoleFile
+    $cogRolePriorBytes = $null
+    $anvilRoleComboBytes = $null
+    if (Test-Path -LiteralPath $anvilRoleFileForCombo) {
+        $anvilRoleComboBytes = [System.IO.File]::ReadAllBytes($anvilRoleFileForCombo)
+    }
+    if ($cogRoleHadFile) {
+        $cogRolePriorBytes = [System.IO.File]::ReadAllBytes($cogRoleFile)
+    }
+    $mapBeforeCombo = Get-Content -LiteralPath $livePath -Raw
+    try {
+        if ($cogRoleHadFile) {
+            Remove-Item -LiteralPath $cogRoleFile -Force
+        }
+        $allDriftComboRecords = @(Get-HeadLaunchRecords -SeatMapPath $livePath)
+        foreach ($row in $allDriftComboRecords) {
+            if ($row.AssignedRoleId -eq $anvilRoleId) { $row.Command = $anvilDriftLaunch }
+        }
+        Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath -Terminals $allDriftComboRecords
+        $allCombo = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-All', '-Seat', 'Anvil', '-Rung', 'then')
+        $allComboCombined = "$($allCombo.StdOut)`n$($allCombo.StdErr)"
+        Assert-True 'DEV-237 -All swap+syncMiss+drift: exit 1' ($allCombo.ExitCode -eq 1) '1' ("exit=$($allCombo.ExitCode)`n$allComboCombined")
+        Assert-True 'DEV-237 -All swap+syncMiss+drift: Cog role miss handled' (Test-TextContains $allComboCombined 'Role file not found for Cog') 'Role file not found for Cog' $allComboCombined
+        Assert-True 'DEV-237 -All swap+syncMiss+drift: VERIFY DRIFT' (Test-TextContains $allComboCombined $anvilDrift) $anvilDrift $allComboCombined
+        Assert-True 'DEV-237 -All swap+syncMiss+drift: no unqualified completed receipt' (-not (Test-TextContains $allComboCombined $completedReceipt)) "absent $completedReceipt" $allComboCombined
+        Assert-True 'DEV-237 -All swap+syncMiss+drift: syncMiss before verify exit' (
+            ((ConvertTo-Fwd $allComboCombined).IndexOf('Role file not found for Cog') -ge 0) -and
+            ((ConvertTo-Fwd $allComboCombined).IndexOf((ConvertTo-Fwd $anvilDrift)) -ge 0)
+        ) 'syncMiss and drift both present' $allComboCombined
+    }
+    finally {
+        if ($cogRoleHadFile -and $null -ne $cogRolePriorBytes) {
+            [System.IO.File]::WriteAllBytes($cogRoleFile, $cogRolePriorBytes)
+        }
+        if ($null -ne $anvilRoleComboBytes) {
+            [System.IO.File]::WriteAllBytes($anvilRoleFileForCombo, $anvilRoleComboBytes)
+        }
+        [System.IO.File]::WriteAllText($livePath, $mapBeforeCombo, [System.Text.UTF8Encoding]::new($false))
+        Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath
+    }
+
+    $verifyComboLiteral = '-Verify cannot be combined with -Seat/-Rung because -Verify is read-only. Use -All for write/sync then verify.'
+    $homeBeforeComboReject = Get-RecursiveFileSnapshot -Root $isoMaestri
+    $porcelainBeforeComboReject = Get-Porcelain
+    $liveHashBeforeComboReject = (Get-FileHash -LiteralPath $livePath -Algorithm SHA256).Hash
+    $verifyCombo = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify', '-Seat', 'Anvil', '-Rung', 'then')
+    $verifyComboCombined = "$($verifyCombo.StdOut)`n$($verifyCombo.StdErr)"
+    $homeAfterComboReject = Get-RecursiveFileSnapshot -Root $isoMaestri
+    $porcelainAfterComboReject = Get-Porcelain
+    $liveHashAfterComboReject = (Get-FileHash -LiteralPath $livePath -Algorithm SHA256).Hash
+    Assert-True 'DEV-237 -Verify -Seat -Rung: exit 1' ($verifyCombo.ExitCode -eq 1) '1' ("exit=$($verifyCombo.ExitCode)`n$verifyComboCombined")
+    Assert-True 'DEV-237 -Verify -Seat -Rung: exact reject literal' (Test-TextContains $verifyComboCombined $verifyComboLiteral) $verifyComboLiteral $verifyComboCombined
+    Assert-True 'DEV-237 -Verify -Seat -Rung: isolated HOME snapshot unchanged' ($homeBeforeComboReject -eq $homeAfterComboReject) $homeBeforeComboReject $homeAfterComboReject
+    Assert-True 'DEV-237 -Verify -Seat -Rung: git porcelain unchanged' ($porcelainBeforeComboReject -eq $porcelainAfterComboReject) $porcelainBeforeComboReject $porcelainAfterComboReject
+    Assert-True 'DEV-237 -Verify -Seat -Rung: seat-map hash unchanged' ($liveHashBeforeComboReject -eq $liveHashAfterComboReject) $liveHashBeforeComboReject $liveHashAfterComboReject
 
     # --- zero-workspace resolution failure (not A5 Init) ---
     $zeroHome = Join-Path $isoHome 'zero-ws'

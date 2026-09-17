@@ -130,16 +130,22 @@ invariants.
 
 `-Verify` is a read-only drift check (DEV-237). It validates the seat map
 first, then compares each seat's **head-rung** launch to the terminal command
-in `workspace.json` for the same `roleId`/`assignedRoleId`. It does not use
-`activeRung` or runtime-floor substitution. Any failure exits 1. Workspace-level
-fatals — unresolved workspace, missing or unreadable `workspace.json`,
-malformed workspace payload, or zero parsed terminal records — stop before seat
+in `workspace.json` for the same `roleId`/`assignedRoleId`. Terminals whose
+`_0` has a command but no `assignedRoleId` are skipped; assigned terminals
+that omit required fields stay fatal. It does not use `activeRung` or
+runtime-floor substitution. Any failure exits 1. Workspace-level fatals —
+unresolved workspace, missing or unreadable `workspace.json`, malformed
+workspace payload, or zero parsed terminal records — stop before seat
 comparison. Seat-level findings — drift, missing or duplicate terminal per
 seat — are collected in `seatMap.seats` order, reported together, then one
-final exit. Output is redacted (codename, roleId, hashes only). `-All`
-runs the existing sync phases first, then verify; on verify failure it prints
+final exit. Output is redacted (codename, roleId, hashes, and workspaceId;
+no full profile or `workspace.json` paths). `-Verify` cannot be combined
+with `-Seat`/`-Rung`; use `-All` for write/sync then verify. `-All` runs
+the existing sync phases first, handles syncMisses (including
+`Restore-SwapRollback`) before taking a verify exit, then verify; on verify
+failure with no pending sync misses it prints
 `Sync phases completed before verify failure; workspace drift remains.` and
-exits 1 without rollback. CI proves failure and success behavior through
+exits 1. CI proves failure and success behavior through
 `Test-SeatMapLive.ps1` with an isolated HOME fixture against
 `seat-map.example.json`; a green fixture proves the repository contract, not
 the operator's live workspace. Real `~/.maestri` verification is optional
