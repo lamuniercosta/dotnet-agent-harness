@@ -28,6 +28,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # ---- gitleaks custom rule present ----------------------------------
       - name: YouTrack token gitleaks rule is present
@@ -455,6 +457,9 @@ jobs:
     name: PowerShell self-tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
 
     # The helper scripts under test branch on $IsWindows for workspace-safety
     # behaviour (POSIX 0700 hardening vs. Windows reparse-point/ownership
@@ -468,6 +473,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # Only Test-GateExitContract needs it: proving a real violation still
       # exits 1 requires an actual build. The SKIPPED half returns before any
@@ -483,6 +490,8 @@ jobs:
 
       - name: Ship-review rebase-delta scope fixture
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: ./scripts/local/Test-ShipReviewRebaseScope.ps1
 
       # DEV-260: scripts/local self-tests are parked pending DEV-253-259 relocation to maestri-toolkit; set RUN_LOCAL_SELF_TESTS=true to run them.

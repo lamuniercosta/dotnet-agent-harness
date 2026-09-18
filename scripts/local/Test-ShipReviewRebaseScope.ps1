@@ -153,7 +153,33 @@ try {
         $freshnessProof.Detail
 
     $baseProof = Test-BranchBasedOnOriginMain -RepoRoot $repoRoot
-    Assert-That 'branch is based on origin/main' $baseProof.Ok $baseProof.Detail
+    Assert-That 'branch is based on origin/main' `
+        ($baseProof.Ok -and -not [string]::IsNullOrWhiteSpace($baseProof.Detail)) `
+        $baseProof.Detail
+
+    $detachedIdentity = [pscustomobject]@{
+        Number                 = 173
+        HeadRefName            = 'HEAD'
+        HeadRepositoryOwner    = 'origin-owner'
+        HeadRepositoryFullName = 'origin-owner/dotnet-agent-harness'
+        ResolvedFrom           = 'github-event'
+    }
+    $currentPrRecord = [pscustomobject]@{
+        number             = 173
+        headRefName        = 'bug/dev-209-ship-review-rebase-scope'
+        headRepositoryOwner = [pscustomobject]@{ login = 'origin-owner' }
+    }
+    $forkNameCollision = [pscustomobject]@{
+        number             = 999
+        headRefName        = 'bug/dev-209-ship-review-rebase-scope'
+        headRepositoryOwner = [pscustomobject]@{ login = 'fork-user' }
+    }
+    Assert-That 'detached HEAD current PR is excluded by number and repository identity' `
+        (Test-OpenPrIsCurrentPullRequest -OpenPr $currentPrRecord -CurrentIdentity $detachedIdentity) `
+        'branch-name HEAD must not block PR-number exclusion'
+    Assert-That 'fork PR reusing the branch name is not treated as the current PR' `
+        (-not (Test-OpenPrIsCurrentPullRequest -OpenPr $forkNameCollision -CurrentIdentity $detachedIdentity)) `
+        'fork branch-name collision must remain in the overlap set'
 
     $overlapProof = Test-NoOpenPrDependencyOverlap -RepoRoot $repoRoot
     Assert-That 'no open PR dependency or file overlap for other PR heads' `
