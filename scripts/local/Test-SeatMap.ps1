@@ -107,6 +107,18 @@ Test-NegativeFixture -Name "opencode launch missing model flag" -Mutator { param
 # 12. Numeric schemaVersion 2.5 negative validation
 Test-NegativeFixture -Name "numeric schemaVersion 2.5" -Mutator { param($m) $m.schemaVersion = 2.5 } -ExpectedErrorSubstring "Seat map schemaVersion must be the integer 2 (got 2.5); schemaVersion 1 maps fail closed and in-place migration is not implemented."
 
+# 13. Unknown host
+Test-NegativeFixture -Name "unknown host" -Mutator { param($m) $m.seats[0].rungs[0].host = "unknown-host-xyz" } -ExpectedErrorSubstring "has unknown host"
+
+# 14. Unknown pool
+Test-NegativeFixture -Name "unknown pool" -Mutator { param($m) $m.seats[0].rungs[0].pool = "UNKNOWN_POOL" } -ExpectedErrorSubstring "has unknown pool"
+
+# 15. Invalid evidence
+Test-NegativeFixture -Name "invalid evidence" -Mutator { param($m) $m.seats[0].rungs[0].evidence = "bogus-evidence" } -ExpectedErrorSubstring "has unknown evidence"
+
+# 16. Missing model
+Test-NegativeFixture -Name "missing model" -Mutator { param($m) $m.seats[0].rungs[0].psobject.properties.remove('model') } -ExpectedErrorSubstring "missing model"
+
 # --- Warning Fixtures: tierPolicy must warn, and must not fail ---
 function Test-WarningFixture {
     param(
@@ -159,5 +171,5 @@ if (Test-JsonProperty -Object $seatMap.invariants -Name 'tierPolicy') {
     Write-Host "Test-SeatMap: 5 warning fixtures verified (advisory, non-fatal)." -ForegroundColor Green
 }
 
-Write-Host "Test-SeatMap: All checks PASSED ($($seatMap.seats.Count) seats, schema valid, invariants held, 12 negative fixtures verified)." -ForegroundColor Green
+Write-Host "Test-SeatMap: All checks PASSED ($($seatMap.seats.Count) seats, schema valid, invariants held, 16 negative fixtures verified)." -ForegroundColor Green
 exit 0

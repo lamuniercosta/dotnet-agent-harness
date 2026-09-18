@@ -405,6 +405,12 @@ jobs:
         shell: pwsh
         run: ./scripts/local/Test-SeatMapLive.ps1
 
+      # DEV-269: role-prompt stale-halt scrub proof stays always-on while
+      # DEV-260 parks the full live suite behind RUN_LOCAL_SELF_TESTS.
+      - name: Seat-map role-prompt stale-halt invariants
+        shell: pwsh
+        run: ./scripts/local/Test-SeatMapLive.ps1 -RolePromptOnly
+
       # DEV-241 (FP5 / FP-r2-3): targeted lock proof stays unskipped while
       # DEV-260 parks the full live suite behind RUN_LOCAL_SELF_TESTS.
       - name: Seat-map per-map process lock invariants

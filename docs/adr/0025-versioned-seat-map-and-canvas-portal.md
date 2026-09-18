@@ -16,7 +16,8 @@ Four sources of truth diverged under Maestri multi-agent orchestration:
 1. `route-map.json` — command-keyed, tier-keyed, no seat dimension.
 2. `notes/harness-team-charter.md` — the Roster table, manually edited.
 3. `notes/team-restart.md` — launch commands, manually edited.
-4. `.maestri/roles/*/role.json` — model-chain lines in each role's system prompt.
+4. `.maestri/roles/*/role.json`, `AGENTS.md`, and `CLAUDE.md` — model-chain
+   lines and floor guidance in each role's instruction surfaces.
 
 The route map assumed one operator choosing a host for a pipeline command. Under
 Maestri, eleven seats run concurrently, each with its own pool constraints and
@@ -114,7 +115,8 @@ the `Test-RouteMap.ps1` gate (DEV-64).
 `Sync-SeatMap.ps1` reads the live workspace seat map (or an explicit
 `-SeatMapPath`) and writes the four downstream targets:
 
-1. Role prompts (`.maestri/roles/*/role.json` — the model-chain line).
+1. Role instruction surfaces (`.maestri/roles/*/role.json`, `AGENTS.md`, and
+   `CLAUDE.md` — the model-chain line and floor guidance).
 2. `notes/harness-team-charter.md` (the Roster table).
 3. `notes/team-restart.md` (the Launch commands table).
 4. Terminal replacement commands (`maestri recruit --replace`).
@@ -214,6 +216,22 @@ Non-swap whole-map commands (`-Validate`, `-All`, `-SyncRoles`,
 an unrelated seat has no capable runtime floor. Broader probe-evidence
 re-anchor across the map is DEV-244.
 
+### Role instruction files are display artifacts (DEV-269, amended 2026-09-18)
+
+**Amended 2026-09-18:** The live seat map remains the authority for seat
+allocation, displayed model-chain order, active rung, and runtime FLOOR
+selection. Role model-chain lines and the reachable role instruction files
+(`role.json` prompt text, `AGENTS.md`, and `CLAUDE.md`) are downstream
+sync/display artifacts written by `Sync-SeatMap.ps1`; they are not
+independent runtime model validators and must not instruct seats to halt
+because the host-reported model is absent from that text. Seat-map schema
+validation, runtime FLOOR selection, pool/tier advisory warnings, and
+OpenCode `-m`/`--model` launch checks are unchanged.
+
+Removing the obsolete role-text membership tripwire also removes that runtime
+check. Model or provider drift after launch is not detected by DEV-269 and
+must not be claimed as enforced.
+
 ### Legacy route-map tooling is deleted
 
 Five tracked files are removed:
@@ -272,8 +290,11 @@ checkable); the runtime logic ships when it has tests.
 
 The live seat map embeds per-machine workspace state: role UUIDs from `.maestri/roles/` and,
 at runtime, the active-rung selection. On any machine other than the author's,
-role-sync and note-sync silently no-op because the UUIDs do not match. This is
-accepted because the live map is workspace state, not a CI artefact:
+role-sync and note-sync silently no-op because the UUIDs do not match. Role
+instruction files are display artifacts only; after DEV-269 they no longer
+carry a runtime model-membership tripwire, so mid-session model drift is not
+detected by role-text sync. This is accepted because the live map is workspace
+state, not a CI artefact:
 the schema and invariants are proven against `scripts/local/seat-map.example.json`
 when `RUN_LOCAL_SELF_TESTS` is enabled; the scripts remain in-tree for local
 runs. Synchronization is a convenience for the machine that runs the team. The live path is discovered from `~/.maestri/workspaces/<id>/`.

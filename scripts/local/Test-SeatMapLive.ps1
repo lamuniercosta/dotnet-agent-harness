@@ -14,7 +14,8 @@
 [CmdletBinding()]
 param(
     [switch]$LockOnly,
-    [switch]$Dev240WinPsOnly
+    [switch]$Dev240WinPsOnly,
+    [switch]$RolePromptOnly
 )
 
 Set-StrictMode -Version Latest
@@ -1168,6 +1169,174 @@ $dev234AnvilRoleFile = $null
 $dev234AnvilRoleHadFile = $false
 $dev234AnvilRolePriorBytes = $null
 $dev234AnvilRoleDirExisted = $false
+
+if ($RolePromptOnly) {
+    Write-Host 'Test-SeatMapLive -RolePromptOnly (isolated RolesDir)'
+    Assert-SeatMapLockContracts
+    $rolePromptIsoHome = Join-Path ([System.IO.Path]::GetTempPath()) ('seat-map-roleprompt-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $rolePromptIsoHome -Force | Out-Null
+    $rolePromptWsId = [guid]::NewGuid().ToString()
+    $rolePromptWsDir = New-WorkspaceDir -HomeDir $rolePromptIsoHome -WorkspaceId $rolePromptWsId -RepoRootHint $repoRoot
+    Write-NoteStubs -WsDir $rolePromptWsDir
+    $rolePromptLivePath = Join-Path $rolePromptWsDir 'seat-map.json'
+    Copy-Item -LiteralPath $examplePath -Destination $rolePromptLivePath
+    $rolePromptLiveSnapshot = Get-Content -LiteralPath $rolePromptLivePath -Raw
+    $worktreeRolesSnapBefore = Get-TargetedMaestriSnapshot -Root $worktreeMaestri
+    $realRolesSnapBefore = Get-TargetedMaestriSnapshot -Root $realMaestri
+    try {
+        # Helper to create isolated RolesDir fixtures with optional stale halt text
+        function New-RolePromptFixture {
+            param([string]$RolesDir, [bool]$WithStale, [bool]$WithoutChain)
+            New-Item -ItemType Directory -Path $RolesDir -Force | Out-Null
+            $map = Get-Content -LiteralPath $examplePath -Raw | ConvertFrom-Json
+            foreach ($s in @($map.seats)) {
+                $dir = Join-Path $RolesDir $s.roleId
+                New-Item -ItemType Directory -Path $dir -Force | Out-Null
+                $chain = Get-ModelChainLine -Seat $s
+                $promptBase = $chain
+                if ($WithStale) {
+                    $promptBase = "$chain You are at or above your floor if the model you are running appears **anywhere in that chain**. Halt and report only if it appears nowhere in it. Duties for $($s.codename) preserved."
+                } elseif (-not $WithoutChain) {
+                    $promptBase = "$chain Duties for $($s.codename) preserved."
+                } else {
+                    $promptBase = "No chain here"
+                }
+                $roleJson = [ordered]@{ prompt = $promptBase } | ConvertTo-Json -Depth 4
+                if (-not $roleJson.EndsWith("`n")) { $roleJson += "`n" }
+                [System.IO.File]::WriteAllText((Join-Path $dir 'role.json'), $roleJson, [System.Text.UTF8Encoding]::new($false))
+                # AGENTS.md and CLAUDE.md with same chain + stale pattern
+                $mdBase = @(
+                    "# $($s.codename) role"
+                    ""
+                    "- Your duties name a **model chain**, best first, ending in a `(FLOOR)` entry."
+                    "  You are at or above your floor if the model you are running appears"
+                    "  **anywhere in that chain**. Halt and report only if it appears nowhere in it."
+                    "  Do not compare yourself against the floor entry alone, and never treat the"
+                    "  floor as your target."
+                    ""
+                    "$chain"
+                    ""
+                    "Duties for $($s.codename) preserved."
+                ) -join "`n"
+                if (-not $WithStale) {
+                    $mdBase = @(
+                        "# $($s.codename) role"
+                        ""
+                        "- Your duties name a **model chain**, best first, ending in a `(FLOOR)` entry."
+                        "  Do not compare yourself against the floor entry alone, and never treat the"
+                        "  floor as your target."
+                        ""
+                        "$chain"
+                        ""
+                        "Duties for $($s.codename) preserved."
+                    ) -join "`n"
+                }
+                [System.IO.File]::WriteAllText((Join-Path $dir 'AGENTS.md'), $mdBase + "`n", [System.Text.UTF8Encoding]::new($false))
+                [System.IO.File]::WriteAllText((Join-Path $dir 'CLAUDE.md'), $mdBase + "`n", [System.Text.UTF8Encoding]::new($false))
+            }
+        }
+        # Test 1: whole-map -SyncRoles removes stale halt from all three surfaces and updates chain line
+        $rolesDir1 = Join-Path $rolePromptIsoHome 'roles1'
+        New-RolePromptFixture -RolesDir $rolesDir1 -WithStale $true -WithoutChain $false
+        $sync1 = Invoke-IsolatedPwsh -HomeDir $rolePromptIsoHome -File $syncScript -ArgumentList @('-SyncRoles', '-RolesDir', $rolesDir1, '-SeatMapPath', $rolePromptLivePath)
+        Assert-True 'RolePrompt whole-map sync: exit 0' ($sync1.ExitCode -eq 0) '0' ("exit=$($sync1.ExitCode)`n$($sync1.StdOut)`n$($sync1.StdErr)")
+        $hasStale1 = $false
+        $chainOk1 = $true
+        $dutiesOk1 = $true
+        foreach ($f in @(Get-ChildItem -LiteralPath $rolesDir1 -Recurse -File)) {
+            $txt = Get-Content -LiteralPath $f.FullName -Raw
+            if ($txt.Contains('Halt and report only if it appears nowhere in it.')) { $hasStale1 = $true }
+            if ($f.Name -eq 'role.json') {
+                if ($txt -notmatch 'Model chain \(best first\):.+?\(FLOOR\)\.') { $chainOk1 = $false }
+                if ($txt -notmatch 'Duties for') { $dutiesOk1 = $false }
+            } elseif ($f.Name -in @('AGENTS.md','CLAUDE.md')) {
+                if ($txt -notmatch 'Model chain \(best first\):.+?\(FLOOR\)\.') { $chainOk1 = $false }
+                if ($txt -notmatch 'Duties for') { $dutiesOk1 = $false }
+                if ($txt -notmatch 'Do not compare yourself against the floor entry alone') { $dutiesOk1 = $false }
+            }
+        }
+        Assert-True 'RolePrompt whole-map sync: no stale halt' (-not $hasStale1) 'no stale' 'still has stale'
+        Assert-True 'RolePrompt whole-map sync: chain line present' $chainOk1 'chain present' 'missing chain'
+        Assert-True 'RolePrompt whole-map sync: duties preserved' $dutiesOk1 'duties preserved' 'duties missing'
+        # Prove isolated temp was used, not live repo tree
+        $worktreeSnapAfter1 = Get-TargetedMaestriSnapshot -Root $worktreeMaestri
+        Assert-True 'RolePrompt whole-map sync: no live worktree Roles overwrite' ($worktreeRolesSnapBefore -eq $worktreeSnapAfter1) $worktreeRolesSnapBefore $worktreeSnapAfter1
+        $realSnapAfter1 = Get-TargetedMaestriSnapshot -Root $realMaestri
+        Assert-True 'RolePrompt whole-map sync: no real HOME Roles overwrite' ($realRolesSnapBefore -eq $realSnapAfter1) $realRolesSnapBefore $realSnapAfter1
+
+        # Test 2: prompts without stale text sync cleanly (no fatal, chain still updated)
+        $rolesDir2 = Join-Path $rolePromptIsoHome 'roles2'
+        New-RolePromptFixture -RolesDir $rolesDir2 -WithStale $false -WithoutChain $false
+        $sync2 = Invoke-IsolatedPwsh -HomeDir $rolePromptIsoHome -File $syncScript -ArgumentList @('-SyncRoles', '-RolesDir', $rolesDir2, '-SeatMapPath', $rolePromptLivePath)
+        Assert-True 'RolePrompt unchanged prompt sync: exit 0' ($sync2.ExitCode -eq 0) '0' ("exit=$($sync2.ExitCode)`n$($sync2.StdOut)`n$($sync2.StdErr)")
+        $hasStale2 = $false
+        foreach ($f in @(Get-ChildItem -LiteralPath $rolesDir2 -Recurse -File)) {
+            $txt = Get-Content -LiteralPath $f.FullName -Raw
+            if ($txt.Contains('Halt and report only if it appears nowhere in it.')) { $hasStale2 = $true }
+        }
+        Assert-True 'RolePrompt unchanged prompt: still no stale' (-not $hasStale2) 'no stale' 'has stale'
+
+        # Test 3: missing optional AGENTS.md/CLAUDE.md is non-fatal
+        $rolesDir3 = Join-Path $rolePromptIsoHome 'roles3'
+        New-RolePromptFixture -RolesDir $rolesDir3 -WithStale $true -WithoutChain $false
+        $sampleSeat = (Get-Content -LiteralPath $examplePath -Raw | ConvertFrom-Json).seats[0]
+        Remove-Item -LiteralPath (Join-Path $rolesDir3 $sampleSeat.roleId 'AGENTS.md') -Force
+        Remove-Item -LiteralPath (Join-Path $rolesDir3 $sampleSeat.roleId 'CLAUDE.md') -Force
+        $sync3 = Invoke-IsolatedPwsh -HomeDir $rolePromptIsoHome -File $syncScript -ArgumentList @('-SyncRoles', '-RolesDir', $rolesDir3, '-SeatMapPath', $rolePromptLivePath)
+        Assert-True 'RolePrompt missing optional MD: exit 0' ($sync3.ExitCode -eq 0) '0' ("exit=$($sync3.ExitCode)`n$($sync3.StdOut)`n$($sync3.StdErr)")
+        $roleHasStale3 = (Get-Content -LiteralPath (Join-Path $rolesDir3 $sampleSeat.roleId 'role.json') -Raw).Contains('Halt and report')
+        Assert-True 'RolePrompt missing optional MD: role still scrubbed' (-not $roleHasStale3) 'no stale' 'has stale'
+
+        # Test 4: target-swap removes stale halt and updates FLOOR to runtime floor
+        $rolesDir4 = Join-Path $rolePromptIsoHome 'roles4'
+        New-RolePromptFixture -RolesDir $rolesDir4 -WithStale $true -WithoutChain $false
+        Copy-Item -LiteralPath $examplePath -Destination $rolePromptLivePath -Force
+        $mapForSwap = Get-Content -LiteralPath $rolePromptLivePath -Raw | ConvertFrom-Json
+        $anvilSeat = $mapForSwap.seats | Where-Object { $_.id -eq 'anvil' } | Select-Object -First 1
+        $expectedFloor = (Resolve-SeatRuntimeFloor -Map $mapForSwap -Seat $anvilSeat).Launch
+        $swapRes = Invoke-IsolatedPwsh -HomeDir $rolePromptIsoHome -File $syncScript -ArgumentList @('-Seat', 'anvil', '-Rung', 'then', '-RolesDir', $rolesDir4, '-SeatMapPath', $rolePromptLivePath)
+        Assert-True 'RolePrompt target-swap: exit 0' ($swapRes.ExitCode -eq 0) '0' ("exit=$($swapRes.ExitCode)`n$($swapRes.StdOut)`n$($swapRes.StdErr)")
+        $anvilRoleAfter = Get-Content -LiteralPath (Join-Path $rolesDir4 $anvilSeat.roleId 'role.json') -Raw
+        Assert-True 'RolePrompt target-swap: no stale in swapped role' (-not $anvilRoleAfter.Contains('Halt and report')) 'no stale' 'has stale'
+        Assert-True 'RolePrompt target-swap: chain contains runtime floor' ($anvilRoleAfter.Contains($expectedFloor)) $expectedFloor $anvilRoleAfter
+        $anvilAgentsAfter = Get-Content -LiteralPath (Join-Path $rolesDir4 $anvilSeat.roleId 'AGENTS.md') -Raw
+        Assert-True 'RolePrompt target-swap: AGENTS.md no stale' (-not $anvilAgentsAfter.Contains('Halt and report')) 'no stale' 'has stale'
+        Assert-True 'RolePrompt target-swap: AGENTS.md chain updated to floor' ($anvilAgentsAfter.Contains($expectedFloor)) $expectedFloor $anvilAgentsAfter
+
+        # Test 5: swap with -SyncRoles also scrubs other seats
+        $rolesDir5 = Join-Path $rolePromptIsoHome 'roles5'
+        New-RolePromptFixture -RolesDir $rolesDir5 -WithStale $true -WithoutChain $false
+        Copy-Item -LiteralPath $examplePath -Destination $rolePromptLivePath -Force
+        $swapSyncRes = Invoke-IsolatedPwsh -HomeDir $rolePromptIsoHome -File $syncScript -ArgumentList @('-Seat', 'anvil', '-Rung', 'then', '-SyncRoles', '-RolesDir', $rolesDir5, '-SeatMapPath', $rolePromptLivePath)
+        Assert-True 'RolePrompt swap+SyncRoles: exit 0' ($swapSyncRes.ExitCode -eq 0) '0' ("exit=$($swapSyncRes.ExitCode)`n$($swapSyncRes.StdOut)`n$($swapSyncRes.StdErr)")
+        $hasStale5 = $false
+        foreach ($f in @(Get-ChildItem -LiteralPath $rolesDir5 -Recurse -File)) {
+            if ((Get-Content -LiteralPath $f.FullName -Raw).Contains('Halt and report')) { $hasStale5 = $true; break }
+        }
+        Assert-True 'RolePrompt swap+SyncRoles: all scrubbed' (-not $hasStale5) 'no stale' 'has stale'
+
+        Write-Host ''
+        if ($failures -gt 0) {
+            Write-Host "Test-SeatMapLive -RolePromptOnly: $checks checks, $failures failures." -ForegroundColor Red
+            exit 1
+        } else {
+            Write-Host "Test-SeatMapLive -RolePromptOnly: $checks checks, $failures failures." -ForegroundColor Green
+            exit 0
+        }
+    } catch {
+        Write-Host "  FAIL     RolePromptOnly harness: $_" -ForegroundColor Red
+        $script:failures++
+        exit 1
+    } finally {
+        if (Test-Path -LiteralPath $rolePromptIsoHome) {
+            Remove-Item -LiteralPath $rolePromptIsoHome -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        if (Test-Path -LiteralPath $rolePromptLivePath) {
+            # restore example content for outer harness isolation checks
+            Copy-Item -LiteralPath $examplePath -Destination $rolePromptLivePath -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
 
 if ($LockOnly) {
     Write-Host 'Test-SeatMapLive -LockOnly (isolated HOME)'
