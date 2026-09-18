@@ -120,28 +120,30 @@ jobs:
         run: |
           f=skills/code-review/SKILL.md
           fail=0
-          if ! grep -qF 'Explicit diff range: <fixed-point>...HEAD' "$f"; then
-            echo "::error file=$f::missing common three-dot explicit-range transport"
+          step1=$(awk '/^### 1\. Pin the fixed point/,/^### 2\./' "$f")
+          classify=$(awk '/^### Classify the diff/,/^### 0\./' "$f")
+          if ! printf '%s\n' "$step1" | grep -qF 'Explicit diff range: <fixed-point>...HEAD'; then
+            echo "::error file=$f::missing common three-dot explicit-range transport in Step 1"
             fail=1
           fi
-          if ! grep -qF 'Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD' "$f"; then
-            echo "::error file=$f::missing discriminated ship-review rebase-delta transport"
+          if ! printf '%s\n' "$step1" | grep -qF 'Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD'; then
+            echo "::error file=$f::missing discriminated ship-review rebase-delta transport in Step 1"
             fail=1
           fi
-          if ! grep -qF 'reject two-dot ranges' "$f"; then
-            echo "::error file=$f::common explicit-range transport must reject two-dot ranges"
+          if ! printf '%s\n' "$step1" | grep -qF 'reject two-dot ranges'; then
+            echo "::error file=$f::Step 1 must reject two-dot ranges on the common field"
             fail=1
           fi
-          if ! grep -qF 'reject three-dot ranges' "$f"; then
-            echo "::error file=$f::discriminated ship-review transport must reject three-dot ranges"
+          if ! printf '%s\n' "$step1" | grep -qF 'reject three-dot ranges'; then
+            echo "::error file=$f::Step 1 must reject three-dot ranges on the discriminated field"
             fail=1
           fi
-          if ! grep -qF 'patch-id-filtered' "$f" || ! grep -qF 'git range-diff' "$f"; then
-            echo "::error file=$f::missing patch-id-filtered / range-diff rebase-delta semantics"
+          if ! printf '%s\n' "$classify" | grep -qF 'patch-id-filtered' || ! printf '%s\n' "$classify" | grep -qF 'git range-diff'; then
+            echo "::error file=$f::classification must document patch-id-filtered / range-diff semantics"
             fail=1
           fi
-          if ! grep -qF 'Could not run' "$f" || ! grep -qF 'NEEDS FIXES' "$f"; then
-            echo "::error file=$f::missing fail-closed Could-not-run / NEEDS-FIXES wording"
+          if ! printf '%s\n' "$step1" | grep -qF 'Could not run' || ! printf '%s\n' "$step1" | grep -qF 'NEEDS FIXES'; then
+            echo "::error file=$f::Step 1 must fail closed with Could-not-run / NEEDS-FIXES"
             fail=1
           fi
           [ "$fail" -eq 0 ] && echo "code-review Step 1 includes explicit-range transport."
@@ -152,33 +154,58 @@ jobs:
         run: |
           f=skills/ship-review/SKILL.md
           fail=0
-          if ! grep -qF 'Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD' "$f"; then
-            echo "::error file=$f::missing discriminated ship-review rebase-delta transport"
+          fanout=$(awk '/^### 2\. Parallel fan-out/,/^### 3\./' "$f")
+          if ! printf '%s\n' "$fanout" | grep -qF 'Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD'; then
+            echo "::error file=$f::missing discriminated ship-review rebase-delta transport in fan-out"
             fail=1
           fi
-          if ! grep -qF 'patch-id-filtered' "$f" || ! grep -qF 'git range-diff' "$f"; then
-            echo "::error file=$f::missing patch-id-filtered / range-diff rebase-delta semantics"
+          if ! printf '%s\n' "$fanout" | grep -qF 'patch-id-filtered' || ! printf '%s\n' "$fanout" | grep -qF 'git range-diff'; then
+            echo "::error file=$f::fan-out must document patch-id-filtered / range-diff semantics"
             fail=1
           fi
-          if ! grep -qF 'First determine whether the rebase delta is empty' "$f"; then
-            echo "::error file=$f::missing empty-delta short-circuit wording"
+          if ! printf '%s\n' "$fanout" | grep -qF 'First determine whether the rebase delta is empty'; then
+            echo "::error file=$f::missing empty-delta short-circuit wording in fan-out"
             fail=1
           fi
-          if ! grep -qE 'do not invoke.*/code-review' "$f"; then
-            echo "::error file=$f::empty delta must not invoke /code-review"
+          if ! printf '%s\n' "$fanout" | grep -qE 'do not invoke.*/code-review'; then
+            echo "::error file=$f::empty delta must not invoke /code-review in fan-out"
             fail=1
           fi
-          if grep -qF '<stage-9-cleared-commit>...HEAD' "$f"; then
-            echo "::error file=$f::unsafe three-dot stage-9-cleared...HEAD handoff still present"
+          if printf '%s\n' "$fanout" | grep -qF '<stage-9-cleared-commit>...HEAD'; then
+            echo "::error file=$f::unsafe three-dot stage-9-cleared...HEAD handoff still present in fan-out"
             fail=1
           fi
           [ "$fail" -eq 0 ] && echo "ship-review includes the discriminated rebase-delta transport."
           exit $fail
 
-      # ---- DEV-209 git semantics fixture --------------------------------
-      - name: Ship-review rebase-delta scope fixture
-        shell: pwsh
-        run: ./scripts/local/Test-ShipReviewRebaseScope.ps1
+      # ---- DEV-209 helper contract (executable proof lives in self-tests)
+      - name: DEV-209 helper matches shipped skill/ADR contract
+        run: |
+          h=scripts/local/_Get-ShipReviewRebaseDelta.ps1
+          fail=0
+          if ! grep -qF 'ADR 0014' "$h"; then
+            echo "::error file=$h::missing ADR 0014 contract reference"
+            fail=1
+          fi
+          if ! grep -qF 'Ensure-OriginMainRef' "$h" || ! grep -qF 'origin/main' "$h"; then
+            echo "::error file=$h::helper must resolve new_base from origin/main only"
+            fail=1
+          fi
+          if ! grep -qF 'ls-remote' "$h" || ! grep -qF 'fetch' "$h"; then
+            echo "::error file=$h::helper must fetch and verify origin/main freshness"
+            fail=1
+          fi
+          if ! grep -qF 'Test-ShipReviewArtifactConsumer' "$h"; then
+            echo "::error file=$h::missing consumer freshness verification helper"
+            fail=1
+          fi
+          t=scripts/local/Test-ShipReviewRebaseScope.ps1
+          if ! grep -qF '_Get-ShipReviewRebaseDelta.ps1' "$t"; then
+            echo "::error file=$t::fixture must exercise the DEV-209 helper"
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] && echo "DEV-209 helper contract references are present."
+          exit $fail
 
       # ---- ADR and pipeline transport consistency (DEV-209) -------------
       - name: DEV-209 ADR and pipeline transport consistency

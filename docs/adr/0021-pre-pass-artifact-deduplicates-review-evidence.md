@@ -48,11 +48,11 @@ verify every field below before trusting the contents:
 | `written_at` | UTC ISO-8601 timestamp | Audit trail; not used for verification |
 
 The consumer verifies `head_sha`, `fixed_point`, `diff_range`, and
-`repository` against its own environment. For the discriminated ship-review rebase-delta range the consumer re-derives the same patch-id-filtered semantics (`old_base = git merge-base <stage-9-cleared> HEAD`, `new_base = git merge-base HEAD origin/main`, filtered by patch-id / `git range-diff`) and confirms the header's `diff_range` is the discriminated two-dot range and the body describes that same filtered scope. If any mismatch or the file is missing, the sub-agent **fails closed** — no fallback to inline relay, no partial read. Inability to verify (no shell access, wrong cwd, file unreadable) is also fail-closed.
+`repository` against its own environment. For the discriminated ship-review rebase-delta range the consumer re-derives the same patch-id-filtered semantics (`old_base = git merge-base <stage-9-cleared> HEAD`, `new_base = git merge-base HEAD origin/main` from a freshly force-fetched `origin/main` only (verified against the remote tip), filtered by patch-id / `git range-diff`) and confirms the header's `diff_range` is the discriminated two-dot range and the body describes that same filtered scope. A consumer that cannot resolve fresh `origin/main` fails closed — it does not substitute `origin/master`, a local `main`/`master`, or `--fork-point`. If any mismatch or the file is missing, the sub-agent **fails closed** — no fallback to inline relay, no partial read. Inability to verify (no shell access, wrong cwd, file unreadable) is also fail-closed.
 
 The file body contains, in order:
 
-1. **Diff command** — `git diff` of the accepted `diff_range` for ordinary three-dot ranges; for the discriminated ship-review rebase-delta range, the patch-id-filtered rebase-delta diff (range-diff) between `old_base..stage-9-cleared` and `new_base..HEAD`, not a plain three-dot or naive two-dot tree diff
+1. **Diff command** — `git diff` of the accepted `diff_range` for ordinary three-dot ranges; for the discriminated ship-review rebase-delta range, the patch-id-filtered rebase-delta diff (range-diff) between `old_base..stage-9-cleared` and `new_base..HEAD`, where `new_base` is derived from a freshly force-fetched `origin/main` only (no stale ref, no `origin/master`, local `main`/`master`, or `--fork-point`), not a plain three-dot or naive two-dot tree diff
 2. **Commit list** — `git log <fixed-point>..HEAD --oneline` (`fixed_point` is the left side of the accepted range when present) for ordinary ranges; for the discriminated ship-review field, the filtered delta commit list (commits in `new_base..HEAD` whose patch-id is not in `old_base..stage-9-cleared`), not `git log <fixed-point>..HEAD`
 3. **Blast-radius table** — the scored table from Step 2 (code-review) or the
    rebase-delta summary (ship-review)
@@ -182,7 +182,7 @@ Smell baseline, standards-source list, and spec path remain inline because
 they are not computed pre-pass evidence.
 
 Stale or planted input is fail-closed: consumers verify repository, HEAD,
-fixed point, and `diff_range`; for the discriminated ship-review range they re-derive the patch-id-filtered semantics and confirm synchronization; writers re-resolve HEAD immediately before the
+fixed point, and `diff_range`; for the discriminated ship-review range they re-derive the patch-id-filtered semantics from a freshly force-fetched `origin/main` only and confirm synchronization, and a consumer that cannot resolve fresh `origin/main`, or finds it stale against the remote tip, fails closed with **Could not run** / **NEEDS FIXES** and never substitutes an alternate base; writers re-resolve HEAD immediately before the
 atomic write; working-tree roots are forbidden; filenames use a repo-scoped
 full SHA under a skill-unique subdirectory.
 
@@ -190,4 +190,4 @@ full SHA under a skill-unique subdirectory.
 for nested `/code-review` (two-dot, filtered). A non-empty delta produces two independent artifacts with synchronized filtered evidence. An empty
 delta does not invoke `/code-review` and carries a named confirmation with an empty commit list.
 
-This is a runtime contract. DEV-209 updates adapters, `install.ps1` copy paths, install tests, and lint grep gates to carry the discriminated transport; the Step 8 findings-artifact phrase `findings artifact as JSON` remains the output sink and is out of scope.
+This is a runtime contract. DEV-209 updates adapters, install tests, and lint grep gates to carry the discriminated transport; it does not change `install.ps1` copy paths (the changed sources are already distributed by the existing adapter and skill copy paths). The Step 8 findings-artifact phrase `findings artifact as JSON` remains the output sink and is out of scope.

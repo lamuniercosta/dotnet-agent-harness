@@ -55,9 +55,12 @@ First determine whether the rebase delta is empty. The rebase delta is the
 patch-id-filtered difference between the old feature series and the new feature
 series, not a plain three-dot merge-base diff or a naive two-dot tree diff:
 
+- Fresh `origin/main` is the **only** accepted default-branch source. Immediately before computing the delta, force-refresh it (`git fetch --no-tags --depth=1 origin +refs/heads/main:refs/remotes/origin/main`) and verify the ref equals the remote tip (`git ls-remote origin refs/heads/main`). If the fetch fails, or `origin/main` cannot be resolved, or it does not equal the remote tip (stale), fail closed: report **Could not run** with the missing or stale ref and verdict **NEEDS FIXES**. There is no fallback to `origin/master`, a local `main`/`master`, or `git merge-base --fork-point`, and a stale `origin/main` is never accepted.
 - `old_base = git merge-base <stage-9-cleared> HEAD`
-- `new_base = git merge-base HEAD origin/main` (or `git merge-base --fork-point HEAD` when available)
+- `new_base = git merge-base HEAD origin/main` (the freshly fetched `origin/main` only)
 - Old series `old_base..stage-9-cleared` and new series `new_base..HEAD` are compared by patch-id (`git patch-id` / `git range-diff`). A new commit whose patch-id already exists in the old series is already-cleared feature work and is excluded. Commits that are ancestors of `new_base` (upstream churn) are not in the new series and are excluded.
+- A commit with no patch-id — a merge commit, or an empty commit — yields a null patch-id, so it is never matched against the old series and is conservatively kept in the filtered delta. That is deliberately conservative: a no-patch-id commit is over-reported, never silently dropped.
+- The producer (this skill) and the consumers (`/code-review`'s nested pre-pass and the Security/Coverage re-derivation) use the same fresh-`origin/main`-only rule. If any of them cannot resolve fresh `origin/main`, it fails closed rather than substituting an alternate base.
 
 If that filtered delta has no commits and `git range-diff old_base..stage-9-cleared new_base..HEAD` shows no hunk differences, the delta is empty. Record a named correctness **confirmation** in the consolidated report and **do not invoke** `/code-review`. That confirmation still counts as the lane having run: do not skip the lane and do not treat emptiness as a missing reviewer. If non-empty, invoke `/code-review` with `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD`. This discriminated two-dot range is ship-review-only; ordinary `Explicit diff range: <fixed-point>...HEAD` three-dot ranges remain the only accepted form for stage-9 and later fix rounds, so a dropped-dot `ROUND_BASE..HEAD` typo still fails closed. The empty check and the non-empty review use the same rebase-delta semantics.
 
@@ -81,7 +84,7 @@ Before dispatching, write a pre-pass scratch artifact for Security and Coverage.
 | `diff_range` | The discriminated rebase-delta range `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` (two-dot, ship-review-only) | Explicit scope binding — synchronized with the filtered delta |
 | `written_at` | UTC ISO-8601 timestamp | Audit trail; not used for verification |
 
-A Security or Coverage consumer verifies `repository`, `head_sha`, `fixed_point`, and `diff_range` against its own environment before trusting the file, re-deriving the same rebase-delta semantics (old_base/new_base patch-id filter / range-diff) and confirming the header's `diff_range` matches the accepted discriminated range and the file's body describes that same filtered scope. If the file is missing, unreadable, or any of those fields mismatch — or the lane cannot verify (no shell, wrong cwd) — it **fails closed**. No fallback to inline relay. `written_at` is not used for verification. `branch` is context for the reader.
+A Security or Coverage consumer verifies `repository`, `head_sha`, `fixed_point`, and `diff_range` against its own environment before trusting the file, re-deriving the same rebase-delta semantics (old_base/new_base patch-id filter / range-diff) from a freshly force-fetched `origin/main` only, and confirming the header's `diff_range` matches the accepted discriminated range and the file's body describes that same filtered scope. A consumer that cannot resolve fresh `origin/main` — or finds it stale against the remote tip — fails closed with **Could not run** / **NEEDS FIXES** and does not substitute `origin/master`, a local `main`/`master`, or `--fork-point`. If the file is missing, unreadable, or any of those fields mismatch — or the lane cannot verify (no shell, wrong cwd) — it **fails closed**. No fallback to inline relay. `written_at` is not used for verification. `branch` is context for the reader.
 
 **Body**: the rebase-delta diff command (patch-id-filtered / range-diff), the filtered commit list (only delta commits, not `git log <stage-9-cleared>..HEAD`), the rebase-delta summary, and the `/verify` results table. When the rebase delta is empty, the body also carries the named correctness confirmation and the commit list is empty. The diff evidence, commit list, `fixed_point`, and `diff_range` are synchronized to the same filtered rebase-delta semantics.
 
@@ -89,7 +92,7 @@ A Security or Coverage consumer verifies `repository`, `head_sha`, `fixed_point`
 
 **Safe write**: if the target path is a symlink or reparse point, abort. Write to a temp file and rename onto the final path; never write the final path directly. If the target already exists with a different `fixed_point` or `head_sha`, abort rather than overwrite. On any abort: stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**.
 
-**Write-time freshness**: immediately before writing, re-resolve `git rev-parse HEAD`. If it differs from the HEAD captured when the rebase delta and `/verify` evidence were computed, abort (fail closed): stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**.
+**Write-time freshness**: immediately before writing, re-resolve `git rev-parse HEAD` and force-refresh `origin/main` (force-fetch and verify it still equals the remote tip). If HEAD differs from the HEAD captured when the rebase delta and `/verify` evidence were computed — or fresh `origin/main` has moved since `new_base` was derived — abort (fail closed): stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**, and recompute rather than writing evidence against a stale base.
 
 **Read-only during fan-out**: `code-reviewer` and `security-reviewer` have no dedicated Edit or Write tools; Bash is available but not a sanctioned write path. Integrity during fan-out relies on that profile constraint, not filesystem permissions.
 
@@ -110,7 +113,7 @@ Dispatch security, coverage, and (when the rebase delta is non-empty) `/code-rev
 
 Security and coverage each get the path to the ship-review pre-pass artifact.
 Each lane reads that file as its first action and verifies `repository`,
-`head_sha`, `fixed_point`, and `diff_range` against its own environment by re-deriving the same patch-id-filtered rebase-delta semantics. If the
+`head_sha`, `fixed_point`, and `diff_range` against its own environment by re-deriving the same patch-id-filtered rebase-delta semantics from a freshly force-fetched `origin/main` only. If fresh `origin/main` cannot be resolved, or is stale against the remote tip, the lane fails closed with **Could not run** / **NEEDS FIXES** and does not substitute an alternate base. If the
 file is missing, unreadable, or any of those fields mismatch — or the lane
 cannot verify — it fails closed. Do not also relay the diff command, commit
 list, or `/verify` table inline. Correctness gets the named confirmation when

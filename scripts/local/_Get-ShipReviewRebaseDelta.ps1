@@ -1,5 +1,11 @@
 # Shared git semantics for DEV-209 ship-review rebase-delta scope.
+# Implements the patch-id-filtered / git range-diff contract from
+# skills/ship-review/SKILL.md, skills/code-review/SKILL.md, and ADR 0014.
 # Dot-sourced by scripts/local/Test-ShipReviewRebaseScope.ps1.
+#
+# Merge commits and empty commits may yield no patch-id from git patch-id;
+# those commits are treated conservatively as delta commits (included), not
+# silently dropped.
 
 Set-StrictMode -Version Latest
 
@@ -82,24 +88,211 @@ function Get-GitPatchIdSet {
     return ,$set
 }
 
+function Ensure-OriginMainRef {
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    $remote = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('remote', 'get-url', 'origin')
+    if (-not $remote.Ok) {
+        return $false
+    }
+
+    $fetch = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @(
+        'fetch', '--no-tags', '--depth=1', 'origin', '+refs/heads/main:refs/remotes/origin/main'
+    )
+    if (-not $fetch.Ok) {
+        return $false
+    }
+
+    $verify = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('rev-parse', '--verify', 'origin/main')
+    if (-not $verify.Ok) {
+        return $false
+    }
+
+    $remoteTip = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('ls-remote', 'origin', 'refs/heads/main')
+    if (-not $remoteTip.Ok -or [string]::IsNullOrWhiteSpace($remoteTip.Output)) {
+        return $false
+    }
+
+    $remoteSha = ($remoteTip.Output.Trim().Split()[0])
+    $localSha = $verify.Output.Trim()
+    return ($remoteSha -eq $localSha)
+}
+
+function Test-OriginMainRefFreshness {
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    $staleSha = (Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('rev-parse', 'origin/main')).Output.Trim()
+    $advance = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('checkout', '-q', 'main')
+    if (-not $advance.Ok) {
+        return [pscustomobject]@{ Ok = $false; Detail = "could not checkout main: $($advance.Output)" }
+    }
+
+    Set-Content -LiteralPath (Join-Path $RepoRoot 'freshness.txt') -Value 'advance' -Encoding utf8
+    Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('add', 'freshness.txt') | Out-Null
+    $commit = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('commit', '-q', '-m', 'advance-main')
+    if (-not $commit.Ok) {
+        return [pscustomobject]@{ Ok = $false; Detail = "could not advance main: $($commit.Output)" }
+    }
+
+    $currentMain = (Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('rev-parse', 'HEAD')).Output.Trim()
+    $push = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('push', '-q', 'origin', 'main')
+    if (-not $push.Ok) {
+        return [pscustomobject]@{ Ok = $false; Detail = "could not push advanced main: $($push.Output)" }
+    }
+
+    $pinStale = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('update-ref', 'refs/remotes/origin/main', $staleSha)
+    if (-not $pinStale.Ok) {
+        return [pscustomobject]@{ Ok = $false; Detail = "could not pin stale origin/main: $($pinStale.Output)" }
+    }
+
+    $stillStale = (Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('rev-parse', 'origin/main')).Output.Trim()
+    if ($stillStale -eq $currentMain) {
+        return [pscustomobject]@{ Ok = $false; Detail = 'origin/main was not left stale before refresh proof' }
+    }
+
+    if (-not (Ensure-OriginMainRef -RepoRoot $RepoRoot)) {
+        return [pscustomobject]@{ Ok = $false; Detail = 'Ensure-OriginMainRef failed to refresh stale origin/main' }
+    }
+
+    $refreshed = (Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('rev-parse', 'origin/main')).Output.Trim()
+    if ($refreshed -ne $currentMain) {
+        return [pscustomobject]@{
+            Ok     = $false
+            Detail = "origin/main not fresh after fetch: expected=$currentMain actual=$refreshed stale=$staleSha"
+        }
+    }
+
+    return [pscustomobject]@{
+        Ok     = $true
+        Detail = "origin/main refreshed from $staleSha to $refreshed"
+    }
+}
+
 function Resolve-ShipReviewNewBase {
     param(
         [Parameter(Mandatory)][string]$RepoRoot
     )
 
-    foreach ($candidate in @('origin/main', 'origin/master', 'main', 'master')) {
-        $resolve = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('rev-parse', '--verify', $candidate)
-        if (-not $resolve.Ok) {
-            continue
-        }
+    if (-not (Ensure-OriginMainRef -RepoRoot $RepoRoot)) {
+        return $null
+    }
 
-        $merge = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('merge-base', 'HEAD', $candidate)
-        if ($merge.Ok -and -not [string]::IsNullOrWhiteSpace($merge.Output)) {
-            return $merge.Output.Trim()
-        }
+    $merge = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('merge-base', 'HEAD', 'origin/main')
+    if ($merge.Ok -and -not [string]::IsNullOrWhiteSpace($merge.Output)) {
+        return $merge.Output.Trim()
     }
 
     return $null
+}
+
+function Test-BranchBasedOnOriginMain {
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    if (-not (Ensure-OriginMainRef -RepoRoot $RepoRoot)) {
+        return [pscustomobject]@{
+            Ok     = $false
+            Detail = 'could not resolve origin/main'
+        }
+    }
+
+    $ancestor = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @(
+        'merge-base', '--is-ancestor', 'origin/main', 'HEAD'
+    )
+    return [pscustomobject]@{
+        Ok     = ($ancestor.Ok -and $ancestor.ExitCode -eq 0)
+        Detail = $ancestor.Output
+    }
+}
+
+function Test-NoOpenPrDependencyOverlap {
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        return [pscustomobject]@{
+            Ok     = $false
+            Detail = 'gh is unavailable'
+        }
+    }
+
+    $branchResult = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('rev-parse', '--abbrev-ref', 'HEAD')
+    if (-not $branchResult.Ok) {
+        return [pscustomobject]@{
+            Ok     = $false
+            Detail = "could not resolve current branch: $($branchResult.Output)"
+        }
+    }
+    $branch = $branchResult.Output.Trim()
+
+    if (-not (Ensure-OriginMainRef -RepoRoot $RepoRoot)) {
+        return [pscustomobject]@{
+            Ok     = $false
+            Detail = 'could not resolve origin/main for overlap proof'
+        }
+    }
+
+    $openJson = gh pr list --state open --json number,headRefName 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        return [pscustomobject]@{
+            Ok     = $false
+            Detail = "gh pr list failed: $openJson"
+        }
+    }
+
+    $openPrs = @(@($openJson | ConvertFrom-Json) | Where-Object { $_.headRefName -ne $branch })
+    if ($openPrs.Count -eq 0) {
+        return [pscustomobject]@{
+            Ok     = $true
+            Detail = 'no other open PR heads'
+        }
+    }
+
+    $ourFilesResult = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @(
+        'diff', '--name-only', 'origin/main...HEAD'
+    )
+    if (-not $ourFilesResult.Ok) {
+        return [pscustomobject]@{
+            Ok     = $false
+            Detail = "could not diff origin/main...HEAD: $($ourFilesResult.Output)"
+        }
+    }
+    $ourFiles = [System.Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase
+    )
+    foreach ($path in ($ourFilesResult.Output -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+        $ourFiles.Add($path.Trim()) | Out-Null
+    }
+
+    foreach ($pr in $openPrs) {
+        $theirFilesRaw = gh pr diff $pr.number --name-only 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            return [pscustomobject]@{
+                Ok     = $false
+                Detail = "gh pr diff $($pr.number) failed: $theirFilesRaw"
+            }
+        }
+
+        foreach ($path in ($theirFilesRaw -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })) {
+            if ($ourFiles.Contains($path.Trim())) {
+                return [pscustomobject]@{
+                    Ok     = $false
+                    Detail = "open PR #$($pr.number) overlaps on $path"
+                }
+            }
+        }
+    }
+
+    return [pscustomobject]@{
+        Ok     = $true
+        Detail = 'no dependency/overlap with other open PR heads'
+    }
 }
 
 function Test-RangeDiffHasHunkDifferences {
@@ -122,8 +315,7 @@ function Get-ShipReviewRebaseDeltaScope {
     param(
         [Parameter(Mandatory)][string]$RepoRoot,
         [Parameter(Mandatory)][string]$Stage9Cleared,
-        [string]$Head = 'HEAD',
-        [string]$DefaultBranchRef = 'origin/main'
+        [string]$Head = 'HEAD'
     )
 
     $stage9Resolve = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('rev-parse', '--verify', $Stage9Cleared)
@@ -145,13 +337,21 @@ function Get-ShipReviewRebaseDeltaScope {
     }
 
     $oldBase = $oldBaseResult.Output.Trim()
+
+    # Capture the naive three-dot expansion before origin/main fetch; shallow
+    # fetches can make dangling stage-9 SHAs unmergeable afterward.
+    $threeDotRange = '{0}...{1}' -f $stage9Sha, $headSha
+    $threeDotNames = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @(
+        'diff', '--name-only', $threeDotRange
+    )
+    $threeDotFiles = @()
+    if ($threeDotNames.Ok) {
+        $threeDotFiles = @($threeDotNames.Output -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+
     $newBase = Resolve-ShipReviewNewBase -RepoRoot $RepoRoot
     if ([string]::IsNullOrWhiteSpace($newBase)) {
-        $newBaseResult = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('merge-base', $headSha, $DefaultBranchRef)
-        if (-not $newBaseResult.Ok -or [string]::IsNullOrWhiteSpace($newBaseResult.Output)) {
-            throw "Could not resolve new_base: $($newBaseResult.Output)"
-        }
-        $newBase = $newBaseResult.Output.Trim()
+        throw 'Could not resolve new_base from origin/main'
     }
 
     $oldSeries = "$oldBase..$stage9Sha"
@@ -194,35 +394,87 @@ function Get-ShipReviewRebaseDeltaScope {
         }
     }
 
-    $threeDotNames = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @(
-        'diff', '--name-only', "$stage9Sha...$headSha"
-    )
-    $threeDotFiles = @()
-    if ($threeDotNames.Ok) {
-        $threeDotFiles = @($threeDotNames.Output -split "`n" | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-    }
-
     $transport = "Explicit ship-review rebase-delta range: $stage9Sha..HEAD"
     $diffCommand = "git range-diff $oldBase..$stage9Sha $newBase..$headSha"
+    $commitList = Get-ShipReviewFilteredCommitList -RepoRoot $RepoRoot -FilteredCommits @($filteredCommits)
 
     return [pscustomobject]@{
-        RepoRoot          = $RepoRoot
-        Stage9Cleared     = $stage9Sha
-        HeadSha           = $headSha
-        OldBase           = $oldBase
-        NewBase           = $newBase
-        OldSeries         = $oldSeries
-        NewSeries         = $newSeries
-        FilteredCommits   = @($filteredCommits)
-        ChangedFiles      = @($changedFiles | Sort-Object)
-        ThreeDotFiles     = $threeDotFiles
-        IsEmpty           = $isEmpty
+        RepoRoot           = $RepoRoot
+        Stage9Cleared      = $stage9Sha
+        HeadSha            = $headSha
+        OldBase            = $oldBase
+        NewBase            = $newBase
+        OldSeries          = $oldSeries
+        NewSeries          = $newSeries
+        FilteredCommits    = @($filteredCommits)
+        FilteredCommitList = $commitList
+        ChangedFiles       = @($changedFiles | Sort-Object)
+        ThreeDotFiles      = $threeDotFiles
+        IsEmpty            = $isEmpty
         HasHunkDifferences = $hasHunkDifferences
-        RangeDiffOutput   = $rangeDiff.Output
-        DiffCommand       = $diffCommand
-        TransportField    = $transport
-        DiffRange         = $transport
-        FixedPoint        = $stage9Sha
+        RangeDiffOutput    = $rangeDiff.Output
+        DiffCommand        = $diffCommand
+        TransportField     = $transport
+        DiffRange          = $transport
+        FixedPoint         = $stage9Sha
+    }
+}
+
+function Get-ShipReviewFilteredCommitList {
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot,
+        [AllowEmptyCollection()][string[]]$FilteredCommits = @()
+    )
+
+    if ($FilteredCommits.Count -eq 0) {
+        return @()
+    }
+
+    $lines = [System.Collections.Generic.List[string]]::new()
+    foreach ($commit in $FilteredCommits) {
+        $log = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @(
+            'log', '-1', '--oneline', $commit
+        )
+        if ($log.Ok -and -not [string]::IsNullOrWhiteSpace($log.Output)) {
+            $lines.Add($log.Output.Trim()) | Out-Null
+        }
+    }
+
+    return @($lines)
+}
+
+function Test-ShipReviewArtifactConsumer {
+    param(
+        [Parameter(Mandatory)]$Scope,
+        [Parameter(Mandatory)][string]$ConsumerHeadSha,
+        [string]$ConsumerDiffRange = '',
+        [string]$ConsumerFixedPoint = ''
+    )
+
+    if ($ConsumerHeadSha -ne $Scope.HeadSha) {
+        return [pscustomobject]@{
+            Ok     = $false
+            Reason = 'head_sha mismatch'
+        }
+    }
+
+    if ($ConsumerDiffRange -and $ConsumerDiffRange -ne $Scope.DiffRange) {
+        return [pscustomobject]@{
+            Ok     = $false
+            Reason = 'diff_range mismatch'
+        }
+    }
+
+    if ($ConsumerFixedPoint -and $ConsumerFixedPoint -ne $Scope.FixedPoint) {
+        return [pscustomobject]@{
+            Ok     = $false
+            Reason = 'fixed_point mismatch'
+        }
+    }
+
+    return [pscustomobject]@{
+        Ok     = $true
+        Reason = 'accepted'
     }
 }
 
@@ -238,14 +490,13 @@ function Test-ExplicitDiffRangeTransport {
     }
 
     $value = $Matches[1]
-    if ($value -match '\.\.') {
+    $dotCount = @($value.ToCharArray() | Where-Object { $_ -eq '.' }).Count
+    if ($dotCount -eq 2) {
         return [pscustomobject]@{ Ok = $false; Reason = 'two-dot range' }
     }
-
-    if (($value.ToCharArray() | Where-Object { $_ -eq '.' }).Count -ne 3) {
+    if ($dotCount -ne 3) {
         return [pscustomobject]@{ Ok = $false; Reason = 'separator count' }
     }
-
     if ($value -notmatch '^([^\.]+)\.\.\.HEAD$') {
         return [pscustomobject]@{ Ok = $false; Reason = 'grammar' }
     }
