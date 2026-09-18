@@ -7,6 +7,19 @@
 
 . (Join-Path $PSScriptRoot '_json-property.ps1')
 
+# DEV-240: PS 5.1-compatible atomic replace. File.Replace with $null backup fails via
+# PowerShell binder (empty path) on both WinPS and pwsh; this wrapper passes true null.
+try {
+    if (-not ([System.Management.Automation.PSTypeName]'AtomicSeatMapReplace').Type) {
+        Add-Type -TypeDefinition @"
+using System.IO;
+public static class AtomicSeatMapReplace {
+    public static void Replace(string source, string dest) { File.Replace(source, dest, null); }
+}
+"@ -ErrorAction Stop
+    }
+} catch { }
+
 function Get-SeatMapRequiredSchemaVersion {
     return 2
 }
@@ -1183,13 +1196,27 @@ function Save-SeatMapFile {
     }
     $temp = $Path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
     $utf8 = [System.Text.UTF8Encoding]::new($false)
+    $replaced = $false
     try {
         [System.IO.File]::WriteAllText($temp, $Content, $utf8)
-        [System.IO.File]::Move($temp, $Path, $true)
+        if (Test-Path -LiteralPath $Path) {
+            [AtomicSeatMapReplace]::Replace($temp, $Path)
+        }
+        else {
+            [System.IO.File]::Move($temp, $Path)
+        }
+        $replaced = $true
     }
     finally {
-        if (Test-Path -LiteralPath $temp) {
-            Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+        if ($replaced) {
+            if (Test-Path -LiteralPath $temp) {
+                Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+            }
+        }
+        else {
+            if ((Test-Path -LiteralPath $Path) -and (Test-Path -LiteralPath $temp)) {
+                Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 }

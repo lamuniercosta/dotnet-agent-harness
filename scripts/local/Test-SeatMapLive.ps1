@@ -13,7 +13,8 @@
 
 [CmdletBinding()]
 param(
-    [switch]$LockOnly
+    [switch]$LockOnly,
+    [switch]$Dev240WinPsOnly
 )
 
 Set-StrictMode -Version Latest
@@ -45,6 +46,109 @@ function Assert-True {
             Write-Host "           actual  =$Actual" -ForegroundColor DarkGray
         }
         $script:failures++
+    }
+}
+
+if ($Dev240WinPsOnly) {
+    $winPsCandidates = @('powershell.exe', 'powershell')
+    $winPsPath = $null
+    foreach ($cand in $winPsCandidates) {
+        $found = Get-Command $cand -ErrorAction SilentlyContinue
+        if ($null -ne $found) { $winPsPath = $found.Source; break }
+    }
+    if ([string]::IsNullOrWhiteSpace($winPsPath)) {
+        Write-Host 'SKIPPED: Windows PowerShell 5.1 unavailable'
+        exit 2
+    }
+    $dev240Root = Join-Path ([System.IO.Path]::GetTempPath()) ('dev240-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $dev240Root -Force | Out-Null
+    try {
+        $target = Join-Path $dev240Root 'seat-map.json'
+        $helperLiteral = $helperPath.Replace("'", "''")
+        $targetLiteral = $target.Replace("'", "''")
+        $winScript = Join-Path $dev240Root 'dev240-winps.ps1'
+        $winScriptBody = @(
+            "Set-StrictMode -Version Latest"
+            "`$ErrorActionPreference = 'Stop'"
+            ". '$helperLiteral'"
+            "Save-SeatMapFile -Path '$targetLiteral' -Content '{`"ok`":1}'"
+            "Save-SeatMapFile -Path '$targetLiteral' -Content '{`"ok`":2}'"
+        ) -join [Environment]::NewLine
+        [System.IO.File]::WriteAllText($winScript, $winScriptBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+        $psi = [System.Diagnostics.ProcessStartInfo]::new()
+        $psi.FileName = $winPsPath
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.CreateNoWindow = $true
+        [void]$psi.ArgumentList.Add('-NoProfile')
+        [void]$psi.ArgumentList.Add('-File')
+        [void]$psi.ArgumentList.Add($winScript)
+        # Fallback for hosts where ArgumentList is not supported (e.g. older .NET): use Arguments string
+        if ($psi.ArgumentList.Count -eq 0) {
+            $psi.Arguments = "-NoProfile -File `"$winScript`""
+        }
+        $p = [System.Diagnostics.Process]::Start($psi)
+        $stdoutTask = $p.StandardOutput.ReadToEndAsync()
+        $stderrTask = $p.StandardError.ReadToEndAsync()
+        if (-not $p.WaitForExit(30000)) {
+            try { $p.Kill($true) } catch { }
+            [void]$p.WaitForExit(5000)
+            Write-Host "  FAIL     DEV-240 WinPS Save-SeatMapFile overwrite: exit 0"
+            Write-Host "           expected=0"
+            Write-Host "           actual  =timeout"
+            exit 1
+        }
+        $winPsExit = $p.ExitCode
+        $winStdOut = $stdoutTask.GetAwaiter().GetResult()
+        $winStdErr = $stderrTask.GetAwaiter().GetResult()
+        $winCombined = "$winStdOut`n$winStdErr"
+        $exitOk = ($winPsExit -eq 0)
+        Assert-True 'DEV-240 WinPS Save-SeatMapFile overwrite: exit 0' $exitOk '0' "$winPsExit"
+        $finalContent = ''
+        $contentOk = $false
+        $hasBom = $false
+        $siblingCount = -1
+        $siblingOk = $false
+        if ($exitOk) {
+            if (Test-Path -LiteralPath $target) {
+                $finalContent = [System.IO.File]::ReadAllText($target)
+                $contentOk = ($finalContent -eq '{"ok":2}')
+                $bytes = [System.IO.File]::ReadAllBytes($target)
+                if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+                    $hasBom = $true
+                }
+                $bomOk = (-not $hasBom)
+                $siblings = @(Get-ChildItem -LiteralPath $dev240Root -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*.tmp' })
+                $siblingCount = $siblings.Count
+                $siblingOk = ($siblingCount -eq 0)
+            }
+            else {
+                $finalContent = '<missing>'
+            }
+            Assert-True 'DEV-240 WinPS Save-SeatMapFile overwrite: final content' $contentOk '{"ok":2}' $finalContent
+            $bomActual = if ($hasBom) { 'present BOM' } else { 'absent BOM' }
+            Assert-True 'DEV-240 WinPS Save-SeatMapFile overwrite: no UTF8 BOM' (-not $hasBom) 'absent BOM' $bomActual
+            Assert-True 'DEV-240 WinPS Save-SeatMapFile overwrite: no temp siblings after success' $siblingOk '0' "$siblingCount"
+            if (-not $contentOk) { exit 3 }
+            if ($hasBom) { exit 4 }
+            if (-not $siblingOk) { exit 5 }
+            if ($script:failures -gt 0) { exit 1 }
+            Write-Host ''
+            Write-Host "Test-SeatMapLive -Dev240WinPsOnly: $checks checks, $failures failures."
+            exit 0
+        }
+        else {
+            Write-Host "           winps stdout: $winStdOut" -ForegroundColor DarkGray
+            Write-Host "           winps stderr: $winStdErr" -ForegroundColor DarkGray
+            if ($script:failures -gt 0) { exit 1 }
+            exit 1
+        }
+    }
+    finally {
+        if (Test-Path -LiteralPath $dev240Root) {
+            Remove-Item -LiteralPath $dev240Root -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
