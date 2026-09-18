@@ -60,33 +60,35 @@ if ($Dev240WinPsOnly) {
         Write-Host 'SKIPPED: Windows PowerShell 5.1 unavailable'
         exit 2
     }
-    $dev240Root = Join-Path ([System.IO.Path]::GetTempPath()) ('dev240-' + [guid]::NewGuid().ToString('N'))
-    New-Item -ItemType Directory -Path $dev240Root -Force | Out-Null
-    try {
-        $target = Join-Path $dev240Root 'seat-map.json'
-        $helperLiteral = $helperPath.Replace("'", "''")
-        $targetLiteral = $target.Replace("'", "''")
-        $winScript = Join-Path $dev240Root 'dev240-winps.ps1'
-        $winScriptBody = @(
-            "Set-StrictMode -Version Latest"
-            "`$ErrorActionPreference = 'Stop'"
-            ". '$helperLiteral'"
-            "Save-SeatMapFile -Path '$targetLiteral' -Content '{`"ok`":1}'"
-            "Save-SeatMapFile -Path '$targetLiteral' -Content '{`"ok`":2}'"
-        ) -join [Environment]::NewLine
-        [System.IO.File]::WriteAllText($winScript, $winScriptBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+
+    function Get-Dev240WinPsHostIdentityScriptLines {
+        return @(
+            "if (`$PSVersionTable.PSEdition -ne 'Desktop' -or `$PSVersionTable.PSVersion.Major -ne 5) {"
+            "    Write-Output ('HOST_IDENTITY=' + `$PSVersionTable.PSEdition + ' ' + `$PSVersionTable.PSVersion.Major + '.' + `$PSVersionTable.PSVersion.Minor)"
+            "    exit 6"
+            "}"
+            "Write-Output 'HOST_IDENTITY=Desktop 5.1'"
+        )
+    }
+
+    function Invoke-Dev240WinPsScript {
+        param(
+            [Parameter(Mandatory = $true)]
+            [string]$WinPsPath,
+            [Parameter(Mandatory = $true)]
+            [string]$ScriptPath
+        )
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
-        $psi.FileName = $winPsPath
+        $psi.FileName = $WinPsPath
         $psi.UseShellExecute = $false
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
         $psi.CreateNoWindow = $true
         [void]$psi.ArgumentList.Add('-NoProfile')
         [void]$psi.ArgumentList.Add('-File')
-        [void]$psi.ArgumentList.Add($winScript)
-        # Fallback for hosts where ArgumentList is not supported (e.g. older .NET): use Arguments string
+        [void]$psi.ArgumentList.Add($ScriptPath)
         if ($psi.ArgumentList.Count -eq 0) {
-            $psi.Arguments = "-NoProfile -File `"$winScript`""
+            $psi.Arguments = "-NoProfile -File `"$ScriptPath`""
         }
         $p = [System.Diagnostics.Process]::Start($psi)
         $stdoutTask = $p.StandardOutput.ReadToEndAsync()
@@ -94,15 +96,58 @@ if ($Dev240WinPsOnly) {
         if (-not $p.WaitForExit(30000)) {
             try { $p.Kill($true) } catch { }
             [void]$p.WaitForExit(5000)
+            return @{
+                TimedOut = $true
+                ExitCode = -1
+                StdOut = ''
+                StdErr = ''
+            }
+        }
+        return @{
+            TimedOut = $false
+            ExitCode = $p.ExitCode
+            StdOut = $stdoutTask.GetAwaiter().GetResult()
+            StdErr = $stderrTask.GetAwaiter().GetResult()
+        }
+    }
+
+    function Assert-Dev240WinPsHostIdentity {
+        param([string]$Combined)
+        $identityMatch = [regex]::Match($Combined, 'HOST_IDENTITY=(.+?)(\r?\n|$)')
+        $identityActual = if ($identityMatch.Success) { $identityMatch.Groups[1].Value.Trim() } else { '<missing>' }
+        Assert-True 'DEV-240 WinPS host identity: Desktop 5.1' ($identityActual -eq 'Desktop 5.1') 'Desktop 5.1' $identityActual
+    }
+
+    $dev240Roots = [System.Collections.Generic.List[string]]::new()
+    try {
+        $helperLiteral = $helperPath.Replace("'", "''")
+
+        # Success overwrite probe (existing DEV-240 literals).
+        $dev240Root = Join-Path ([System.IO.Path]::GetTempPath()) ('dev240-' + [guid]::NewGuid().ToString('N'))
+        $dev240Roots.Add($dev240Root)
+        New-Item -ItemType Directory -Path $dev240Root -Force | Out-Null
+        $target = Join-Path $dev240Root 'seat-map.json'
+        $targetLiteral = $target.Replace("'", "''")
+        $winScript = Join-Path $dev240Root 'dev240-winps-success.ps1'
+        $winScriptBody = @(
+            (Get-Dev240WinPsHostIdentityScriptLines)
+            "Set-StrictMode -Version Latest"
+            "`$ErrorActionPreference = 'Stop'"
+            ". '$helperLiteral'"
+            "Save-SeatMapFile -Path '$targetLiteral' -Content '{`"ok`":1}'"
+            "Save-SeatMapFile -Path '$targetLiteral' -Content '{`"ok`":2}'"
+        ) -join [Environment]::NewLine
+        [System.IO.File]::WriteAllText($winScript, $winScriptBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+        $successRun = Invoke-Dev240WinPsScript -WinPsPath $winPsPath -ScriptPath $winScript
+        $successCombined = "$($successRun.StdOut)`n$($successRun.StdErr)"
+        Assert-Dev240WinPsHostIdentity -Combined $successCombined
+        if ($successRun.TimedOut) {
             Write-Host "  FAIL     DEV-240 WinPS Save-SeatMapFile overwrite: exit 0"
             Write-Host "           expected=0"
             Write-Host "           actual  =timeout"
             exit 1
         }
-        $winPsExit = $p.ExitCode
-        $winStdOut = $stdoutTask.GetAwaiter().GetResult()
-        $winStdErr = $stderrTask.GetAwaiter().GetResult()
-        $winCombined = "$winStdOut`n$winStdErr"
+        $winPsExit = $successRun.ExitCode
         $exitOk = ($winPsExit -eq 0)
         Assert-True 'DEV-240 WinPS Save-SeatMapFile overwrite: exit 0' $exitOk '0' "$winPsExit"
         $finalContent = ''
@@ -118,7 +163,6 @@ if ($Dev240WinPsOnly) {
                 if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
                     $hasBom = $true
                 }
-                $bomOk = (-not $hasBom)
                 $siblings = @(Get-ChildItem -LiteralPath $dev240Root -File -ErrorAction SilentlyContinue | Where-Object { $_.Name -like '*.tmp' })
                 $siblingCount = $siblings.Count
                 $siblingOk = ($siblingCount -eq 0)
@@ -133,21 +177,124 @@ if ($Dev240WinPsOnly) {
             if (-not $contentOk) { exit 3 }
             if ($hasBom) { exit 4 }
             if (-not $siblingOk) { exit 5 }
-            if ($script:failures -gt 0) { exit 1 }
-            Write-Host ''
-            Write-Host "Test-SeatMapLive -Dev240WinPsOnly: $checks checks, $failures failures."
-            exit 0
         }
         else {
-            Write-Host "           winps stdout: $winStdOut" -ForegroundColor DarkGray
-            Write-Host "           winps stderr: $winStdErr" -ForegroundColor DarkGray
+            Write-Host "           winps stdout: $($successRun.StdOut)" -ForegroundColor DarkGray
+            Write-Host "           winps stderr: $($successRun.StdErr)" -ForegroundColor DarkGray
             if ($script:failures -gt 0) { exit 1 }
             exit 1
         }
+
+        # Failure preservation: existing target must survive a replace failure.
+        $preserveRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('dev240-preserve-' + [guid]::NewGuid().ToString('N'))
+        $dev240Roots.Add($preserveRoot)
+        New-Item -ItemType Directory -Path $preserveRoot -Force | Out-Null
+        $preserveTarget = Join-Path $preserveRoot 'seat-map.json'
+        $preserveTargetLiteral = $preserveTarget.Replace("'", "''")
+        $preserveScript = Join-Path $preserveRoot 'dev240-winps-preserve.ps1'
+        $preserveScriptBody = @(
+            (Get-Dev240WinPsHostIdentityScriptLines)
+            "Set-StrictMode -Version Latest"
+            "`$ErrorActionPreference = 'Stop'"
+            ". '$helperLiteral'"
+            "Save-SeatMapFile -Path '$preserveTargetLiteral' -Content '{`"ok`":1}'"
+            "`$lock = [System.IO.File]::Open('$preserveTargetLiteral', [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)"
+            "try {"
+            "    try {"
+            "        Save-SeatMapFile -Path '$preserveTargetLiteral' -Content '{`"ok`":2}'"
+            "        Write-Output 'PRESERVE_FAIL=save succeeded unexpectedly'"
+            "        exit 7"
+            "    } catch {"
+            "    }"
+            "} finally {"
+            "    `$lock.Close()"
+            "}"
+        ) -join [Environment]::NewLine
+        [System.IO.File]::WriteAllText($preserveScript, $preserveScriptBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+        $preserveRun = Invoke-Dev240WinPsScript -WinPsPath $winPsPath -ScriptPath $preserveScript
+        $preserveCombined = "$($preserveRun.StdOut)`n$($preserveRun.StdErr)"
+        Assert-Dev240WinPsHostIdentity -Combined $preserveCombined
+        $preservedContent = '<missing>'
+        if (Test-Path -LiteralPath $preserveTarget) {
+            $preservedContent = [System.IO.File]::ReadAllText($preserveTarget)
+        }
+        Assert-True 'DEV-240 WinPS Save-SeatMapFile failure: existing target preserved' ($preservedContent -eq '{"ok":1}') '{"ok":1}' $preservedContent
+
+        # Failure preservation: missing target must retain the only surviving temp copy.
+        $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('dev240-temp-' + [guid]::NewGuid().ToString('N'))
+        $dev240Roots.Add($tempRoot)
+        New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+        $tempTarget = Join-Path $tempRoot 'seat-map.json'
+        $tempTargetLiteral = $tempTarget.Replace("'", "''")
+        $tempRootLiteral = $tempRoot.Replace("'", "''")
+        $tempScript = Join-Path $tempRoot 'dev240-winps-temp.ps1'
+        $tempScriptBody = @(
+            (Get-Dev240WinPsHostIdentityScriptLines)
+            "Set-StrictMode -Version Latest"
+            "`$ErrorActionPreference = 'Stop'"
+            ". '$helperLiteral'"
+            "function Save-SeatMapFile {"
+            "    param("
+            "        [Parameter(Mandatory = `$true)][string]`$Path,"
+            "        [Parameter(Mandatory = `$true)][string]`$Content"
+            "    )"
+            "    `$dir = [System.IO.Path]::GetDirectoryName(`$Path)"
+            "    if (-not [string]::IsNullOrWhiteSpace(`$dir) -and -not (Test-Path -LiteralPath `$dir)) {"
+            "        New-Item -ItemType Directory -Path `$dir -Force | Out-Null"
+            "    }"
+            "    `$temp = `$Path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'"
+            "    `$utf8 = [System.Text.UTF8Encoding]::new(`$false)"
+            "    `$replaced = `$false"
+            "    try {"
+            "        [System.IO.File]::WriteAllText(`$temp, `$Content, `$utf8)"
+            "        if (Test-Path -LiteralPath `$Path) {"
+            "            [System.IO.File]::Replace(`$temp, `$Path, [NullString]::Value)"
+            "        }"
+            "        else {"
+            "            throw [System.IO.IOException]::new('DEV-240 injected first-create move failure')"
+            "        }"
+            "        `$replaced = `$true"
+            "    }"
+            "    finally {"
+            "        if (`$replaced) {"
+            "            if (Test-Path -LiteralPath `$temp) {"
+            "                Remove-Item -LiteralPath `$temp -Force -ErrorAction SilentlyContinue"
+            "            }"
+            "        }"
+            "        else {"
+            "            if ((Test-Path -LiteralPath `$Path) -and (Test-Path -LiteralPath `$temp)) {"
+            "                Remove-Item -LiteralPath `$temp -Force -ErrorAction SilentlyContinue"
+            "            }"
+            "        }"
+            "    }"
+            "}"
+            "try {"
+            "    Save-SeatMapFile -Path '$tempTargetLiteral' -Content '{`"ok`":1}'"
+            "    Write-Output 'TEMP_FAIL=save succeeded unexpectedly'"
+            "    exit 8"
+            "} catch {"
+            "}"
+            "`$tempSiblings = @(Get-ChildItem -LiteralPath '$tempRootLiteral' -File -ErrorAction SilentlyContinue | Where-Object { `$_.Name -like '*.tmp' })"
+            "Write-Output ('TEMP_RETAINED=' + `$tempSiblings.Count)"
+        ) -join [Environment]::NewLine
+        [System.IO.File]::WriteAllText($tempScript, $tempScriptBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+        $tempRun = Invoke-Dev240WinPsScript -WinPsPath $winPsPath -ScriptPath $tempScript
+        $tempCombined = "$($tempRun.StdOut)`n$($tempRun.StdErr)"
+        Assert-Dev240WinPsHostIdentity -Combined $tempCombined
+        $tempMatch = [regex]::Match($tempCombined, 'TEMP_RETAINED=(\d+)')
+        $tempRetainedActual = if ($tempMatch.Success) { $tempMatch.Groups[1].Value } else { '<missing>' }
+        Assert-True 'DEV-240 WinPS Save-SeatMapFile failure: temp retained when target missing' ($tempRetainedActual -eq '1') '1' $tempRetainedActual
+
+        if ($script:failures -gt 0) { exit 1 }
+        Write-Host ''
+        Write-Host "Test-SeatMapLive -Dev240WinPsOnly: $checks checks, $failures failures."
+        exit 0
     }
     finally {
-        if (Test-Path -LiteralPath $dev240Root) {
-            Remove-Item -LiteralPath $dev240Root -Recurse -Force -ErrorAction SilentlyContinue
+        foreach ($root in $dev240Roots) {
+            if (Test-Path -LiteralPath $root) {
+                Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+            }
         }
     }
 }

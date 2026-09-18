@@ -7,19 +7,6 @@
 
 . (Join-Path $PSScriptRoot '_json-property.ps1')
 
-# DEV-240: PS 5.1-compatible atomic replace. File.Replace with $null backup fails via
-# PowerShell binder (empty path) on both WinPS and pwsh; this wrapper passes true null.
-try {
-    if (-not ([System.Management.Automation.PSTypeName]'AtomicSeatMapReplace').Type) {
-        Add-Type -TypeDefinition @"
-using System.IO;
-public static class AtomicSeatMapReplace {
-    public static void Replace(string source, string dest) { File.Replace(source, dest, null); }
-}
-"@ -ErrorAction Stop
-    }
-} catch { }
-
 function Get-SeatMapRequiredSchemaVersion {
     return 2
 }
@@ -1200,7 +1187,7 @@ function Save-SeatMapFile {
     try {
         [System.IO.File]::WriteAllText($temp, $Content, $utf8)
         if (Test-Path -LiteralPath $Path) {
-            [AtomicSeatMapReplace]::Replace($temp, $Path)
+            [System.IO.File]::Replace($temp, $Path, [NullString]::Value)
         }
         else {
             [System.IO.File]::Move($temp, $Path)
