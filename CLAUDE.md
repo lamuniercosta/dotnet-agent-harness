@@ -98,8 +98,9 @@ seat; the map's job is to say which preference a choice crosses. See ADR 0025
 The live seat map is the authority for seat allocation, displayed model-chain
 order, active rung, and runtime FLOOR selection. It is not a hard allow-list
 for every runtime model the host status bar reports. Role instruction files
-synced by `Sync-SeatMap.ps1` — `.maestri/roles/*/role.json`, `AGENTS.md`, and
-`CLAUDE.md` — carry the ordered chain line and floor-quality guidance; they
+synced by `Sync-SeatMap.ps1` — `.maestri/roles/*/role.json`,
+`.maestri/roles/*/AGENTS.md`, and `.maestri/roles/*/CLAUDE.md` — carry the
+ordered chain line and floor-quality guidance; they
 are downstream display artifacts, not an independent runtime model-membership
 gate. A seat must not halt because its live model is absent from that text.
 Removing the obsolete role-text membership tripwire (DEV-269) also removes

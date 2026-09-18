@@ -73,7 +73,7 @@ function Invoke-StaleHaltScrub {
     # remove the preceding "You are at or above your floor..." sentence that forms
     # the same validation rule. Preserve unrelated floor-quality guidance
     # ("Do not compare yourself against the floor entry alone...") and duties.
-    $patternCombined = 'You are at or above your floor if the model you are running appears[\s\S]*?Halt and report only if it appears nowhere in it\.\s*'
+    $patternCombined = 'You are at or above your floor if the model you are running appears\s+\*\*anywhere in that chain\*\*\.\s+Halt and report only if it appears nowhere in it\.\s*'
     $scrubbed = [regex]::Replace($Text, $patternCombined, '')
     if ($scrubbed.Contains('Halt and report only if it appears nowhere in it.')) {
         $patternSolo = '\s*Halt and report only if it appears nowhere in it\.\s*'
@@ -629,10 +629,10 @@ if ($Seat -and $Rung) {
         if ($null -ne $swapRoleJson) {
             Save-SeatMap -Map $swapRoleJson -Path $swapRoleFile
         }
-        if ($null -ne $swapAgentsScrubbedLocked) {
+        if ($null -ne $swapAgentsScrubbedLocked -and $swapAgentsScrubbedLocked -ne $swapAgentsContentLocked) {
             Save-Utf8NoBom -Path $swapAgentsFileLocked -Content $swapAgentsScrubbedLocked
         }
-        if ($null -ne $swapClaudeScrubbedLocked) {
+        if ($null -ne $swapClaudeScrubbedLocked -and $swapClaudeScrubbedLocked -ne $swapClaudeContentLocked) {
             Save-Utf8NoBom -Path $swapClaudeFileLocked -Content $swapClaudeScrubbedLocked
         }
         [Console]::Out.WriteLine((Format-SeatMapLockedSwapLine -Decision $lockedDecision))
@@ -682,33 +682,49 @@ if ($SyncRoles -or $All) {
                 $roleFile = Join-Path $rolesDir $s.roleId 'role.json'
                 $agentsFile = Join-Path $rolesDir $s.roleId 'AGENTS.md'
                 $claudeFile = Join-Path $rolesDir $s.roleId 'CLAUDE.md'
-                if (-not (Test-Path -LiteralPath $roleFile)) {
-                    $msg = "Role file not found for $($s.codename): $roleFile"
-                    $syncMisses.Add($msg)
-                    Write-Warning "  $msg"
-                    continue
-                }
-                $roleJson = Get-Content -LiteralPath $roleFile -Raw | ConvertFrom-Json
                 $floorLaunch = $null
                 if ($null -ne $swapTarget -and $s.id -eq $swapTarget.id -and $null -ne $targetRuntimeFloor -and $targetRuntimeFloor.Ok) {
                     $floorLaunch = $targetRuntimeFloor.Launch
                 }
                 $chainLine = Get-ModelChainLine -Seat $s -FloorLaunch $floorLaunch
-                if ($roleJson.prompt -match '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
-                    $roleJson.prompt = Replace-LiteralRegex -InputText $roleJson.prompt -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $chainLine
-                } else {
-                    $msg = "Could not find Model chain line in role for $($s.codename)"
+                $roleHandled = $false
+                $roleHasChain = $false
+                if (-not (Test-Path -LiteralPath $roleFile)) {
+                    $msg = "Role file not found for $($s.codename): $roleFile"
                     $syncMisses.Add($msg)
                     Write-Warning "  $msg"
-                    continue
+                } else {
+                    $roleJson = Get-Content -LiteralPath $roleFile -Raw | ConvertFrom-Json
+                    if ($roleJson.prompt -match '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
+                        $roleJson.prompt = Replace-LiteralRegex -InputText $roleJson.prompt -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $chainLine
+                        $roleHasChain = $true
+                    } else {
+                        $msg = "Could not find Model chain line in role for $($s.codename)"
+                        $syncMisses.Add($msg)
+                        Write-Warning "  $msg"
+                    }
+                    $roleJson.prompt = Invoke-StaleHaltScrub -Text $roleJson.prompt
+                    if (Test-StaleHaltPresent -Text $roleJson.prompt) {
+                        throw "Seat '$($s.codename)' role file still contains stale halt text after scrub; refusing sync."
+                    }
+                    if ($roleHasChain) {
+                        Save-SeatMap -Map $roleJson -Path $roleFile
+                        Write-Host "  Updated role for $($s.codename) ($($s.name))" -ForegroundColor Green
+                        $roleHandled = $true
+                    } else {
+                        # Even when chain missing, if scrub changed content, persist it so stale does not survive; still report syncMiss for missing chain
+                        $origRaw = Get-Content -LiteralPath $roleFile -Raw
+                        $origJson = $origRaw | ConvertFrom-Json
+                        $origPrompt = [string]$origJson.prompt
+                        $scrubbedPrompt = Invoke-StaleHaltScrub -Text $origPrompt
+                        if ($scrubbedPrompt -ne $origPrompt) {
+                            $roleJson.prompt = $scrubbedPrompt
+                            Save-SeatMap -Map $roleJson -Path $roleFile
+                            Write-Host "  Scrubbed stale halt for $($s.codename) (chain missing)" -ForegroundColor Yellow
+                        }
+                    }
                 }
-                $roleJson.prompt = Invoke-StaleHaltScrub -Text $roleJson.prompt
-                if (Test-StaleHaltPresent -Text $roleJson.prompt) {
-                    throw "Seat '$($s.codename)' role file still contains stale halt text after scrub; refusing sync."
-                }
-                Save-SeatMap -Map $roleJson -Path $roleFile
-                Write-Host "  Updated role for $($s.codename) ($($s.name))" -ForegroundColor Green
-                # Optional AGENTS.md / CLAUDE.md: scrub + chain line, missing is non-fatal
+                # Optional AGENTS.md / CLAUDE.md: scrub + chain line, missing is non-fatal; always run even when role.json missing or chain missing
                 foreach ($pair in @(@($agentsFile, 'AGENTS.md'), @($claudeFile, 'CLAUDE.md'))) {
                     $mdPath = $pair[0]
                     $mdLabel = $pair[1]
@@ -726,7 +742,6 @@ if ($SyncRoles -or $All) {
                         Save-Utf8NoBom -Path $mdPath -Content $mdScrubbed
                         Write-Host "  Updated $mdLabel for $($s.codename)" -ForegroundColor Green
                     } elseif ($mdScrubbed -match '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
-                        # chain line was updated even if scrub was no-op
                         Save-Utf8NoBom -Path $mdPath -Content $mdScrubbed
                         Write-Host "  Updated $mdLabel for $($s.codename)" -ForegroundColor Green
                     }
@@ -736,10 +751,15 @@ if ($SyncRoles -or $All) {
             $syncFatal = [string]$_.Exception.Message
         }
         if ($null -ne $syncFatal) {
+            $restoreErrors = [System.Collections.Generic.List[string]]::new()
             foreach ($p in $syncSnapshot.Keys) {
-                [System.IO.File]::WriteAllBytes($p, $syncSnapshot[$p])
+                try { [System.IO.File]::WriteAllBytes($p, $syncSnapshot[$p]) } catch { $restoreErrors.Add("Restore failed for $p : $_") }
             }
-            Write-Error $syncFatal -ErrorAction Continue
+            if ($restoreErrors.Count -gt 0) {
+                Write-Error ($syncFatal + "`n" + ($restoreErrors -join "`n")) -ErrorAction Continue
+            } else {
+                Write-Error $syncFatal -ErrorAction Continue
+            }
             exit 1
         }
     }
