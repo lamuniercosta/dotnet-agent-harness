@@ -214,11 +214,15 @@ if ($Dev240WinPsOnly) {
         $preserveRun = Invoke-Dev240WinPsScript -WinPsPath $winPsPath -ScriptPath $preserveScript
         $preserveCombined = "$($preserveRun.StdOut)`n$($preserveRun.StdErr)"
         Assert-Dev240WinPsHostIdentity -Combined $preserveCombined
-        $preservedContent = '<missing>'
-        if (Test-Path -LiteralPath $preserveTarget) {
-            $preservedContent = [System.IO.File]::ReadAllText($preserveTarget)
+        $preserveUnexpectedSave = ($preserveCombined -match 'PRESERVE_FAIL=')
+        Assert-True 'DEV-240 WinPS Save-SeatMapFile failure: preserve child exit 0' ($preserveRun.ExitCode -eq 0) '0' "$($preserveRun.ExitCode)"
+        if (-not $preserveUnexpectedSave) {
+            $preservedContent = '<missing>'
+            if (Test-Path -LiteralPath $preserveTarget) {
+                $preservedContent = [System.IO.File]::ReadAllText($preserveTarget)
+            }
+            Assert-True 'DEV-240 WinPS Save-SeatMapFile failure: existing target preserved' ($preservedContent -eq '{"ok":1}') '{"ok":1}' $preservedContent
         }
-        Assert-True 'DEV-240 WinPS Save-SeatMapFile failure: existing target preserved' ($preservedContent -eq '{"ok":1}') '{"ok":1}' $preservedContent
 
         # Failure preservation: missing target must retain the only surviving temp copy.
         $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('dev240-temp-' + [guid]::NewGuid().ToString('N'))
