@@ -115,8 +115,9 @@ the `Test-RouteMap.ps1` gate (DEV-64).
 `Sync-SeatMap.ps1` reads the live workspace seat map (or an explicit
 `-SeatMapPath`) and writes the four downstream targets:
 
-1. Role instruction surfaces (`.maestri/roles/*/role.json`, `AGENTS.md`, and
-   `CLAUDE.md` — the model-chain line and floor guidance).
+1. Role instruction surfaces (`.maestri/roles/*/role.json`,
+   `.maestri/roles/*/AGENTS.md`, and `.maestri/roles/*/CLAUDE.md` — the
+   model-chain line and floor guidance).
 2. `notes/harness-team-charter.md` (the Roster table).
 3. `notes/team-restart.md` (the Launch commands table).
 4. Terminal replacement commands (`maestri recruit --replace`).
@@ -221,7 +222,8 @@ re-anchor across the map is DEV-244.
 **Amended 2026-09-18:** The live seat map remains the authority for seat
 allocation, displayed model-chain order, active rung, and runtime FLOOR
 selection. Role model-chain lines and the reachable role instruction files
-(`role.json` prompt text, `AGENTS.md`, and `CLAUDE.md`) are downstream
+(`.maestri/roles/*/role.json` prompt text, `.maestri/roles/*/AGENTS.md`, and
+`.maestri/roles/*/CLAUDE.md`) are downstream
 sync/display artifacts written by `Sync-SeatMap.ps1`; they are not
 independent runtime model validators and must not instruct seats to halt
 because the host-reported model is absent from that text. Seat-map schema
