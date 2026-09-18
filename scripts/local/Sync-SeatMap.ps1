@@ -55,7 +55,8 @@ param(
     [switch]$GenerateCommands,
     [switch]$Validate,
     [switch]$Init,
-    [switch]$All
+    [switch]$All,
+    [string]$RolesDir
 )
 
 Set-StrictMode -Version Latest
@@ -63,12 +64,39 @@ $ErrorActionPreference = 'Stop'
 
 . (Join-Path $PSScriptRoot '_seat-map.ps1')
 
+function Invoke-StaleHaltScrub {
+    param([string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return $Text }
+    # Shared stale-halt scrub contract (DEV-269): remove the obsolete model-chain
+    # membership self-validation instruction. Anchor literal is
+    # "Halt and report only if it appears nowhere in it." — when present, also
+    # remove the preceding "You are at or above your floor..." sentence that forms
+    # the same validation rule. Preserve unrelated floor-quality guidance
+    # ("Do not compare yourself against the floor entry alone...") and duties.
+    $patternCombined = 'You are at or above your floor if the model you are running appears[\s\S]*?Halt and report only if it appears nowhere in it\.\s*'
+    $scrubbed = [regex]::Replace($Text, $patternCombined, '')
+    if ($scrubbed.Contains('Halt and report only if it appears nowhere in it.')) {
+        $patternSolo = '\s*Halt and report only if it appears nowhere in it\.\s*'
+        $scrubbed = [regex]::Replace($scrubbed, $patternSolo, ' ')
+    }
+    return $scrubbed
+}
+
+function Test-StaleHaltPresent {
+    param([string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return $false }
+    return $Text.Contains('Halt and report only if it appears nowhere in it.')
+}
+
 if ($Verify -and -not $All -and (-not [string]::IsNullOrWhiteSpace($Seat) -or -not [string]::IsNullOrWhiteSpace($Rung))) {
     Write-Error '-Verify cannot be combined with -Seat/-Rung because -Verify is read-only. Use -All for write/sync then verify.' -ErrorAction Continue
     exit 1
 }
 
 $repoRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..' '..')).Path
+if ([string]::IsNullOrWhiteSpace($RolesDir)) {
+    $RolesDir = Join-Path $repoRoot '.maestri' 'roles'
+}
 $resolvedMap = Resolve-LiveSeatMapPath -SeatMapPath $SeatMapPath -WorkspaceId $WorkspaceId -RepoRoot $repoRoot
 $SeatMapPath = $resolvedMap.Path
 $resolvedWorkspaceId = [string]$resolvedMap.WorkspaceId
@@ -447,10 +475,14 @@ if ($Seat -and $Rung) {
     $after = @(Get-SeatMapViolations -Map $seatMap)
     Write-ViolationsAndExit -Violations $after
 
-    $rolesDirForSwap = Join-Path $repoRoot '.maestri' 'roles'
+    $rolesDirForSwap = $RolesDir
     $swapRoleFile = Join-Path $rolesDirForSwap $swapTarget.roleId 'role.json'
     $swapRoleJson = $null
     $swapChainLine = $null
+    $swapAgentsFile = Join-Path $rolesDirForSwap $swapTarget.roleId 'AGENTS.md'
+    $swapClaudeFile = Join-Path $rolesDirForSwap $swapTarget.roleId 'CLAUDE.md'
+    $swapAgentsContent = $null
+    $swapClaudeContent = $null
     if (Test-Path -LiteralPath $swapRoleFile) {
         $swapRoleJson = Get-Content -LiteralPath $swapRoleFile -Raw | ConvertFrom-Json
         $swapChainLine = Get-ModelChainLine -Seat $swapTarget -FloorLaunch $targetRuntimeFloor.Launch
@@ -459,6 +491,36 @@ if ($Seat -and $Rung) {
             exit 1
         }
         $swapRoleJson.prompt = Replace-LiteralRegex -InputText $swapRoleJson.prompt -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $swapChainLine
+        $swapRoleJson.prompt = Invoke-StaleHaltScrub -Text $swapRoleJson.prompt
+        if (Test-StaleHaltPresent -Text $swapRoleJson.prompt) {
+            Write-Error "Seat '$($swapTarget.codename)' role file still contains stale halt text after scrub; refusing target swap before writes." -ErrorAction Continue
+            exit 1
+        }
+    }
+    # Preflight scrub for optional AGENTS.md/CLAUDE.md (missing is non-fatal)
+    if (Test-Path -LiteralPath $swapAgentsFile) {
+        $swapAgentsContent = Get-Content -LiteralPath $swapAgentsFile -Raw
+        $swapAgentsScrubbed = Invoke-StaleHaltScrub -Text $swapAgentsContent
+        if ($swapAgentsScrubbed -match '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
+            $swapChainLineForMd = if ($null -ne $swapChainLine) { $swapChainLine } else { Get-ModelChainLine -Seat $swapTarget -FloorLaunch $targetRuntimeFloor.Launch }
+            $swapAgentsScrubbed = Replace-LiteralRegex -InputText $swapAgentsScrubbed -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $swapChainLineForMd
+        }
+        if (Test-StaleHaltPresent -Text $swapAgentsScrubbed) {
+            Write-Error "Seat '$($swapTarget.codename)' AGENTS.md still contains stale halt text after scrub; refusing target swap before writes." -ErrorAction Continue
+            exit 1
+        }
+    }
+    if (Test-Path -LiteralPath $swapClaudeFile) {
+        $swapClaudeContent = Get-Content -LiteralPath $swapClaudeFile -Raw
+        $swapClaudeScrubbed = Invoke-StaleHaltScrub -Text $swapClaudeContent
+        if ($swapClaudeScrubbed -match '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
+            $swapChainLineForMd = if ($null -ne $swapChainLine) { $swapChainLine } else { Get-ModelChainLine -Seat $swapTarget -FloorLaunch $targetRuntimeFloor.Launch }
+            $swapClaudeScrubbed = Replace-LiteralRegex -InputText $swapClaudeScrubbed -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $swapChainLineForMd
+        }
+        if (Test-StaleHaltPresent -Text $swapClaudeScrubbed) {
+            Write-Error "Seat '$($swapTarget.codename)' CLAUDE.md still contains stale halt text after scrub; refusing target swap before writes." -ErrorAction Continue
+            exit 1
+        }
     }
 
     if ($SyncNotes -or $All) {
@@ -492,6 +554,12 @@ if ($Seat -and $Rung) {
 
         $swapRoleJson = $null
         $swapChainLine = $null
+        $swapAgentsContentLocked = $null
+        $swapClaudeContentLocked = $null
+        $swapAgentsScrubbedLocked = $null
+        $swapClaudeScrubbedLocked = $null
+        $swapAgentsFileLocked = Join-Path $RolesDir $swapTarget.roleId 'AGENTS.md'
+        $swapClaudeFileLocked = Join-Path $RolesDir $swapTarget.roleId 'CLAUDE.md'
         if (Test-Path -LiteralPath $swapRoleFile) {
             $swapRoleJson = Get-Content -LiteralPath $swapRoleFile -Raw | ConvertFrom-Json
             $swapChainLine = Get-ModelChainLine -Seat $swapTarget -FloorLaunch $targetRuntimeFloor.Launch
@@ -500,16 +568,51 @@ if ($Seat -and $Rung) {
                 exit 1
             }
             $swapRoleJson.prompt = Replace-LiteralRegex -InputText $swapRoleJson.prompt -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $swapChainLine
+            $swapRoleJson.prompt = Invoke-StaleHaltScrub -Text $swapRoleJson.prompt
+            if (Test-StaleHaltPresent -Text $swapRoleJson.prompt) {
+                Write-Error "Seat '$($swapTarget.codename)' role file still contains stale halt text after scrub; refusing target swap before writes." -ErrorAction Continue
+                exit 1
+            }
+        }
+        if (Test-Path -LiteralPath $swapAgentsFileLocked) {
+            $swapAgentsContentLocked = Get-Content -LiteralPath $swapAgentsFileLocked -Raw
+            $swapAgentsScrubbedLocked = Invoke-StaleHaltScrub -Text $swapAgentsContentLocked
+            $swapChainLineForMd = if ($null -ne $swapChainLine) { $swapChainLine } else { Get-ModelChainLine -Seat $swapTarget -FloorLaunch $targetRuntimeFloor.Launch }
+            if ($swapAgentsScrubbedLocked -match '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
+                $swapAgentsScrubbedLocked = Replace-LiteralRegex -InputText $swapAgentsScrubbedLocked -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $swapChainLineForMd
+            }
+            $swapAgentsScrubbedLocked = Invoke-StaleHaltScrub -Text $swapAgentsScrubbedLocked
+            if (Test-StaleHaltPresent -Text $swapAgentsScrubbedLocked) {
+                Write-Error "Seat '$($swapTarget.codename)' AGENTS.md still contains stale halt text after scrub; refusing target swap before writes." -ErrorAction Continue
+                exit 1
+            }
+        }
+        if (Test-Path -LiteralPath $swapClaudeFileLocked) {
+            $swapClaudeContentLocked = Get-Content -LiteralPath $swapClaudeFileLocked -Raw
+            $swapClaudeScrubbedLocked = Invoke-StaleHaltScrub -Text $swapClaudeContentLocked
+            $swapChainLineForMd = if ($null -ne $swapChainLine) { $swapChainLine } else { Get-ModelChainLine -Seat $swapTarget -FloorLaunch $targetRuntimeFloor.Launch }
+            if ($swapClaudeScrubbedLocked -match '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
+                $swapClaudeScrubbedLocked = Replace-LiteralRegex -InputText $swapClaudeScrubbedLocked -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $swapChainLineForMd
+            }
+            $swapClaudeScrubbedLocked = Invoke-StaleHaltScrub -Text $swapClaudeScrubbedLocked
+            if (Test-StaleHaltPresent -Text $swapClaudeScrubbedLocked) {
+                Write-Error "Seat '$($swapTarget.codename)' CLAUDE.md still contains stale halt text after scrub; refusing target swap before writes." -ErrorAction Continue
+                exit 1
+            }
         }
 
         $script:swapRollback = [ordered]@{}
         Add-SwapRollbackPath -Path $SeatMapPath
         Add-SwapRollbackPath -Path $swapRoleFile
+        Add-SwapRollbackPath -Path $swapAgentsFileLocked
+        Add-SwapRollbackPath -Path $swapClaudeFileLocked
         if ($SyncRoles -or $All) {
-            $rolesDirForRollback = Join-Path $repoRoot '.maestri' 'roles'
+            $rolesDirForRollback = $RolesDir
             foreach ($s in @($seatMap.seats)) {
                 if (Test-JsonProperty -Object $s -Name 'roleId') {
                     Add-SwapRollbackPath -Path (Join-Path $rolesDirForRollback $s.roleId 'role.json')
+                    Add-SwapRollbackPath -Path (Join-Path $rolesDirForRollback $s.roleId 'AGENTS.md')
+                    Add-SwapRollbackPath -Path (Join-Path $rolesDirForRollback $s.roleId 'CLAUDE.md')
                 }
             }
         }
@@ -525,6 +628,12 @@ if ($Seat -and $Rung) {
         Save-SeatMap -Map $seatMap -Path $SeatMapPath
         if ($null -ne $swapRoleJson) {
             Save-SeatMap -Map $swapRoleJson -Path $swapRoleFile
+        }
+        if ($null -ne $swapAgentsScrubbedLocked) {
+            Save-Utf8NoBom -Path $swapAgentsFileLocked -Content $swapAgentsScrubbedLocked
+        }
+        if ($null -ne $swapClaudeScrubbedLocked) {
+            Save-Utf8NoBom -Path $swapClaudeFileLocked -Content $swapClaudeScrubbedLocked
         }
         [Console]::Out.WriteLine((Format-SeatMapLockedSwapLine -Decision $lockedDecision))
         Write-Host "Updated seat '$($swapTarget.codename)' activeRung to '$Rung'." -ForegroundColor Green
@@ -552,34 +661,86 @@ if ($GenerateCommands -or $All) {
 
 if ($SyncRoles -or $All) {
     Write-Host "`n=== Syncing Role Prompts (.maestri/roles/) ===" -ForegroundColor Cyan
-    $rolesDir = Join-Path $repoRoot '.maestri' 'roles'
+    $rolesDir = $RolesDir
     if (-not (Test-Path -LiteralPath $rolesDir)) {
         $syncMisses.Add("Roles directory not found at: $rolesDir")
         Write-Warning "Roles directory not found at: $rolesDir"
     } else {
+        $syncSnapshot = @{}
         foreach ($s in @($seatMap.seats)) {
-            $roleFile = Join-Path $rolesDir $s.roleId 'role.json'
-            if (-not (Test-Path -LiteralPath $roleFile)) {
-                $msg = "Role file not found for $($s.codename): $roleFile"
-                $syncMisses.Add($msg)
-                Write-Warning "  $msg"
-                continue
+            if (-not (Test-JsonProperty -Object $s -Name 'roleId')) { continue }
+            foreach ($fname in @('role.json', 'AGENTS.md', 'CLAUDE.md')) {
+                $p = Join-Path $rolesDir $s.roleId $fname
+                if (Test-Path -LiteralPath $p) {
+                    $syncSnapshot[$p] = [System.IO.File]::ReadAllBytes($p)
+                }
             }
-            $roleJson = Get-Content -LiteralPath $roleFile -Raw | ConvertFrom-Json
-            $floorLaunch = $null
-            if ($null -ne $swapTarget -and $s.id -eq $swapTarget.id -and $null -ne $targetRuntimeFloor -and $targetRuntimeFloor.Ok) {
-                $floorLaunch = $targetRuntimeFloor.Launch
-            }
-            $chainLine = Get-ModelChainLine -Seat $s -FloorLaunch $floorLaunch
-            if ($roleJson.prompt -match '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
-                $roleJson.prompt = Replace-LiteralRegex -InputText $roleJson.prompt -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $chainLine
+        }
+        $syncFatal = $null
+        try {
+            foreach ($s in @($seatMap.seats)) {
+                $roleFile = Join-Path $rolesDir $s.roleId 'role.json'
+                $agentsFile = Join-Path $rolesDir $s.roleId 'AGENTS.md'
+                $claudeFile = Join-Path $rolesDir $s.roleId 'CLAUDE.md'
+                if (-not (Test-Path -LiteralPath $roleFile)) {
+                    $msg = "Role file not found for $($s.codename): $roleFile"
+                    $syncMisses.Add($msg)
+                    Write-Warning "  $msg"
+                    continue
+                }
+                $roleJson = Get-Content -LiteralPath $roleFile -Raw | ConvertFrom-Json
+                $floorLaunch = $null
+                if ($null -ne $swapTarget -and $s.id -eq $swapTarget.id -and $null -ne $targetRuntimeFloor -and $targetRuntimeFloor.Ok) {
+                    $floorLaunch = $targetRuntimeFloor.Launch
+                }
+                $chainLine = Get-ModelChainLine -Seat $s -FloorLaunch $floorLaunch
+                if ($roleJson.prompt -match '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
+                    $roleJson.prompt = Replace-LiteralRegex -InputText $roleJson.prompt -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $chainLine
+                } else {
+                    $msg = "Could not find Model chain line in role for $($s.codename)"
+                    $syncMisses.Add($msg)
+                    Write-Warning "  $msg"
+                    continue
+                }
+                $roleJson.prompt = Invoke-StaleHaltScrub -Text $roleJson.prompt
+                if (Test-StaleHaltPresent -Text $roleJson.prompt) {
+                    throw "Seat '$($s.codename)' role file still contains stale halt text after scrub; refusing sync."
+                }
                 Save-SeatMap -Map $roleJson -Path $roleFile
                 Write-Host "  Updated role for $($s.codename) ($($s.name))" -ForegroundColor Green
-            } else {
-                $msg = "Could not find Model chain line in role for $($s.codename)"
-                $syncMisses.Add($msg)
-                Write-Warning "  $msg"
+                # Optional AGENTS.md / CLAUDE.md: scrub + chain line, missing is non-fatal
+                foreach ($pair in @(@($agentsFile, 'AGENTS.md'), @($claudeFile, 'CLAUDE.md'))) {
+                    $mdPath = $pair[0]
+                    $mdLabel = $pair[1]
+                    if (-not (Test-Path -LiteralPath $mdPath)) { continue }
+                    $mdContent = Get-Content -LiteralPath $mdPath -Raw
+                    $mdScrubbed = Invoke-StaleHaltScrub -Text $mdContent
+                    if ($mdScrubbed -match '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
+                        $mdScrubbed = Replace-LiteralRegex -InputText $mdScrubbed -Pattern '(?s)Model chain \(best first\):.+?\(FLOOR\)\.' -Replacement $chainLine
+                        $mdScrubbed = Invoke-StaleHaltScrub -Text $mdScrubbed
+                    }
+                    if (Test-StaleHaltPresent -Text $mdScrubbed) {
+                        throw "Seat '$($s.codename)' $mdLabel still contains stale halt text after scrub; refusing sync."
+                    }
+                    if ($mdScrubbed -ne $mdContent) {
+                        Save-Utf8NoBom -Path $mdPath -Content $mdScrubbed
+                        Write-Host "  Updated $mdLabel for $($s.codename)" -ForegroundColor Green
+                    } elseif ($mdScrubbed -match '(?s)Model chain \(best first\):.+?\(FLOOR\)\.') {
+                        # chain line was updated even if scrub was no-op
+                        Save-Utf8NoBom -Path $mdPath -Content $mdScrubbed
+                        Write-Host "  Updated $mdLabel for $($s.codename)" -ForegroundColor Green
+                    }
+                }
             }
+        } catch {
+            $syncFatal = [string]$_.Exception.Message
+        }
+        if ($null -ne $syncFatal) {
+            foreach ($p in $syncSnapshot.Keys) {
+                [System.IO.File]::WriteAllBytes($p, $syncSnapshot[$p])
+            }
+            Write-Error $syncFatal -ErrorAction Continue
+            exit 1
         }
     }
 }

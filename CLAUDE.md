@@ -95,6 +95,17 @@ read it and print **advisory warnings** (`TIER`, `ORDER`, `MODEL`, `SEAT`,
 seat; the map's job is to say which preference a choice crosses. See ADR 0025
 (amended 2026-09-16) for the tier scheme.
 
+The live seat map is the authority for seat allocation, displayed model-chain
+order, active rung, and runtime FLOOR selection. It is not a hard allow-list
+for every runtime model the host status bar reports. Role instruction files
+synced by `Sync-SeatMap.ps1` — `.maestri/roles/*/role.json`, `AGENTS.md`, and
+`CLAUDE.md` — carry the ordered chain line and floor-quality guidance; they
+are downstream display artifacts, not an independent runtime model-membership
+gate. A seat must not halt because its live model is absent from that text.
+Removing the obsolete role-text membership tripwire (DEV-269) also removes
+that runtime check — mid-session provider or model drift after launch is not
+detected here and must not be claimed as enforced.
+
 Read down the chain to the first option you still have allowance for. **If that lands below the
 floor, the work waits**; running below it means knowingly accepting reduced
 quality, which is the one thing the seat map exists to make visible.
