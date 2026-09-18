@@ -16,8 +16,8 @@ alwaysApply: true
 6. **Implement** — `/implement` (TDD optional; unit + integration tests must pass)
 7. **Refactor** — `/refactor` (complexity ≤ `gates.complexity.refactor`, property tests)
 8. **Architect** — `/architect` (Stryker mutation ≥ `gates.mutation.threshold`; Gherkin mutation only if acceptance tests exist)
-9. **Code review** *(gated)* — `/code-review`; above-bar findings → `/remediate` → re-review until clean (later rounds pass `Explicit diff range: ROUND_BASE...HEAD`). A no-C# refusal is **out of scope for this skill**, not a failed review, and does not route to `/remediate`
-10. **Ship** — `./scripts/rebase-task-branch.ps1 -Push`, then `/ship-review`, then open the PR
+9. **Code review** *(gated)* — `/code-review`; above-bar findings → `/remediate` → re-review until clean (later rounds pass `Explicit diff range: ROUND_BASE...HEAD` three-dot, merge-base). A no-C# refusal is **out of scope for this skill**, not a failed review, and does not route to `/remediate`. The common `Explicit diff range:` transport rejects two-dot ranges so a dropped-dot typo fails closed.
+10. **Ship** — `./scripts/rebase-task-branch.ps1 -Push`, then `/ship-review` (stage-10 post-rebase correctness lane uses the discriminated `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` two-dot filtered delta — patch-id / `git range-diff` between `old_base..stage-9-cleared` and `new_base..HEAD`, excluding already-cleared feature work and upstream churn; empty delta is a named confirmation, not a skipped lane), then open the PR
 11. **Address PR review** *(conditional)* — `/address-pr-review` when external feedback arrives
 12. **Merge** *(human gate 3)* — the human reads the PR on GitHub and merges
 
@@ -83,10 +83,10 @@ Stage 9 loops to `/remediate` until it finds nothing above the bar. A normal
 no-C# refusal (`out of scope for this skill`) is not a finding, does not look
 like a failed review, and does not enter `/remediate`. Round one reviews the whole
 change and freezes its findings. Every later round reviews **only the diff that
-fixed the previous round's findings**, passed as `Explicit diff range: ROUND_BASE...HEAD`. Each round's input is strictly smaller
+fixed the previous round's findings**, passed as `Explicit diff range: ROUND_BASE...HEAD` (three-dot, merge-base). Each round's input is strictly smaller
 than the last, so the loop converges. The round cap is a backstop: a fix diff
 that keeps generating new findings is evidence the change is wrong, not that
-the review is. `/architect` is **not** re-run per round. It runs once when the
+the review is. Stage 10 `/ship-review` does not use that three-dot fix-round transport for its correctness lane; its post-rebase delta is the discriminated `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` (two-dot, ship-review-only) with patch-id-filtered / range-diff semantics that excludes already-cleared feature work and upstream churn. Empty delta is a named confirmation, not a skipped lane, and uses the same filtered comparison as the non-empty path. `/architect` is **not** re-run per round. It runs once when the
 loop closes, against the accumulated fixes, before stage 10.
 
 A Critical or High finding deferred to a follow-up still keeps the stage at

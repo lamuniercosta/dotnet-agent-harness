@@ -115,20 +115,96 @@ jobs:
           fi
           echo "code-review Step 8 includes the findings-artifact sink."
 
-      # ---- code-review Step 1 explicit-range transport ------------------
+      # ---- code-review Step 1 explicit-range transport (DEV-209) -------
       - name: Code-review skill uses the explicit-range transport
         run: |
-          if ! grep -qF 'Explicit diff range: <fixed-point>...HEAD' skills/code-review/SKILL.md; then
-            echo "::error file=skills/code-review/SKILL.md::missing explicit-range transport"
-            exit 1
+          f=skills/code-review/SKILL.md
+          fail=0
+          if ! grep -qF 'Explicit diff range: <fixed-point>...HEAD' "$f"; then
+            echo "::error file=$f::missing common three-dot explicit-range transport"
+            fail=1
           fi
-          # Anchor Could-not-run/NEEDS-FIXES to the explicit-range validation paragraph
-          if ! sed -n '42,70p' skills/code-review/SKILL.md | grep -qF 'Could not run' || \
-             ! sed -n '42,70p' skills/code-review/SKILL.md | grep -qF 'NEEDS FIXES'; then
-            echo "::error file=skills/code-review/SKILL.md::missing Could-not-run or NEEDS-FIXES in Step 1 validation"
-            exit 1
+          if ! grep -qF 'Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD' "$f"; then
+            echo "::error file=$f::missing discriminated ship-review rebase-delta transport"
+            fail=1
           fi
-          echo "code-review Step 1 includes explicit-range transport."
+          if ! grep -qF 'reject two-dot ranges' "$f"; then
+            echo "::error file=$f::common explicit-range transport must reject two-dot ranges"
+            fail=1
+          fi
+          if ! grep -qF 'reject three-dot ranges' "$f"; then
+            echo "::error file=$f::discriminated ship-review transport must reject three-dot ranges"
+            fail=1
+          fi
+          if ! grep -qF 'patch-id-filtered' "$f" || ! grep -qF 'git range-diff' "$f"; then
+            echo "::error file=$f::missing patch-id-filtered / range-diff rebase-delta semantics"
+            fail=1
+          fi
+          if ! grep -qF 'Could not run' "$f" || ! grep -qF 'NEEDS FIXES' "$f"; then
+            echo "::error file=$f::missing fail-closed Could-not-run / NEEDS-FIXES wording"
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] && echo "code-review Step 1 includes explicit-range transport."
+          exit $fail
+
+      # ---- ship-review rebase-delta transport (DEV-209) -----------------
+      - name: Ship-review skill uses the discriminated rebase-delta transport
+        run: |
+          f=skills/ship-review/SKILL.md
+          fail=0
+          if ! grep -qF 'Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD' "$f"; then
+            echo "::error file=$f::missing discriminated ship-review rebase-delta transport"
+            fail=1
+          fi
+          if ! grep -qF 'patch-id-filtered' "$f" || ! grep -qF 'git range-diff' "$f"; then
+            echo "::error file=$f::missing patch-id-filtered / range-diff rebase-delta semantics"
+            fail=1
+          fi
+          if ! grep -qF 'First determine whether the rebase delta is empty' "$f"; then
+            echo "::error file=$f::missing empty-delta short-circuit wording"
+            fail=1
+          fi
+          if ! grep -qE 'do not invoke.*/code-review' "$f"; then
+            echo "::error file=$f::empty delta must not invoke /code-review"
+            fail=1
+          fi
+          if grep -qF '<stage-9-cleared-commit>...HEAD' "$f"; then
+            echo "::error file=$f::unsafe three-dot stage-9-cleared...HEAD handoff still present"
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] && echo "ship-review includes the discriminated rebase-delta transport."
+          exit $fail
+
+      # ---- DEV-209 git semantics fixture --------------------------------
+      - name: Ship-review rebase-delta scope fixture
+        shell: pwsh
+        run: ./scripts/local/Test-ShipReviewRebaseScope.ps1
+
+      # ---- ADR and pipeline transport consistency (DEV-209) -------------
+      - name: DEV-209 ADR and pipeline transport consistency
+        run: |
+          fail=0
+          for f in docs/adr/0013-code-review-gate-contract-travels-with-the-skill.md \
+                   docs/adr/0014-ship-review-reuses-code-review-for-the-rebase-delta.md \
+                   docs/adr/0021-pre-pass-artifact-deduplicates-review-evidence.md \
+                   rules/pipeline/agent-pipeline.mdc \
+                   adapters/claude/CLAUDE.md \
+                   adapters/codex/AGENTS.md; do
+            if ! grep -qF 'Explicit ship-review rebase-delta range:' "$f"; then
+              echo "::error file=$f::missing discriminated ship-review rebase-delta transport"
+              fail=1
+            fi
+            if ! grep -qF 'patch-id-filtered' "$f" && ! grep -qF 'patch-id filter' "$f"; then
+              echo "::error file=$f::missing patch-id-filtered rebase-delta semantics"
+              fail=1
+            fi
+          done
+          if ! grep -qF 'reject two-dot ranges' skills/code-review/SKILL.md; then
+            echo "::error file=skills/code-review/SKILL.md::common transport must reject two-dot ranges"
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] && echo "DEV-209 ADR and pipeline transport consistency checks passed."
+          exit $fail
 
       # ---- code-review enforcement (DEV-113) ----------------------------
       - name: Code-review enforcement checks
@@ -377,6 +453,10 @@ jobs:
       - name: Guard hook blocks what it claims to block
         shell: pwsh
         run: ./hooks/Test-Guard.ps1
+
+      - name: Ship-review rebase-delta scope fixture
+        shell: pwsh
+        run: ./scripts/local/Test-ShipReviewRebaseScope.ps1
 
       # DEV-260: scripts/local self-tests are parked pending DEV-253-259 relocation to maestri-toolkit; set RUN_LOCAL_SELF_TESTS=true to run them.
       # Guards Get-JsonPath, which Set-IssueInProgress.ps1 walks GraphQL

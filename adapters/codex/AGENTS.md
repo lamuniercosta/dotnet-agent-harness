@@ -186,8 +186,8 @@ the phase directly — see [Limitations](#limitations-under-codex).
 6. **Implement** — TDD optional; unit + integration tests must pass
 7. **Refactor** — `/refactor`
 8. **Architect** — `/architect`
-9. **Code review** *(gated)* — `/code-review`; above-bar findings → `/remediate` → re-review (later rounds pass `Explicit diff range: ROUND_BASE...HEAD`). A no-C# refusal is **out of scope for this skill**, not a failed review, and does not route to `/remediate`
-10. **Ship** — rebase → `/ship-review` → open the PR
+9. **Code review** *(gated)* — `/code-review`; above-bar findings → `/remediate` → re-review (later rounds pass `Explicit diff range: ROUND_BASE...HEAD` three-dot, merge-base). The common `Explicit diff range:` transport rejects two-dot ranges so a dropped-dot typo fails closed. A no-C# refusal is **out of scope for this skill**, not a failed review, and does not route to `/remediate`
+10. **Ship** — rebase → `/ship-review` (stage-10 post-rebase correctness lane uses the discriminated `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` two-dot filtered delta — patch-id / `git range-diff` between `old_base..stage-9-cleared` and `new_base..HEAD`, excluding already-cleared feature work and upstream churn; empty delta is a named confirmation, not a skipped lane) → open the PR
 11. **Address PR review** *(conditional)* — `/address-pr-review` when external feedback arrives
 12. **Merge** — *human gate 3*
 
@@ -195,7 +195,7 @@ Never skip the grill, and never route a failing gate to lowering its threshold.
 
 `/code-review` is C#-evidence only. A diff with no `.cs` files is **out of scope for this skill** — a normal outcome, not a failed review — and does not fall back to a generic reviewer. Prose, markdown, scripts, and config use this repo's deterministic gates (`./scripts/run-*.ps1`) plus human reading. Axis reviewers **Report findings meeting the evidence threshold, up to 15** and say so if any evidence-backed findings were cut.
 
-Callers transport a scoped review as the single-line field `Explicit diff range: <fixed-point>...HEAD`. The right side is always `HEAD`. Malformed, unresolved, empty, or head-mismatched ranges fail closed (**Could not run** / **NEEDS FIXES**) before fan-out.
+Callers transport ordinary scoped reviews as the single-line field `Explicit diff range: <fixed-point>...HEAD` (three-dot, merge-base). The right side is always `HEAD`. That common field rejects two-dot ranges so a dropped-dot `ROUND_BASE..HEAD` typo fails closed (**Could not run** / **NEEDS FIXES**) before fan-out. Stage-10 `/ship-review` after rebase uses the discriminated ship-review-only field `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` (two-dot, patch-id-filtered / `git range-diff` between `old_base..stage-9-cleared` and `new_base..HEAD`, excluding already-cleared feature work and upstream churn). Empty and non-empty ship-review deltas use the same filtered comparison; an empty delta is a named confirmation, not a skipped lane. Malformed, unresolved, empty, or head-mismatched ranges fail closed before fan-out.
 
 `/code-review` and `/ship-review` have no numeric gate, unlike Implement/Refactor/Architect — they must be given a stop condition explicitly, in `brief.md`, before Stage 6 (Implement):
 

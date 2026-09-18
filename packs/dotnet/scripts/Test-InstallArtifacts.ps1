@@ -578,22 +578,24 @@ try {
          ($codexShipReview -match '(?is)missing reviewer') -and
          ($codexShipReview -match 'NEEDS FIXES')) `
         'a missing reviewer or deferred Critical/High must keep NEEDS FIXES'
-    Assert-That 'Codex ship-review correctness lane invokes $code-review over the rebase delta' `
+    Assert-That 'Codex ship-review correctness lane invokes $code-review over the filtered rebase delta' `
         (($codexShipReview -match '(?is)Correctness & design') -and
          ($codexShipReview -match '(?is)\$code-review') -and
-         ($codexShipReview -match '(?is)explicit diff range') -and
-         ($codexShipReview -match '(?is)stage-9-cleared commit') -and
-         ($codexShipReview -match '(?is)rebased head') -and
+         ($codexShipReview -match '(?is)Explicit ship-review rebase-delta range: <stage-9-cleared>\.\.HEAD') -and
+         ($codexShipReview -match '(?is)patch-id-filtered') -and
+         ($codexShipReview -match '(?is)git range-diff') -and
+         ($codexShipReview -match '(?is)stage-9-cleared') -and
          ($codexShipReview -notmatch '(?is)Correctness & design \| `code-reviewer`')) `
-        'the Codex copy must call $code-review, not a bare code-reviewer correctness row'
-    Assert-That 'Claude ship-review correctness lane invokes /code-review over the rebase delta' `
+        'the Codex copy must call $code-review with the discriminated ship-review transport, not a bare code-reviewer correctness row'
+    Assert-That 'Claude ship-review correctness lane invokes /code-review over the filtered rebase delta' `
         (($claudeShipReview -match '(?is)Correctness & design') -and
          ($claudeShipReview -match '(?is)/code-review') -and
-         ($claudeShipReview -match '(?is)explicit diff range') -and
-         ($claudeShipReview -match '(?is)stage-9-cleared commit') -and
-         ($claudeShipReview -match '(?is)rebased head') -and
+         ($claudeShipReview -match '(?is)Explicit ship-review rebase-delta range: <stage-9-cleared>\.\.HEAD') -and
+         ($claudeShipReview -match '(?is)patch-id-filtered') -and
+         ($claudeShipReview -match '(?is)git range-diff') -and
+         ($claudeShipReview -match '(?is)stage-9-cleared') -and
          ($claudeShipReview -notmatch '(?is)Correctness & design \| `code-reviewer`')) `
-        'the Claude copy must call /code-review, not a bare code-reviewer correctness row'
+        'the Claude copy must call /code-review with the discriminated ship-review transport, not a bare code-reviewer correctness row'
     Assert-That 'ship-review records an empty rebase delta as a named confirmation' `
         (($codexShipReview -match '(?is)empty rebase delta') -and
          ($codexShipReview -match '(?is)confirmation') -and
@@ -603,16 +605,16 @@ try {
          ($claudeShipReview -match '(?is)not a skipped lane')) `
         'an empty delta must still appear as a correctness confirmation, not a missing lane'
     Assert-That 'Codex ship-review does not invoke $code-review on an empty rebase delta' `
-        (($codexShipReview -match '(?is)Determine whether the rebase delta') -and
+        (($codexShipReview -match '(?is)First determine whether the rebase delta is empty') -and
          ($codexShipReview -match '(?is)do not invoke `?\$code-review') -and
          ($codexShipReview -match '(?is)non-empty') -and
-         ($codexShipReview -match '(?is)explicit diff range')) `
+         ($codexShipReview -match '(?is)Explicit ship-review rebase-delta range:')) `
         'an empty delta must short-circuit before $code-review, whose empty diff fails closed'
     Assert-That 'Claude ship-review does not invoke /code-review on an empty rebase delta' `
-        (($claudeShipReview -match '(?is)Determine whether the rebase delta') -and
+        (($claudeShipReview -match '(?is)First determine whether the rebase delta is empty') -and
          ($claudeShipReview -match '(?is)do not invoke `?/code-review') -and
          ($claudeShipReview -match '(?is)non-empty') -and
-         ($claudeShipReview -match '(?is)explicit diff range')) `
+         ($claudeShipReview -match '(?is)Explicit ship-review rebase-delta range:')) `
         'an empty delta must short-circuit before /code-review, whose empty diff fails closed'
     Assert-That 'ship-review short-circuits an empty rebase delta without invoking code-review' `
         (($codexShipReview -match '(?is)First determine whether the rebase delta is empty') -and
@@ -665,15 +667,22 @@ try {
          ($codexCodeReview -match '(?is)fail closed') -and
          ($codexCodeReview -match '(?is)Do not infer defaults')) `
         'missing closing bar, frozen scope, or round cap must stop before fan-out'
-    Assert-That 'Codex code-review accepts an explicit diff range' `
+    Assert-That 'Codex code-review accepts the ordinary three-dot explicit diff range' `
         (($codexCodeReview -match '(?is)Explicit diff range: <fixed-point>\.\.\.HEAD') -and
-         ($codexCodeReview -match '(?is)Explicit diff range: <[A-Za-z0-9_-]+>\.\.\.HEAD') -and
+         ($codexCodeReview -match '(?is)reject two-dot ranges') -and
          ($codexCodeReview -match '(?is)Right endpoint is the literal HEAD') -and
          ($codexCodeReview -match '(?is)No endpoint beginning with dash') -and
          ($codexCodeReview -match '(?is)Could not run') -and
          ($codexCodeReview -match '(?is)NEEDS FIXES') -and
          ($codexCodeReview -match '(?is)review only that range')) `
-        'an explicit caller-supplied range must override the default fixed-point diff'
+        'the common three-dot transport must stay fail-closed on two-dot typos'
+    Assert-That 'Codex code-review accepts the discriminated ship-review rebase-delta range' `
+        (($codexCodeReview -match '(?is)Explicit ship-review rebase-delta range: <stage-9-cleared>\.\.HEAD') -and
+         ($codexCodeReview -match '(?is)reject three-dot ranges') -and
+         ($codexCodeReview -match '(?is)ship-review-only') -and
+         ($codexCodeReview -match '(?is)patch-id-filtered') -and
+         ($codexCodeReview -match '(?is)git range-diff')) `
+        'ship-review must use the discriminated two-dot transport without weakening the common field'
     Assert-That 'Codex code-review routes above-bar findings to $remediate and below-bar to Follow-ups' `
         (($codexCodeReview -match '(?is)Above the bar go to `?\$remediate') -and
          ($codexCodeReview -match '(?is)Below the bar') -and
@@ -693,15 +702,22 @@ try {
          ($claudeCodeReview -match 'NEEDS FIXES') -and
          ($claudeCodeReview -match '(?is)fail closed')) `
         'a Claude/Cursor skills-path copy must keep the fail-closed loop terms'
-    Assert-That 'Claude code-review accepts an explicit diff range' `
+    Assert-That 'Claude code-review accepts the ordinary three-dot explicit diff range' `
         (($claudeCodeReview -match '(?is)Explicit diff range: <fixed-point>\.\.\.HEAD') -and
-         ($claudeCodeReview -match '(?is)Explicit diff range: <[A-Za-z0-9_-]+>\.\.\.HEAD') -and
+         ($claudeCodeReview -match '(?is)reject two-dot ranges') -and
          ($claudeCodeReview -match '(?is)Right endpoint is the literal HEAD') -and
          ($claudeCodeReview -match '(?is)No endpoint beginning with dash') -and
          ($claudeCodeReview -match '(?is)Could not run') -and
          ($claudeCodeReview -match '(?is)NEEDS FIXES') -and
          ($claudeCodeReview -match '(?is)review only that range')) `
-        'an installer regression on .claude/skills must not drop the explicit-range rule'
+        'an installer regression on .claude/skills must not drop the common three-dot explicit-range rule'
+    Assert-That 'Claude code-review accepts the discriminated ship-review rebase-delta range' `
+        (($claudeCodeReview -match '(?is)Explicit ship-review rebase-delta range: <stage-9-cleared>\.\.HEAD') -and
+         ($claudeCodeReview -match '(?is)reject three-dot ranges') -and
+         ($claudeCodeReview -match '(?is)ship-review-only') -and
+         ($claudeCodeReview -match '(?is)patch-id-filtered') -and
+         ($claudeCodeReview -match '(?is)git range-diff')) `
+        'an installer regression on .claude/skills must not drop the discriminated ship-review transport'
     Assert-That 'Claude code-review routes above-bar findings to /remediate and below-bar to Follow-ups' `
         (($claudeCodeReview -match '(?is)Above the bar go to `?/remediate') -and
          ($claudeCodeReview -match '(?is)Below the bar') -and

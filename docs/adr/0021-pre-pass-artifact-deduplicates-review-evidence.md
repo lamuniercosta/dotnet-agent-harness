@@ -43,20 +43,17 @@ verify every field below before trusting the contents:
 | `repository` | Absolute path to the repo root | Prevents cross-repo collision |
 | `branch` | Current branch name | Context for the reader |
 | `head_sha` | Full 40-char `git rev-parse HEAD` | Freshness — must match consumer's HEAD |
-| `fixed_point` | The left side of the accepted `Explicit diff range: <fixed-point>...HEAD` when present; otherwise the base ref or SHA from Step 1 | Prevents wrong-base stale reads |
-| `diff_range` | The accepted explicit range when present; otherwise `<fixed-point>...HEAD` | Explicit scope binding |
+| `fixed_point` | The left side of the accepted explicit range when present (`Explicit diff range: <fixed-point>...HEAD` three-dot, or `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` two-dot discriminated); otherwise the base ref or SHA from Step 1 | Prevents wrong-base stale reads |
+| `diff_range` | The accepted explicit range when present (`Explicit diff range: <fixed-point>...HEAD` or the discriminated `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD`); otherwise `<fixed-point>...HEAD` | Explicit scope binding — for ship-review this is the discriminated filtered rebase-delta range, synchronized with the artifact body |
 | `written_at` | UTC ISO-8601 timestamp | Audit trail; not used for verification |
 
 The consumer verifies `head_sha`, `fixed_point`, `diff_range`, and
-`repository` against its own environment. If any mismatch or the file is
-missing, the sub-agent **fails closed** — no fallback to inline relay, no
-partial read. Inability to verify (no shell access, wrong cwd, file unreadable)
-is also fail-closed.
+`repository` against its own environment. For the discriminated ship-review rebase-delta range the consumer re-derives the same patch-id-filtered semantics (`old_base = git merge-base <stage-9-cleared> HEAD`, `new_base = git merge-base HEAD origin/main`, filtered by patch-id / `git range-diff`) and confirms the header's `diff_range` is the discriminated two-dot range and the body describes that same filtered scope. If any mismatch or the file is missing, the sub-agent **fails closed** — no fallback to inline relay, no partial read. Inability to verify (no shell access, wrong cwd, file unreadable) is also fail-closed.
 
 The file body contains, in order:
 
-1. **Diff command** — `git diff` of the accepted `diff_range` (explicit range when present; otherwise `git diff <fixed-point>...HEAD`)
-2. **Commit list** — `git log <fixed-point>..HEAD --oneline` (`fixed_point` is the left side of the accepted range when present)
+1. **Diff command** — `git diff` of the accepted `diff_range` for ordinary three-dot ranges; for the discriminated ship-review rebase-delta range, the patch-id-filtered rebase-delta diff (range-diff) between `old_base..stage-9-cleared` and `new_base..HEAD`, not a plain three-dot or naive two-dot tree diff
+2. **Commit list** — `git log <fixed-point>..HEAD --oneline` (`fixed_point` is the left side of the accepted range when present) for ordinary ranges; for the discriminated ship-review field, the filtered delta commit list (commits in `new_base..HEAD` whose patch-id is not in `old_base..stage-9-cleared`), not `git log <fixed-point>..HEAD`
 3. **Blast-radius table** — the scored table from Step 2 (code-review) or the
    rebase-delta summary (ship-review)
 4. **Roslyn pre-pass results** — from Step 3, when available; section omitted
@@ -129,13 +126,13 @@ information scope.
 ## Deterministic ship-review to nested code-review handoff
 
 When the rebase delta is **non-empty**, `/ship-review` invokes `/code-review`
-with `Explicit diff range: <stage-9-cleared-commit>...HEAD` per
-[ADR 0014](./0014-ship-review-reuses-code-review-for-the-rebase-delta.md). The
+with `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` per
+[ADR 0014](./0014-ship-review-reuses-code-review-for-the-rebase-delta.md) — a discriminated two-dot range whose semantics are the patch-id-filtered rebase delta, not a three-dot merge-base diff. The
 ship-review artifact is **not** an input to that nested `/code-review`
 invocation. `/code-review` computes its own pre-pass (Steps 1–3a) internally
-over the accepted explicit range and writes its own artifact. Step 3a records
-that range in `diff_range`, sets `fixed_point` to the left side, and derives
-the diff command and commit list from it. The two artifacts are
+over the accepted discriminated range and writes its own artifact. Step 3a records
+that discriminated range in `diff_range`, sets `fixed_point` to the left side, and derives
+the diff command and commit list from the filtered delta (range-diff / patch-id), not from `git diff <fixed-point>...HEAD` or `git log <fixed-point>..HEAD`. The two artifacts are
 independent: each skill writes under its own path segment (`code-review/` vs
 `ship-review/` beneath the repo-scoped root, e.g.
 `<temp>/pr-review/<repo-hash>/code-review/pre-pass-<sha>.md` vs
@@ -144,14 +141,14 @@ collide even when both run at the same HEAD, and they have different fixed
 points and different evidence. The
 ship-review artifact serves only the Security and Coverage lanes.
 
-When the rebase delta is **empty**, the ship-review artifact still contains
-the `/verify` table and the named correctness confirmation. The Security and
-Coverage lanes consume it; `/code-review` is not invoked.
+When the rebase delta is **empty** (filtered delta has no commits and range-diff shows no hunks), the ship-review artifact still contains
+the `/verify` table and the named correctness confirmation, with an empty commit list. The Security and
+Coverage lanes consume it; `/code-review` is not invoked. Empty and non-empty use the same filtered comparison.
 
 The artifact must not replace the invocation-prompt field. Nested
 `/code-review` creating its own pre-pass over the accepted
-`Explicit diff range: <fixed-point>...HEAD` preserves
-ADR 0014's correctness-lane scope.
+`Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` preserves
+ADR 0014's correctness-lane scope and its exclusion of already-cleared work and upstream churn.
 
 ## Rejected alternatives
 
@@ -185,14 +182,12 @@ Smell baseline, standards-source list, and spec path remain inline because
 they are not computed pre-pass evidence.
 
 Stale or planted input is fail-closed: consumers verify repository, HEAD,
-fixed point, and `diff_range`; writers re-resolve HEAD immediately before the
+fixed point, and `diff_range`; for the discriminated ship-review range they re-derive the patch-id-filtered semantics and confirm synchronization; writers re-resolve HEAD immediately before the
 atomic write; working-tree roots are forbidden; filenames use a repo-scoped
 full SHA under a skill-unique subdirectory.
 
-`/ship-review` keeps ADR 0014's `Explicit diff range: <stage-9-cleared-commit>...HEAD`
-for nested `/code-review`. A non-empty delta produces two independent artifacts. An empty
-delta does not invoke `/code-review`.
+`/ship-review` keeps ADR 0014's discriminated `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD`
+for nested `/code-review` (two-dot, filtered). A non-empty delta produces two independent artifacts with synchronized filtered evidence. An empty
+delta does not invoke `/code-review` and carries a named confirmation with an empty commit list.
 
-This is a runtime contract. It does not change adapters, `install.ps1`,
-install tests, or lint grep gates. The Step 8 findings-artifact phrase
-`findings artifact as JSON` remains the output sink and is out of scope.
+This is a runtime contract. DEV-209 updates adapters, `install.ps1` copy paths, install tests, and lint grep gates to carry the discriminated transport; the Step 8 findings-artifact phrase `findings artifact as JSON` remains the output sink and is out of scope.

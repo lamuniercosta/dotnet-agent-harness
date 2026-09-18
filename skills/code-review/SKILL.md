@@ -19,9 +19,9 @@ Each axis runs in an isolated sub-agent when the host supports delegation, with 
 
 Before resolving loop terms (Step 0) and before blast-radius scoring (Step 2), classify changed file extensions.
 
-Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it. If the invocation prompt carries `Explicit diff range: <fixed-point>...HEAD`, classify and later review only that range. Validate that field first, before any `git rev-parse` or `git diff`: single line; exactly one three-dot separator (reject two-dot ranges and ranges with more than three dots); non-empty endpoints; no whitespace; no endpoint beginning with dash; right endpoint is the literal HEAD. On any malformation: stop, report **Could not run** with the failed range check, verdict **NEEDS FIXES**.
+Whatever the user said is the fixed point — a commit SHA, branch name, tag, `main`, `HEAD~5`, etc. If they didn't specify one, ask for it. If the invocation prompt carries `Explicit diff range: <fixed-point>...HEAD`, classify and later review only that range. Validate that field first, before any `git rev-parse` or `git diff`: single line; exactly one three-dot separator (reject two-dot ranges and ranges with more than three dots); non-empty endpoints; no whitespace; no endpoint beginning with dash; right endpoint is the literal HEAD. On any malformation: stop, report **Could not run** with the failed range check, verdict **NEEDS FIXES**. If the invocation carries the ship-review-only field `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD`, validate that field instead: single line; exactly one two-dot separator (reject three-dot ranges and ranges with more than two dots); non-empty endpoints; no whitespace; no endpoint beginning with dash; right endpoint is the literal HEAD. This two-dot form is discriminated — only the ship-review rebase-delta transport may use it, so an ordinary `ROUND_BASE..HEAD` dropped-dot typo on the common field still fails closed with **Could not run** / **NEEDS FIXES**. On any malformation of the discriminated field: stop, report **Could not run** with the failed range check, verdict **NEEDS FIXES**.
 
-Then resolve the accepted range only far enough to list extensions: `git rev-parse` the fixed point (or the left side of the accepted explicit range) and `git diff --name-only` of the accepted `diff_range` (`<fixed-point>...HEAD`, three-dot). If the range itself cannot be resolved — bad ref, unreadable, or empty diff — stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**. That is not an out-of-scope refusal.
+Then resolve the accepted range only far enough to list extensions: `git rev-parse` the fixed point (or the left side of the accepted explicit range) and `git diff --name-only` of the accepted `diff_range` (`<fixed-point>...HEAD` three-dot for ordinary ranges; `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` uses the patch-id-filtered rebase delta — `old_base = git merge-base <stage-9-cleared> HEAD`, `new_base = git merge-base HEAD origin/main`, new commits whose patch-id is not in the old series, and `git range-diff` hunk comparison — so already-cleared feature work and upstream churn are excluded). If the range itself cannot be resolved — bad ref, unreadable, or empty diff — stop, report **Could not run** with the missing context, verdict **NEEDS FIXES**. That is not an out-of-scope refusal.
 
 If the non-empty file list contains **zero** `.cs` files:
 
@@ -47,9 +47,19 @@ Callers transport a scoped review in the invocation prompt as this exact single-
 Explicit diff range: <fixed-point>...HEAD
 ```
 
-`<fixed-point>` is the left side of the range and is this step's `fixed_point` (and Step 3a's `fixed_point`). The right side is always `HEAD`. Callers that pin a concrete head must make the workspace HEAD equal that pin, then pass `<fixed-point>...HEAD`. Do not accept `<left>...<right>` as a public grammar. The pre-pass artifact is evidence and fan-out input; it is not a substitute for this field. Do not accept an artifact-path input.
+`<fixed-point>` is the left side of the range and is this step's `fixed_point` (and Step 3a's `fixed_point`). The right side is always `HEAD`. Callers that pin a concrete head must make the workspace HEAD equal that pin, then pass `<fixed-point>...HEAD`. Do not accept `<left>...<right>` as a public grammar. The pre-pass artifact is evidence and fan-out input; it is not a substitute for this field. Do not accept an artifact-path input. Ship-review's post-rebase correctness lane does not use this field; it uses the discriminated ship-review rebase-delta transport below.
 
-When the field is present, review only that range. Validate the transported value before fan-out:
+Ship-review transports its post-rebase rebase delta as the discriminated single-line field:
+
+```text
+Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD
+```
+
+This field uses a two-dot separator and is ship-review-only. It is the only transport that accepts the two-dot form, so an ordinary `ROUND_BASE..HEAD` typo on the common three-dot field still fails closed. Do not accept `Explicit ship-review rebase-delta range:` as ordinary scoped-review input outside ship-review, and do not accept the three-dot form for this discriminated field.
+
+When either field is present, review only that range. Validate the transported value before fan-out:
+
+For `Explicit diff range: <fixed-point>...HEAD`:
 
 - Single line
 - Contains exactly one three-dot separator; reject two-dot ranges and ranges with more than three dots.
@@ -60,11 +70,24 @@ When the field is present, review only that range. Validate the transported valu
 - Left endpoint resolves with `git rev-parse`
 - `HEAD` resolves to the current review head (`git rev-parse HEAD`)
 
+For `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` (ship-review-only):
+
+- Single line
+- Contains exactly one two-dot separator; reject three-dot ranges and ranges with more than two dots.
+- Non-empty endpoints
+- No whitespace
+- No endpoint beginning with dash
+- Right endpoint is the literal HEAD
+- Left endpoint resolves with `git rev-parse`
+- `HEAD` resolves to the current review head (`git rev-parse HEAD`)
+
 On any failure: stop before fan-out, report **Could not run** with the failed range check, verdict **NEEDS FIXES**.
 
-When the field is absent, reuse the fixed point already resolved during classification. When present and accepted, derive `diff_range`, the diff command, and the commit list from that range: `diff_range` is the accepted `<fixed-point>...HEAD`; `fixed_point` is the left side.
+When the common field is present and accepted, derive `diff_range`, the diff command, and the commit list from that range: `diff_range` is the accepted `<fixed-point>...HEAD`; `fixed_point` is the left side. When the discriminated ship-review field is present and accepted, `diff_range` is the accepted `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD`; `fixed_point` is the left side (`<stage-9-cleared>`); the diff command is the patch-id-filtered rebase delta (`old_base = git merge-base <stage-9-cleared> HEAD`, `new_base = git merge-base HEAD origin/main`, filtered by patch-id / `git range-diff` so already-cleared feature work and upstream churn are excluded, not `git diff <fixed-point>...HEAD`); the commit list is the filtered delta commits (not `git log <fixed-point>..HEAD`). The empty-delta check and the non-empty review use the same filtered comparison.
 
-Capture the diff command once: `git diff` of `diff_range` (three-dot, so the comparison is against the merge-base). Also note the list of commits via `git log <fixed-point>..HEAD --oneline`.
+When neither field is present, reuse the fixed point already resolved during classification. When present and accepted, derive `diff_range`, the diff command, and the commit list from that accepted range: `diff_range` is the accepted `<fixed-point>...HEAD` for the common field or `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` for the discriminated field; `fixed_point` is the left side.
+
+Capture the diff command once: for the common field `git diff` of `diff_range` (three-dot, so the comparison is against the merge-base); for the discriminated ship-review field the patch-id-filtered rebase-delta diff (range-diff) as defined above. Also note the list of commits via `git log <fixed-point>..HEAD --oneline` for the common field, or the filtered delta commit list for the discriminated field.
 
 Before going further, confirm the fixed point resolves (`git rev-parse <fixed-point>`) and the diff is non-empty. A bad ref or empty diff should fail here — not inside three parallel sub-agents.
 
@@ -112,15 +135,15 @@ After Steps 1–3 complete, write one Markdown scratch file that the Step 6 axes
 | `branch` | Current branch name | Context for the reader |
 | `head_sha` | Full 40-char `git rev-parse HEAD` | Freshness — must match consumer's HEAD |
 | `fixed_point` | The left side of the accepted explicit range when present; otherwise the base ref or SHA from Step 1 | Prevents wrong-base stale reads |
-| `diff_range` | The accepted explicit range when present; otherwise `<fixed-point>...HEAD` | Explicit scope binding |
+| `diff_range` | The accepted explicit range when present (`Explicit diff range: <fixed-point>...HEAD` three-dot, or `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` two-dot discriminated); otherwise `<fixed-point>...HEAD` | Explicit scope binding — for the discriminated range this is the ship-review-only rebase-delta range, synchronized with the filtered delta |
 | `written_at` | UTC ISO-8601 timestamp | Audit trail; not used for verification |
 
-When Step 1 accepted `Explicit diff range: <fixed-point>...HEAD`, `fixed_point`, `diff_range`, the diff command, and the commit list are derived from that range. The artifact does not replace the invocation-prompt field.
+When Step 1 accepted `Explicit diff range: <fixed-point>...HEAD`, `fixed_point`, `diff_range`, the diff command, and the commit list are derived from that three-dot range. When Step 1 accepted `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD`, `fixed_point` is the left side, `diff_range` is the discriminated rebase-delta range, the diff command is the patch-id-filtered rebase delta (old_base/new_base / range-diff, not a plain three-dot or naive two-dot tree diff), and the commit list is the filtered delta commits. The artifact does not replace the invocation-prompt field.
 
 **Body**, in order:
 
-1. **Diff command** — `git diff` of the accepted `diff_range` (explicit range when present; otherwise `git diff <fixed-point>...HEAD`)
-2. **Commit list** — `git log <fixed-point>..HEAD --oneline` (`fixed_point` is the left side of the accepted range when present)
+1. **Diff command** — `git diff` of the accepted `diff_range` for the common three-dot field, or the patch-id-filtered rebase-delta diff (range-diff) for the discriminated ship-review field
+2. **Commit list** — `git log <fixed-point>..HEAD --oneline` (`fixed_point` is the left side of the accepted range when present) for the common field; for the discriminated ship-review field, the filtered delta commit list (commits in `new_base..HEAD` whose patch-id is not in `old_base..stage-9-cleared`)
 3. **Blast-radius table** — the scored table from Step 2
 4. **Roslyn pre-pass results** — from Step 3, when available; omit this section when the Roslyn MCP tools are unavailable
 5. **Tooling-gate status** — `dotnet format --verify-no-changes` and `dotnet build` pass/fail, with diagnostics on failure
@@ -173,7 +196,7 @@ profiles. If the host exposes no subagent mechanism, run each brief inline in
 sequence and say so in the final summary, so the reader knows the axes were not
 independent.
 
-Every prompt gets the path to the pre-pass artifact written in Step 3a. The sub-agent reads that file as its first action and verifies `repository`, `head_sha`, `fixed_point`, and `diff_range` against its own environment. If the file is missing, unreadable, or any of those fields mismatch — or the sub-agent cannot verify (no shell, wrong cwd) — it fails closed. No inline relay of the diff command, commit list, blast-radius table, Roslyn results, tooling-gate status, or severity scale. "Per the scale supplied" means the scale in the artifact just read.
+Every prompt gets the path to the pre-pass artifact written in Step 3a. The sub-agent reads that file as its first action and verifies `repository`, `head_sha`, `fixed_point`, and `diff_range` against its own environment. If the file is missing, unreadable, or any of those fields mismatch — or the sub-agent cannot verify (no shell, wrong cwd) — it fails closed. No inline relay of the diff command, commit list, blast-radius table, Roslyn results, tooling-gate status, or severity scale. For the discriminated ship-review rebase-delta range this verification re-derives the same patch-id-filtered semantics (old_base/new_base / range-diff) and confirms the header's `diff_range` is the discriminated two-dot range and the body describes the filtered scope. "Per the scale supplied" means the scale in the artifact just read.
 
 Non-artifact inline content stays in the prompt, not the file: Standards also receives the Step 5 standards-source list and reads `./smell-baseline.md`; Spec also receives the spec path from Step 4.
 
