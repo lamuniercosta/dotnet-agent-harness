@@ -189,6 +189,22 @@ function Resolve-ShipReviewNewBase {
     return $null
 }
 
+function Get-GitAncestryDiagnostics {
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    $originMain = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('rev-parse', 'origin/main')
+    $head = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('rev-parse', 'HEAD')
+    $shallow = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('rev-parse', '--is-shallow-repository')
+
+    $originSha = if ($originMain.Ok) { $originMain.Output.Trim() } else { '<unresolved>' }
+    $headSha = if ($head.Ok) { $head.Output.Trim() } else { '<unresolved>' }
+    $shallowState = if ($shallow.Ok) { $shallow.Output.Trim() } else { '<unknown>' }
+
+    return "origin/main=$originSha HEAD=$headSha shallow=$shallowState"
+}
+
 function Test-BranchBasedOnOriginMain {
     param(
         [Parameter(Mandatory)][string]$RepoRoot
@@ -204,10 +220,169 @@ function Test-BranchBasedOnOriginMain {
     $ancestor = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @(
         'merge-base', '--is-ancestor', 'origin/main', 'HEAD'
     )
-    return [pscustomobject]@{
-        Ok     = ($ancestor.Ok -and $ancestor.ExitCode -eq 0)
-        Detail = $ancestor.Output
+    $ok = ($ancestor.Ok -and $ancestor.ExitCode -eq 0)
+    $detail = if ($ok) {
+        $diag = Get-GitAncestryDiagnostics -RepoRoot $RepoRoot
+        if ([string]::IsNullOrWhiteSpace($ancestor.Output)) { $diag } else { "$($ancestor.Output.Trim()) $diag" }
     }
+    else {
+        $diag = Get-GitAncestryDiagnostics -RepoRoot $RepoRoot
+        $stderr = if ([string]::IsNullOrWhiteSpace($ancestor.Output)) { '' } else { " output=$($ancestor.Output.Trim())" }
+        "merge-base --is-ancestor origin/main HEAD failed: exit=$($ancestor.ExitCode)$stderr $diag"
+    }
+
+    return [pscustomobject]@{
+        Ok     = $ok
+        Detail = $detail
+    }
+}
+
+function Get-OpenPrHeadRepositoryOwner {
+    param(
+        [Parameter(Mandatory)]$OpenPr
+    )
+
+    $headRepositoryOwner = $OpenPr.PSObject.Properties['headRepositoryOwner']?.Value
+    if ($null -ne $headRepositoryOwner) {
+        if ($headRepositoryOwner -is [string]) {
+            return $headRepositoryOwner
+        }
+        $ownerLogin = $headRepositoryOwner.PSObject.Properties['login']?.Value
+        if ($ownerLogin) {
+            return [string]$ownerLogin
+        }
+    }
+
+    $headRepository = $OpenPr.PSObject.Properties['headRepository']?.Value
+    if ($null -ne $headRepository) {
+        $owner = $headRepository.PSObject.Properties['owner']?.Value
+        if ($null -ne $owner) {
+            $ownerLogin = $owner.PSObject.Properties['login']?.Value
+            if ($ownerLogin) {
+                return [string]$ownerLogin
+            }
+        }
+    }
+
+    return $null
+}
+
+function Get-CurrentPullRequestIdentity {
+    param(
+        [Parameter(Mandatory)][string]$RepoRoot
+    )
+
+    $identity = [pscustomobject]@{
+        Number                 = [int]$null
+        HeadRefName            = $null
+        HeadRepositoryOwner    = $null
+        HeadRepositoryFullName = $null
+        ResolvedFrom           = 'none'
+    }
+
+    $eventPath = $env:GITHUB_EVENT_PATH
+    if ($eventPath -and (Test-Path -LiteralPath $eventPath)) {
+        try {
+            $event = Get-Content -LiteralPath $eventPath -Raw -Encoding utf8 | ConvertFrom-Json
+            if ($null -ne $event.pull_request) {
+                $pr = $event.pull_request
+                $identity.Number = [int]$pr.number
+                $identity.HeadRefName = [string]$pr.head.ref
+                $identity.HeadRepositoryOwner = [string]$pr.head.repo.owner.login
+                $identity.HeadRepositoryFullName = [string]$pr.head.repo.full_name
+                $identity.ResolvedFrom = 'github-event'
+                return $identity
+            }
+        }
+        catch {
+            # fall through to other identity sources
+        }
+    }
+
+    $githubRef = $env:GITHUB_REF
+    if ($githubRef -match '^refs/pull/(\d+)/merge$') {
+        $identity.Number = [int]$Matches[1]
+        $identity.ResolvedFrom = 'github-ref'
+    }
+
+    if ($env:GITHUB_REPOSITORY) {
+        $repoOwner = $env:GITHUB_REPOSITORY.Split('/')[0]
+        if (-not $identity.HeadRepositoryOwner) {
+            $identity.HeadRepositoryOwner = $repoOwner
+        }
+        if (-not $identity.HeadRepositoryFullName) {
+            $identity.HeadRepositoryFullName = $env:GITHUB_REPOSITORY
+        }
+    }
+
+    if (Get-Command gh -ErrorAction SilentlyContinue) {
+        $viewJson = gh pr view --json number,headRefName,headRepository 2>&1
+        if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($viewJson)) {
+            $view = $viewJson | ConvertFrom-Json
+            if ($null -eq $identity.Number) {
+                $identity.Number = [int]$view.number
+            }
+            if (-not $identity.HeadRefName) {
+                $identity.HeadRefName = [string]$view.headRefName
+            }
+            $viewOwner = Get-OpenPrHeadRepositoryOwner -OpenPr $view
+            if ($viewOwner) {
+                $identity.HeadRepositoryOwner = $viewOwner
+            }
+            $viewRepoName = $view.PSObject.Properties['headRepository']?.Value?.PSObject.Properties['name']?.Value
+            if ($viewRepoName -and $identity.HeadRepositoryOwner) {
+                $identity.HeadRepositoryFullName = "$($identity.HeadRepositoryOwner)/$viewRepoName"
+            }
+            if ($identity.ResolvedFrom -eq 'none' -or $identity.ResolvedFrom -eq 'github-ref') {
+                $identity.ResolvedFrom = 'gh-pr-view'
+            }
+            return $identity
+        }
+    }
+
+    $branchResult = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('rev-parse', '--abbrev-ref', 'HEAD')
+    if ($branchResult.Ok) {
+        $branch = $branchResult.Output.Trim()
+        if ($branch -and $branch -ne 'HEAD') {
+            $identity.HeadRefName = $branch
+            if ($identity.ResolvedFrom -eq 'none') {
+                $identity.ResolvedFrom = 'git-branch'
+            }
+        }
+    }
+
+    return $identity
+}
+
+function Test-OpenPrIsCurrentPullRequest {
+    param(
+        [Parameter(Mandatory)]$OpenPr,
+        [Parameter(Mandatory)]$CurrentIdentity
+    )
+
+    if ($null -ne $CurrentIdentity.Number -and [int]$OpenPr.number -eq [int]$CurrentIdentity.Number) {
+        $openOwner = Get-OpenPrHeadRepositoryOwner -OpenPr $OpenPr
+        if ($CurrentIdentity.HeadRepositoryOwner -and $openOwner) {
+            return ($openOwner -eq $CurrentIdentity.HeadRepositoryOwner)
+        }
+
+        return $true
+    }
+
+    if (-not $CurrentIdentity.HeadRefName -or $CurrentIdentity.HeadRefName -eq 'HEAD') {
+        return $false
+    }
+
+    if ([string]$OpenPr.headRefName -ne $CurrentIdentity.HeadRefName) {
+        return $false
+    }
+
+    $openOwner = Get-OpenPrHeadRepositoryOwner -OpenPr $OpenPr
+    if ($CurrentIdentity.HeadRepositoryOwner -and $openOwner) {
+        return ($openOwner -eq $CurrentIdentity.HeadRepositoryOwner)
+    }
+
+    return $true
 }
 
 function Test-NoOpenPrDependencyOverlap {
@@ -222,14 +397,7 @@ function Test-NoOpenPrDependencyOverlap {
         }
     }
 
-    $branchResult = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @('rev-parse', '--abbrev-ref', 'HEAD')
-    if (-not $branchResult.Ok) {
-        return [pscustomobject]@{
-            Ok     = $false
-            Detail = "could not resolve current branch: $($branchResult.Output)"
-        }
-    }
-    $branch = $branchResult.Output.Trim()
+    $currentIdentity = Get-CurrentPullRequestIdentity -RepoRoot $RepoRoot
 
     if (-not (Ensure-OriginMainRef -RepoRoot $RepoRoot)) {
         return [pscustomobject]@{
@@ -238,7 +406,7 @@ function Test-NoOpenPrDependencyOverlap {
         }
     }
 
-    $openJson = gh pr list --state open --json number,headRefName 2>&1
+    $openJson = gh pr list --state open --json number,headRefName,headRepository,headRepositoryOwner 2>&1
     if ($LASTEXITCODE -ne 0) {
         return [pscustomobject]@{
             Ok     = $false
@@ -246,7 +414,11 @@ function Test-NoOpenPrDependencyOverlap {
         }
     }
 
-    $openPrs = @(@($openJson | ConvertFrom-Json) | Where-Object { $_.headRefName -ne $branch })
+    $openPrs = @(
+        @($openJson | ConvertFrom-Json) | Where-Object {
+            -not (Test-OpenPrIsCurrentPullRequest -OpenPr $_ -CurrentIdentity $currentIdentity)
+        }
+    )
     if ($openPrs.Count -eq 0) {
         return [pscustomobject]@{
             Ok     = $true
