@@ -125,7 +125,7 @@ the right stage and supporting skills.
 
 `/code-review` is C#-evidence only. A diff with no `.cs` files is **out of scope for this skill** — a normal outcome, not a failed review — and does not fall back to a generic reviewer. Prose, markdown, scripts, and config use this repo's deterministic gates (`./scripts/run-*.ps1`) plus human reading. Axis reviewers **Report findings meeting the evidence threshold, up to 15** and say so if any evidence-backed findings were cut.
 
-Callers transport a scoped review as the single-line field `Explicit diff range: <fixed-point>...HEAD`. The right side is always `HEAD`. Malformed, unresolved, empty, or head-mismatched ranges fail closed (**Could not run** / **NEEDS FIXES**) before fan-out.
+Callers transport ordinary scoped reviews as the single-line field `Explicit diff range: <fixed-point>...HEAD` (three-dot, merge-base). The right side is always `HEAD`. That common field rejects two-dot ranges so a dropped-dot `ROUND_BASE..HEAD` typo fails closed (**Could not run** / **NEEDS FIXES**) before fan-out. Stage-10 `/ship-review` after rebase uses the discriminated ship-review-only field `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` (two-dot, patch-id-filtered / `git range-diff` between `old_base..stage-9-cleared` and `new_base..HEAD`, excluding already-cleared feature work and upstream churn). Empty and non-empty ship-review deltas use the same filtered comparison; an empty delta is a named confirmation, not a skipped lane. Malformed, unresolved, empty, or head-mismatched ranges fail closed before fan-out.
 
 ## Vocabulary
 

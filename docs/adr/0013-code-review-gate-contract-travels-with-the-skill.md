@@ -24,19 +24,7 @@ the skill's authority and its sink, not a single judgment it makes.
    `/ship-review`'s resolution path and fail-closed rule. An unresolvable
    feature or term stops the review before it starts: **Could not run**, the
    missing context named, verdict **NEEDS FIXES**.
-2. **Step 1 accepts `Explicit diff range: <fixed-point>...HEAD`.** When the
-   caller supplies that single-line invocation-prompt field, the review covers
-   only that three-dot range. `<fixed-point>` is the left side and is Step 3a's
-   `fixed_point`; the right side is always `HEAD`. Callers that pin a concrete
-   head make the workspace HEAD equal that pin, then pass
-   `<fixed-point>...HEAD`. Malformed, unresolved, empty, or head-mismatched
-   ranges fail closed before fan-out: **Could not run** with the failed range
-   check, verdict **NEEDS FIXES**. `/remediate` passes
-   `Explicit diff range: ROUND_BASE...HEAD` on later rounds, `/ship-review`
-   `Explicit diff range: <stage-9-cleared-commit>...HEAD` for a non-empty
-   rebase delta, and `/pr-review` `Explicit diff range: baseSha...HEAD` on a
-   workspace at `headSha`. The pre-pass artifact is evidence, not a substitute
-   for the field, and no artifact-path input replaces it.
+2. **Step 1 accepts two discriminated explicit ranges.** The ordinary scoped-review transport is `Explicit diff range: <fixed-point>...HEAD` — exactly one three-dot separator, no two-dot, no whitespace, no dash-prefixed endpoint, right side literal `HEAD`. `<fixed-point>` is the left side and is Step 3a's `fixed_point`; the right side is always `HEAD`. Callers that pin a concrete head make the workspace HEAD equal that pin, then pass `<fixed-point>...HEAD`. Malformed, unresolved, empty, or head-mismatched ranges fail closed before fan-out: **Could not run** with the failed range check, verdict **NEEDS FIXES**. The ship-review post-rebase transport is the discriminated field `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` — exactly one two-dot separator, ship-review-only, with patch-id-filtered rebase-delta semantics (`old_base = git merge-base <stage-9-cleared> HEAD`, `new_base = git merge-base HEAD origin/main`, filtered by patch-id / `git range-diff` so already-cleared feature work and upstream churn are excluded). Its two-dot form is accepted only on this discriminated field, so ordinary three-dot callers still reject a dropped-dot `ROUND_BASE..HEAD` typo as malformed. `/remediate` passes `Explicit diff range: ROUND_BASE...HEAD` on later rounds (three-dot), `/ship-review` passes `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` for a non-empty rebase delta (two-dot discriminated, filtered), and `/pr-review` passes `Explicit diff range: baseSha...HEAD` (three-dot) on a workspace at `headSha`. The pre-pass artifact is evidence, not a substitute for the field, and no artifact-path input replaces it.
 3. **Step 8 sorts and hands off.** Verified findings above the closing bar go
    to `/remediate`; below-bar or out-of-scope findings become follow-ups,
    never silently relabelled, with source and severity retained either way.
@@ -67,6 +55,8 @@ discipline for this change, not a permanent gate: DEV-122 will restructure
 this skill for progressive disclosure, and a size assertion would fight that
 work. The verifier measures and reports the number instead.
 
+**Globally accept two-dot ranges on the common `Explicit diff range:` field.** That would fix ship-review but silently accept an ordinary `ROUND_BASE..HEAD` dropped-dot typo with different diff semantics (tree diff instead of merge-base diff). The discriminated field preserves fail-closed behavior for all non-ship-review callers.
+
 ## Accepted cost
 
 The largest skill in the tree (15,215 B) grows by up to ~1 KB against the
@@ -83,4 +73,4 @@ Stage 9 has the same convergence discipline as stage 10: the loop terms
 settled at stage 1 bind both review stages, `/remediate` receives a bounded,
 self-shrinking input, and the loop terminates on the closing bar rather than
 on review fatigue. `Test-InstallArtifacts.ps1` carries the contract assertions
-so the adapted Codex copy cannot silently drop them.
+so the adapted Codex copy cannot silently drop them. The discriminated ship-review transport keeps the ordinary three-dot grammar strict while giving ship-review a patch-id-filtered rebase-delta scope that excludes already-cleared work and upstream churn, with artifact `fixed_point`, `diff_range`, diff evidence, and commit list synchronized to the same filtered semantics.

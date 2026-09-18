@@ -51,12 +51,15 @@ in-session only: do not write a receipt or other state outside the working tree
 to recover it. If the commit is missing or ambiguous, fail closed before
 fan-out: report **Could not run** with the reason and verdict **NEEDS FIXES**.
 
-First determine whether the rebase delta is empty — the diff from that
-stage-9-cleared commit to the rebased head. If empty, record a named
-correctness **confirmation** in the consolidated report and **do not invoke**
-`/code-review`. That confirmation still counts as the lane having run: do not
-skip the lane and do not treat emptiness as a missing reviewer. If non-empty,
-invoke `/code-review` with `Explicit diff range: <stage-9-cleared-commit>...HEAD`.
+First determine whether the rebase delta is empty. The rebase delta is the
+patch-id-filtered difference between the old feature series and the new feature
+series, not a plain three-dot merge-base diff or a naive two-dot tree diff:
+
+- `old_base = git merge-base <stage-9-cleared> HEAD`
+- `new_base = git merge-base HEAD origin/main` (or `git merge-base --fork-point HEAD` when available)
+- Old series `old_base..stage-9-cleared` and new series `new_base..HEAD` are compared by patch-id (`git patch-id` / `git range-diff`). A new commit whose patch-id already exists in the old series is already-cleared feature work and is excluded. Commits that are ancestors of `new_base` (upstream churn) are not in the new series and are excluded.
+
+If that filtered delta has no commits and `git range-diff old_base..stage-9-cleared new_base..HEAD` shows no hunk differences, the delta is empty. Record a named correctness **confirmation** in the consolidated report and **do not invoke** `/code-review`. That confirmation still counts as the lane having run: do not skip the lane and do not treat emptiness as a missing reviewer. If non-empty, invoke `/code-review` with `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD`. This discriminated two-dot range is ship-review-only; ordinary `Explicit diff range: <fixed-point>...HEAD` three-dot ranges remain the only accepted form for stage-9 and later fix rounds, so a dropped-dot `ROUND_BASE..HEAD` typo still fails closed. The empty check and the non-empty review use the same rebase-delta semantics.
 
 When that nested `/code-review` returns `declined: true` with a non-null
 `decline_reason` and `findings: []`, or reports **out of scope for this skill**,
@@ -75,12 +78,12 @@ Before dispatching, write a pre-pass scratch artifact for Security and Coverage.
 | `branch` | Current branch name | Context for the reader |
 | `head_sha` | Full 40-char `git rev-parse HEAD` | Freshness — must match consumer's HEAD |
 | `fixed_point` | The stage-9-cleared commit | Prevents wrong-base stale reads |
-| `diff_range` | The rebase-delta three-dot range | Explicit scope binding |
+| `diff_range` | The discriminated rebase-delta range `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` (two-dot, ship-review-only) | Explicit scope binding — synchronized with the filtered delta |
 | `written_at` | UTC ISO-8601 timestamp | Audit trail; not used for verification |
 
-A Security or Coverage consumer verifies `repository`, `head_sha`, `fixed_point`, and `diff_range` against its own environment before trusting the file. If the file is missing, unreadable, or any of those fields mismatch — or the lane cannot verify (no shell, wrong cwd) — it **fails closed**. No fallback to inline relay. `written_at` is not used for verification. `branch` is context for the reader.
+A Security or Coverage consumer verifies `repository`, `head_sha`, `fixed_point`, and `diff_range` against its own environment before trusting the file, re-deriving the same rebase-delta semantics (old_base/new_base patch-id filter / range-diff) and confirming the header's `diff_range` matches the accepted discriminated range and the file's body describes that same filtered scope. If the file is missing, unreadable, or any of those fields mismatch — or the lane cannot verify (no shell, wrong cwd) — it **fails closed**. No fallback to inline relay. `written_at` is not used for verification. `branch` is context for the reader.
 
-**Body**: the diff command, the commit list, the rebase-delta summary, and the `/verify` results table. When the rebase delta is empty, the body also carries the named correctness confirmation.
+**Body**: the rebase-delta diff command (patch-id-filtered / range-diff), the filtered commit list (only delta commits, not `git log <stage-9-cleared>..HEAD`), the rebase-delta summary, and the `/verify` results table. When the rebase delta is empty, the body also carries the named correctness confirmation and the commit list is empty. The diff evidence, commit list, `fixed_point`, and `diff_range` are synchronized to the same filtered rebase-delta semantics.
 
 **Allowed roots**: `<temp>/pr-review` and `<temp>/scratch` only. Both use the platform temporary directory, not a relative path. Working-tree roots are forbidden — no gitignore fallback. The path carries a repo-unique segment (for example a hash of the repo root's absolute path) **and this skill's own segment**, e.g. `<temp>/pr-review/<repo-hash>/ship-review/pre-pass-<full-40-char-sha>.md` (same shape under `<temp>/scratch/`), so two repos sharing a temp directory cannot collide and the nested `/code-review` pre-pass of the same repo can never write the same file. Filename: `pre-pass-<full-40-char-sha>.md`. Short SHAs are forbidden.
 
@@ -91,8 +94,8 @@ A Security or Coverage consumer verifies `repository`, `head_sha`, `fixed_point`
 **Read-only during fan-out**: `code-reviewer` and `security-reviewer` have no dedicated Edit or Write tools; Bash is available but not a sanctioned write path. Integrity during fan-out relies on that profile constraint, not filesystem permissions.
 
 The ship-review artifact is **not** an input to nested `/code-review`. If
-non-empty, `/code-review` receives `Explicit diff range: <stage-9-cleared-commit>...HEAD` and computes its
-own pre-pass (Steps 1–3a) over that range, writing an independent artifact
+non-empty, `/code-review` receives `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` and computes its
+own pre-pass (Steps 1–3a) over that discriminated filtered delta, writing an independent artifact
 under its own `code-review/` subdirectory (not the `ship-review/` path). If empty,
 `/code-review` is not invoked; Security and Coverage still consume the
 ship-review artifact.
@@ -101,17 +104,17 @@ Dispatch security, coverage, and (when the rebase delta is non-empty) `/code-rev
 
 | Reviewer | Agent | Brief |
 |---|---|---|
-| Correctness & design | `/code-review` | First determine whether the rebase delta is empty. If empty: named confirmation, do not invoke `/code-review`, not a skipped lane. If non-empty: `Explicit diff range: <stage-9-cleared-commit>...HEAD`. If nested `/code-review` declines (no `.cs`): report the lane as **out of scope for this skill**, not a clean pass. |
+| Correctness & design | `/code-review` | First determine whether the rebase delta is empty (patch-id-filtered / range-diff). If empty: named confirmation, do not invoke `/code-review`, not a skipped lane. If non-empty: `Explicit ship-review rebase-delta range: <stage-9-cleared>..HEAD` (ship-review-only two-dot, filtered delta). If nested `/code-review` declines (no `.cs`): report the lane as **out of scope for this skill**, not a clean pass. |
 | Security | `security-reviewer` | `run-vulnerable-packages.ps1`, plus review for secrets/connection strings, injection, missing authorization, permissive CORS, PII in logs or telemetry attributes |
 | Coverage | `mutation-analyst` | Coverage gaps and Stryker survivors against the change set |
 
 Security and coverage each get the path to the ship-review pre-pass artifact.
 Each lane reads that file as its first action and verifies `repository`,
-`head_sha`, `fixed_point`, and `diff_range` against its own environment. If the
+`head_sha`, `fixed_point`, and `diff_range` against its own environment by re-deriving the same patch-id-filtered rebase-delta semantics. If the
 file is missing, unreadable, or any of those fields mismatch — or the lane
 cannot verify — it fails closed. Do not also relay the diff command, commit
 list, or `/verify` table inline. Correctness gets the named confirmation when
-the rebase delta is empty, or the explicit range when it is non-empty — never
+the rebase delta is empty, or the discriminated explicit range when it is non-empty — never
 the ship-review artifact path.
 
 ### 3. Consolidate
