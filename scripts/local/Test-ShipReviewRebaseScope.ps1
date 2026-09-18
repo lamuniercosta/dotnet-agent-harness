@@ -67,6 +67,13 @@ try {
     Assert-That 'non-empty delta scopes to the resolution file only' `
         (($conflictScope.ChangedFiles.Count -eq 1) -and ($conflictScope.ChangedFiles[0] -eq 'feature.txt')) `
         ("changed=$($conflictScope.ChangedFiles -join ', ')")
+    $conflictFilteredCommits = @($conflictScope.FilteredCommits)
+    $conflictCommitLines = @($conflictScope.FilteredCommitList)
+    Assert-That 'non-empty delta filtered commit list matches the delta commits' `
+        (($conflictFilteredCommits.Count -gt 0) -and
+         ($conflictCommitLines.Count -eq $conflictFilteredCommits.Count) -and
+         ($conflictCommitLines -join '|' -match 'feat1')) `
+        ("commits=$($conflictCommitLines -join '; ')")
 
     $multiRoot = New-TempRepoRoot
     $multi = New-ShipReviewRebaseFixtureRepo -Root $multiRoot -Scenario multi-commit
@@ -85,16 +92,23 @@ try {
         ($cleanScope.DiffCommand -eq "git range-diff $($cleanScope.OldBase)..$($cleanScope.Stage9Cleared) $($cleanScope.NewBase)..$($cleanScope.HeadSha)") `
         $cleanScope.DiffCommand
     Assert-That 'empty delta keeps an empty filtered commit list' `
-        ($cleanScope.FilteredCommits.Count -eq 0) `
-        "commits=$($cleanScope.FilteredCommits.Count)"
+        (@($cleanScope.FilteredCommits).Count -eq 0) `
+        "commits=$(@($cleanScope.FilteredCommits).Count)"
 
     $goodTransport = "Explicit ship-review rebase-delta range: $($clean.Stage9)..HEAD"
+    $goodThreeDot = "Explicit diff range: $($clean.Stage9)...HEAD"
     Assert-That 'discriminated ship-review transport accepts a valid two-dot range' `
         (Test-ShipReviewRebaseDeltaTransport -Line $goodTransport).Ok `
         $goodTransport
+    Assert-That 'ordinary explicit diff range accepts a valid three-dot range' `
+        (Test-ExplicitDiffRangeTransport -Line $goodThreeDot).Ok `
+        $goodThreeDot
     Assert-That 'ordinary explicit diff range rejects a dropped-dot two-dot typo' `
         (-not (Test-ExplicitDiffRangeTransport -Line "Explicit diff range: $($clean.Stage9)..HEAD").Ok) `
         'ROUND_BASE..HEAD must fail closed on the common three-dot field'
+    Assert-That 'ordinary explicit diff range rejects a dash-prefixed endpoint' `
+        (-not (Test-ExplicitDiffRangeTransport -Line 'Explicit diff range: -bad...HEAD').Ok) `
+        'dash-prefixed endpoints must fail closed on the common field'
     Assert-That 'ordinary explicit diff range rejects whitespace in the value' `
         (-not (Test-ExplicitDiffRangeTransport -Line "Explicit diff range: $($clean.Stage9) ...HEAD").Ok) `
         'whitespace-bearing range values must fail closed'
@@ -115,27 +129,36 @@ try {
     }
     Assert-That 'unresolved stage-9-cleared commit fails closed' $missingThrown 'expected exception for missing ref'
 
-    $ancestor = Invoke-GitAtRoot -RepoRoot $repoRoot -ArgumentList @('merge-base', '--is-ancestor', 'origin/main', 'HEAD')
-    Assert-That 'branch is based on origin/main' `
-        ($ancestor.Ok -and $ancestor.ExitCode -eq 0) `
-        "exit=$($ancestor.ExitCode) output=$($ancestor.Output)"
+    $consumerOk = Test-ShipReviewArtifactConsumer -Scope $cleanScope -ConsumerHeadSha $cleanScope.HeadSha `
+        -ConsumerDiffRange $cleanScope.DiffRange -ConsumerFixedPoint $cleanScope.FixedPoint
+    Assert-That 'artifact consumer accepts synchronized head_sha fixed_point and diff_range' `
+        $consumerOk.Ok `
+        $consumerOk.Reason
+    $consumerHeadMismatch = Test-ShipReviewArtifactConsumer -Scope $cleanScope `
+        -ConsumerHeadSha ('0' * 40)
+    Assert-That 'artifact consumer fails closed on head_sha mismatch' `
+        (-not $consumerHeadMismatch.Ok) `
+        $consumerHeadMismatch.Reason
+    $consumerRangeMismatch = Test-ShipReviewArtifactConsumer -Scope $cleanScope `
+        -ConsumerHeadSha $cleanScope.HeadSha -ConsumerDiffRange 'Explicit ship-review rebase-delta range: deadbeef..HEAD'
+    Assert-That 'artifact consumer fails closed on diff_range mismatch' `
+        (-not $consumerRangeMismatch.Ok) `
+        $consumerRangeMismatch.Reason
 
-    if (Get-Command gh -ErrorAction SilentlyContinue) {
-        $openPrs = gh pr list --state open --json number 2>$null
-        $openCount = 0
-        if ($LASTEXITCODE -eq 0 -and $openPrs) {
-            $parsed = $openPrs | ConvertFrom-Json
-            if ($null -ne $parsed) {
-                $openCount = @($parsed).Count
-            }
-        }
-        Assert-That 'no open PR dependency at PR-readiness time' `
-            ($openCount -eq 0) `
-            "openPrCount=$openCount"
-    }
-    else {
-        Write-Host '  skip  no open PR dependency at PR-readiness time (gh unavailable)'
-    }
+    $freshRoot = New-TempRepoRoot
+    New-ShipReviewRebaseFixtureRepo -Root $freshRoot -Scenario clean | Out-Null
+    $freshnessProof = Test-OriginMainRefFreshness -RepoRoot $freshRoot
+    Assert-That 'origin/main freshness is established by fetch before use' `
+        $freshnessProof.Ok `
+        $freshnessProof.Detail
+
+    $baseProof = Test-BranchBasedOnOriginMain -RepoRoot $repoRoot
+    Assert-That 'branch is based on origin/main' $baseProof.Ok $baseProof.Detail
+
+    $overlapProof = Test-NoOpenPrDependencyOverlap -RepoRoot $repoRoot
+    Assert-That 'no open PR dependency or file overlap for other PR heads' `
+        $overlapProof.Ok `
+        $overlapProof.Detail
 }
 finally {
     foreach ($root in $temporaryRoots) {
