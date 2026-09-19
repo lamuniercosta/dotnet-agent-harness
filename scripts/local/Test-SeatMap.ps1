@@ -98,8 +98,10 @@ Test-NegativeFixture -Name "missing floor role" -Mutator { param($m) $m.seats[0]
 # 9. Floor role not last element
 Test-NegativeFixture -Name "floor role not last" -Mutator { param($m) $m.seats[0].rungs[3].psobject.properties.remove('role'); Add-Member -InputObject $m.seats[0].rungs[2] -NotePropertyName "role" -NotePropertyValue "floor" -Force } -ExpectedErrorSubstring "must be the last rung"
 
-# 10. Duplicate pool violation across declared rungs when distinctPoolsPerSeat=true
-Test-NegativeFixture -Name "duplicate pool violation" -Mutator { param($m) $m.seats[0].rungs[1].pool = $m.seats[0].rungs[0].pool } -ExpectedErrorSubstring "does not have distinct pools"
+# 10. Duplicate pool violation across declared rungs when distinctPoolsPerSeat=true.
+# The fixture opts the rule in itself: the example map now ships distinctPoolsPerSeat=false
+# so an operator can stack several models from one pool on a seat.
+Test-NegativeFixture -Name "duplicate pool violation" -Mutator { param($m) $m.invariants.distinctPoolsPerSeat = $true; $m.seats[0].rungs[1].pool = $m.seats[0].rungs[0].pool } -ExpectedErrorSubstring "does not have distinct pools"
 
 # 11. OpenCode launch line missing -m/--model
 Test-NegativeFixture -Name "opencode launch missing model flag" -Mutator { param($m) $m.seats[0].rungs[1].host = "opencode"; $m.seats[0].rungs[1].launch = "opencode run" } -ExpectedErrorSubstring "is missing -m/--model"
@@ -118,6 +120,34 @@ Test-NegativeFixture -Name "invalid evidence" -Mutator { param($m) $m.seats[0].r
 
 # 16. Missing model
 Test-NegativeFixture -Name "missing model" -Mutator { param($m) $m.seats[0].rungs[0].psobject.properties.remove('model') } -ExpectedErrorSubstring "missing model"
+
+# --- Positive Fixtures: what the map is allowed to do ---
+function Test-PositiveFixture {
+    param(
+        [Parameter(Mandatory)][string]$Name,
+        [Parameter(Mandatory)][scriptblock]$Mutator
+    )
+    $copy = ($seatMap | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    & $Mutator $copy
+    $v = @(Get-SeatMapViolations -Map $copy)
+    if ($v.Count -gt 0) {
+        Write-Error "Positive fixture '$Name' unexpectedly FAILED validation: $($v -join "`n")" -ErrorAction Continue
+        exit 1
+    }
+}
+
+# P1. With distinctPoolsPerSeat=false, a seat may stack several models from one
+# pool. This is the point of the flag: the operator adds every model they find
+# fit as 'fourth', 'fifth', ... inserted before 'floor', regardless of pool.
+Test-PositiveFixture -Name "extra rung reusing a pool before floor" -Mutator {
+    param($m)
+    $m.invariants.distinctPoolsPerSeat = $false
+    $s = $m.seats[0]
+    $extra = ($s.rungs[0] | ConvertTo-Json -Depth 100) | ConvertFrom-Json
+    $extra.name = 'fourth'
+    $extra.psobject.properties.remove('role')
+    $s.rungs = @($s.rungs[0..($s.rungs.Count - 2)]) + @($extra) + @($s.rungs[-1])
+}
 
 # --- Warning Fixtures: tierPolicy must warn, and must not fail ---
 function Test-WarningFixture {
@@ -171,5 +201,5 @@ if (Test-JsonProperty -Object $seatMap.invariants -Name 'tierPolicy') {
     Write-Host "Test-SeatMap: 5 warning fixtures verified (advisory, non-fatal)." -ForegroundColor Green
 }
 
-Write-Host "Test-SeatMap: All checks PASSED ($($seatMap.seats.Count) seats, schema valid, invariants held, 16 negative fixtures verified)." -ForegroundColor Green
+Write-Host "Test-SeatMap: All checks PASSED ($($seatMap.seats.Count) seats, schema valid, invariants held, 16 negative and 1 positive fixture verified)." -ForegroundColor Green
 exit 0

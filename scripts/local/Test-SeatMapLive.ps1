@@ -805,14 +805,14 @@ function Invoke-SeatMapLockProofs {
         @('-Host', 'gemini', '-Model', 'gemini-3.5-flash-lite', '-Test', 'Verdict', '-Seat', $SeatName, '-Rung', $RungName, '-SeatMapPath', $livePath)
     }
     Copy-Item -LiteralPath $examplePath -Destination $livePath -Force
-    $conductorFake = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'conductor' 'alt') -ExtraEnvironment $fakeProbeEnv
+    $conductorFake = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'conductor' 'third') -ExtraEnvironment $fakeProbeEnv
     Assert-True 'DEV-241 sequential fake conductor: exit 0' ($conductorFake.ExitCode -eq 0) '0' ("exit=$($conductorFake.ExitCode)`n$($conductorFake.StdOut)`n$($conductorFake.StdErr)")
-    $anvilFakeRes = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'anvil' 'alt') -ExtraEnvironment $fakeProbeEnv
+    $anvilFakeRes = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'anvil' 'third') -ExtraEnvironment $fakeProbeEnv
     Assert-True 'DEV-241 sequential fake anvil: exit 0' ($anvilFakeRes.ExitCode -eq 0) '0' ("exit=$($anvilFakeRes.ExitCode)`n$($anvilFakeRes.StdOut)`n$($anvilFakeRes.StdErr)")
-    $bothCells = Get-SeatMapTestCell -MapPath $livePath -SeatId 'conductor' -RungName 'alt'
-    $anvilCellAfter = Get-SeatMapTestCell -MapPath $livePath -SeatId 'anvil' -RungName 'alt'
-    Assert-True 'DEV-241 two writers: conductor alt still probed' ([string]$bothCells.Cell.evidence -eq 'probed') 'probed' ([string]$bothCells.Cell.evidence)
-    Assert-True 'DEV-241 two writers: anvil alt still probed' ([string]$anvilCellAfter.Cell.evidence -eq 'probed') 'probed' ([string]$anvilCellAfter.Cell.evidence)
+    $bothCells = Get-SeatMapTestCell -MapPath $livePath -SeatId 'conductor' -RungName 'third'
+    $anvilCellAfter = Get-SeatMapTestCell -MapPath $livePath -SeatId 'anvil' -RungName 'third'
+    Assert-True 'DEV-241 two writers: conductor third still probed' ([string]$bothCells.Cell.evidence -eq 'probed') 'probed' ([string]$bothCells.Cell.evidence)
+    Assert-True 'DEV-241 two writers: anvil third still probed' ([string]$anvilCellAfter.Cell.evidence -eq 'probed') 'probed' ([string]$anvilCellAfter.Cell.evidence)
 
     $mapLockPath = Get-SeatMapProcessLockPath -SeatMapPath $livePath
     Assert-True 'DEV-241 lock path is under isolated HOME' (Test-TextContains $mapLockPath $isoHome) $isoHome $mapLockPath
@@ -832,7 +832,7 @@ function Invoke-SeatMapLockProofs {
         [System.IO.FileShare]::None
     )
     try {
-        $heldContender = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'conductor' 'alt') -ExtraEnvironment $fakeProbeEnv
+        $heldContender = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'conductor' 'third') -ExtraEnvironment $fakeProbeEnv
         $heldCombined = "$($heldContender.StdOut)`n$($heldContender.StdErr)"
         Assert-True 'DEV-241 held-lock probe: exit 1' ($heldContender.ExitCode -eq 1) '1' ("exit=$($heldContender.ExitCode)`n$heldCombined")
         Assert-True 'DEV-241 held-lock probe: Seat-map lock held' (Test-TextContains $heldCombined 'Seat-map lock held') 'Seat-map lock held' $heldCombined
@@ -841,7 +841,7 @@ function Invoke-SeatMapLockProofs {
 
         $heldWhatIf = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList @(
             '-Host', 'gemini', '-Model', 'gemini-3.5-flash-lite', '-Test', 'Verdict',
-            '-Seat', 'conductor', '-Rung', 'alt', '-SeatMapPath', $livePath, '-WhatIf'
+            '-Seat', 'conductor', '-Rung', 'third', '-SeatMapPath', $livePath, '-WhatIf'
         )
         $heldWhatIfCombined = "$($heldWhatIf.StdOut)`n$($heldWhatIf.StdErr)"
         Assert-True 'DEV-241 held-lock WhatIf: exit 0' ($heldWhatIf.ExitCode -eq 0) '0' ("exit=$($heldWhatIf.ExitCode)`n$heldWhatIfCombined")
@@ -854,14 +854,14 @@ function Invoke-SeatMapLockProofs {
 
         $heldBadSeat = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList @(
             '-Host', 'gemini', '-Model', 'gemini-3.5-flash-lite', '-Test', 'Verdict',
-            '-Seat', 'no-such-seat', '-Rung', 'head', '-SeatMapPath', $livePath
+            '-Seat', 'no-such-seat', '-Rung', 'first', '-SeatMapPath', $livePath
         )
         $heldBadCombined = "$($heldBadSeat.StdOut)`n$($heldBadSeat.StdErr)"
         Assert-True 'DEV-241 held-lock missing seat: exit 1' ($heldBadSeat.ExitCode -eq 1) '1' ("exit=$($heldBadSeat.ExitCode)`n$heldBadCombined")
         Assert-True 'DEV-241 held-lock missing seat: names missing seat' (Test-TextContains $heldBadCombined "Seat 'no-such-seat' not found") "Seat 'no-such-seat' not found" $heldBadCombined
         Assert-True 'DEV-241 held-lock missing seat: no Seat-map lock held' (-not (Test-TextContains $heldBadCombined 'Seat-map lock held')) 'absent lock held' $heldBadCombined
 
-        $heldSync = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Seat', 'conductor', '-Rung', 'alt', '-SeatMapPath', $livePath)
+        $heldSync = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Seat', 'conductor', '-Rung', 'third', '-SeatMapPath', $livePath)
         $heldSyncCombined = "$($heldSync.StdOut)`n$($heldSync.StdErr)"
         Assert-True 'DEV-241 held-lock Sync swap: exit 1' ($heldSync.ExitCode -eq 1) '1' ("exit=$($heldSync.ExitCode)`n$heldSyncCombined")
         Assert-True 'DEV-241 held-lock Sync swap: Seat-map lock held' (Test-TextContains $heldSyncCombined 'Seat-map lock held') 'Seat-map lock held' $heldSyncCombined
@@ -879,7 +879,7 @@ function Invoke-SeatMapLockProofs {
         SEAT_MAP_PROBE_FAKE_LAUNCH = '1'
         SEAT_MAP_LOCK_BARRIER_DIR  = $barrierDir
     }
-    $barrierHandle = Start-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'conductor' 'alt') -ExtraEnvironment $barrierEnv
+    $barrierHandle = Start-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'conductor' 'third') -ExtraEnvironment $barrierEnv
     $readyPath = Join-Path $barrierDir 'ready'
     $goPath = Join-Path $barrierDir 'go'
     $readyDeadline = [DateTime]::UtcNow.AddSeconds(20)
@@ -888,20 +888,20 @@ function Invoke-SeatMapLockProofs {
         Start-Sleep -Milliseconds 50
     }
     Assert-True 'DEV-241 barrier: child ready file appeared' (Test-Path -LiteralPath $readyPath) $readyPath 'missing'
-    $overlapRes = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'anvil' 'alt') -ExtraEnvironment $fakeProbeEnv
+    $overlapRes = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList (& $fakeProbeArgs 'anvil' 'third') -ExtraEnvironment $fakeProbeEnv
     Assert-True 'DEV-241 barrier overlap writer: exit 0' ($overlapRes.ExitCode -eq 0) '0' ("exit=$($overlapRes.ExitCode)`n$($overlapRes.StdOut)`n$($overlapRes.StdErr)")
     [System.IO.File]::WriteAllText($goPath, 'go', [System.Text.UTF8Encoding]::new($false))
     $barrierRes = Wait-IsolatedPwsh -Process $barrierHandle.Process -StdoutTask $barrierHandle.StdOutTask -StderrTask $barrierHandle.StdErrTask -ChildId $barrierHandle.ProcessId
     Assert-True 'DEV-241 barrier child: exit 0' ($barrierRes.ExitCode -eq 0) '0' ("exit=$($barrierRes.ExitCode)`n$($barrierRes.StdOut)`n$($barrierRes.StdErr)")
-    $barrierConductor = Get-SeatMapTestCell -MapPath $livePath -SeatId 'conductor' -RungName 'alt'
-    $barrierAnvil = Get-SeatMapTestCell -MapPath $livePath -SeatId 'anvil' -RungName 'alt'
-    Assert-True 'DEV-241 barrier: conductor alt probed (no lost update)' ([string]$barrierConductor.Cell.evidence -eq 'probed') 'probed' ([string]$barrierConductor.Cell.evidence)
-    Assert-True 'DEV-241 barrier: anvil alt probed (no lost update)' ([string]$barrierAnvil.Cell.evidence -eq 'probed') 'probed' ([string]$barrierAnvil.Cell.evidence)
+    $barrierConductor = Get-SeatMapTestCell -MapPath $livePath -SeatId 'conductor' -RungName 'third'
+    $barrierAnvil = Get-SeatMapTestCell -MapPath $livePath -SeatId 'anvil' -RungName 'third'
+    Assert-True 'DEV-241 barrier: conductor third probed (no lost update)' ([string]$barrierConductor.Cell.evidence -eq 'probed') 'probed' ([string]$barrierConductor.Cell.evidence)
+    Assert-True 'DEV-241 barrier: anvil third probed (no lost update)' ([string]$barrierAnvil.Cell.evidence -eq 'probed') 'probed' ([string]$barrierAnvil.Cell.evidence)
 
     Copy-Item -LiteralPath $examplePath -Destination $livePath -Force
     $staleMap = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
     $staleConductor = @($staleMap.seats | Where-Object { $_.id -eq 'conductor' })[0]
-    $staleAlt = @($staleConductor.rungs | Where-Object { $_.name -eq 'alt' })[0]
+    $staleAlt = @($staleConductor.rungs | Where-Object { $_.name -eq 'third' })[0]
     $staleFloor = @($staleConductor.rungs | Where-Object { $_.name -eq 'floor' })[0]
     $staleAlt.launch = 'STALECMD'
     $staleAlt.evidence = 'cleared'
@@ -938,7 +938,7 @@ function Invoke-SeatMapLockProofs {
         "    `$tokenMatch = [regex]::Match(`$resp.Content, '<meta name=""seat-map-token"" content=""([^""]+)""')"
         "    if (-not `$tokenMatch.Success) { throw 'Token missing' }"
         "    `$token = `$tokenMatch.Groups[1].Value"
-        "    `$body = @{ seatId = 'conductor'; rung = 'alt' } | ConvertTo-Json"
+        "    `$body = @{ seatId = 'conductor'; rung = 'third' } | ConvertTo-Json"
         "    `$headers = @{ 'X-Seat-Map-Token' = `$token }"
         "    `$postResp = Invoke-WebRequest -Uri 'http://localhost:8794/api/seats/set' -Method POST -Headers `$headers -Body `$body -ContentType 'application/json' -UseBasicParsing"
         "    [System.IO.File]::WriteAllText((Join-Path '$isoHomeLiteral' 'stale-launch.json'), `$postResp.Content, [System.Text.UTF8Encoding]::new(`$false))"
@@ -957,7 +957,7 @@ function Invoke-SeatMapLockProofs {
     Assert-True 'DEV-241 portal stale: barrier ready appeared' (Test-Path -LiteralPath $portalReady) $portalReady 'missing'
     $lockedMap = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
     $lockedConductor = @($lockedMap.seats | Where-Object { $_.id -eq 'conductor' })[0]
-    $lockedAlt = @($lockedConductor.rungs | Where-Object { $_.name -eq 'alt' })[0]
+    $lockedAlt = @($lockedConductor.rungs | Where-Object { $_.name -eq 'third' })[0]
     $lockedAlt.launch = 'LOCKEDCMD'
     $lockedJson = $lockedMap | ConvertTo-Json -Depth 12
     if (-not $lockedJson.EndsWith("`n")) { $lockedJson += "`n" }
@@ -1063,7 +1063,7 @@ function New-Dev246PortalLiveChildLines {
         "    `$tokenMatch = [regex]::Match(`$html, '<meta name=""seat-map-token"" content=""([^""]+)""')"
         "    if (-not `$tokenMatch.Success) { throw 'Token missing' }"
         "    `$token = `$tokenMatch.Groups[1].Value"
-        "    `$body = @{ seatId = 'conductor'; rung = 'alt' } | ConvertTo-Json"
+        "    `$body = @{ seatId = 'conductor'; rung = 'third' } | ConvertTo-Json"
         "    `$headers = @{ 'X-Seat-Map-Token' = `$token }"
         "    `$postResp = Invoke-WebRequest -Uri 'http://localhost:$Port/api/seats/set' -Method POST -Headers `$headers -Body `$body -ContentType 'application/json' -UseBasicParsing -SkipHttpErrorCheck"
         "    if (`$postResp.StatusCode -ne 200) { throw 'POST failed' }"
@@ -1118,9 +1118,9 @@ function Install-RoleFixtures {
         $dir = Join-Path $rolesDir $s.roleId
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
         $file = Join-Path $dir 'role.json'
-        $headCell = if (Test-JsonProperty -Object $s.rungs -Name 'head') { $s.rungs.head } else { $null }
-        $thenCell = if (Test-JsonProperty -Object $s.rungs -Name 'then') { $s.rungs.then } else { $null }
-        $floorCell = if (Test-JsonProperty -Object $s.rungs -Name 'floor') { $s.rungs.floor } else { $null }
+        $headCell = @($s.rungs | Where-Object { $_.name -eq 'first' })[0]
+        $thenCell = @($s.rungs | Where-Object { $_.name -eq 'second' })[0]
+        $floorCell = @($s.rungs | Where-Object { $_.name -eq 'floor' })[0]
         $headL = if ($null -ne $headCell) { [string]$headCell.launch } else { '' }
         $thenL = if ($null -ne $thenCell) { [string]$thenCell.launch } else { '' }
         $floorL = if ($null -ne $floorCell) { [string]$floorCell.launch } else { '' }
@@ -1294,7 +1294,7 @@ if ($RolePromptOnly) {
         $mapForSwap = Get-Content -LiteralPath $rolePromptLivePath -Raw | ConvertFrom-Json
         $anvilSeat = $mapForSwap.seats | Where-Object { $_.id -eq 'anvil' } | Select-Object -First 1
         $expectedFloor = (Resolve-SeatRuntimeFloor -Map $mapForSwap -Seat $anvilSeat).Launch
-        $swapRes = Invoke-IsolatedPwsh -HomeDir $rolePromptIsoHome -File $syncScript -ArgumentList @('-Seat', 'anvil', '-Rung', 'then', '-RolesDir', $rolesDir4, '-SeatMapPath', $rolePromptLivePath)
+        $swapRes = Invoke-IsolatedPwsh -HomeDir $rolePromptIsoHome -File $syncScript -ArgumentList @('-Seat', 'anvil', '-Rung', 'second', '-RolesDir', $rolesDir4, '-SeatMapPath', $rolePromptLivePath)
         Assert-True 'RolePrompt target-swap: exit 0' ($swapRes.ExitCode -eq 0) '0' ("exit=$($swapRes.ExitCode)`n$($swapRes.StdOut)`n$($swapRes.StdErr)")
         $anvilRoleAfter = Get-Content -LiteralPath (Join-Path $rolesDir4 $anvilSeat.roleId 'role.json') -Raw
         Assert-True 'RolePrompt target-swap: no stale in swapped role' (-not $anvilRoleAfter.Contains('Halt and report')) 'no stale' 'has stale'
@@ -1312,7 +1312,7 @@ if ($RolePromptOnly) {
         $rolesDir5 = Join-Path $rolePromptIsoHome 'roles5'
         New-RolePromptFixture -RolesDir $rolesDir5 -WithStale $true -WithoutChain $false
         Copy-Item -LiteralPath $examplePath -Destination $rolePromptLivePath -Force
-        $swapSyncRes = Invoke-IsolatedPwsh -HomeDir $rolePromptIsoHome -File $syncScript -ArgumentList @('-Seat', 'anvil', '-Rung', 'then', '-SyncRoles', '-RolesDir', $rolesDir5, '-SeatMapPath', $rolePromptLivePath)
+        $swapSyncRes = Invoke-IsolatedPwsh -HomeDir $rolePromptIsoHome -File $syncScript -ArgumentList @('-Seat', 'anvil', '-Rung', 'second', '-SyncRoles', '-RolesDir', $rolesDir5, '-SeatMapPath', $rolePromptLivePath)
         Assert-True 'RolePrompt swap+SyncRoles: exit 0' ($swapSyncRes.ExitCode -eq 0) '0' ("exit=$($swapSyncRes.ExitCode)`n$($swapSyncRes.StdOut)`n$($swapSyncRes.StdErr)")
         $hasStale5 = $false
         foreach ($f in @(Get-ChildItem -LiteralPath $rolesDir5 -Recurse -File)) {
@@ -1829,7 +1829,7 @@ try {
             if ($row.AssignedRoleId -eq $anvilRoleId) { $row.Command = $anvilDriftLaunch }
         }
         Write-MatchingWorkspaceVerifyJson -WsDir $wsDir -RepoRootHint $repoRoot -SeatMapPath $livePath -Terminals $allDriftComboRecords
-        $allCombo = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-All', '-Seat', 'Anvil', '-Rung', 'then')
+        $allCombo = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-All', '-Seat', 'Anvil', '-Rung', 'second')
         $allComboCombined = "$($allCombo.StdOut)`n$($allCombo.StdErr)"
         Assert-True 'DEV-237 -All swap+syncMiss+drift: exit 1' ($allCombo.ExitCode -eq 1) '1' ("exit=$($allCombo.ExitCode)`n$allComboCombined")
         Assert-True 'DEV-237 -All swap+syncMiss+drift: Cog role miss handled' (Test-TextContains $allComboCombined 'Role file not found for Cog') 'Role file not found for Cog' $allComboCombined
@@ -1855,7 +1855,7 @@ try {
     $homeBeforeComboReject = Get-RecursiveFileSnapshot -Root $isoMaestri
     $porcelainBeforeComboReject = Get-Porcelain
     $liveHashBeforeComboReject = (Get-FileHash -LiteralPath $livePath -Algorithm SHA256).Hash
-    $verifyCombo = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify', '-Seat', 'Anvil', '-Rung', 'then')
+    $verifyCombo = Invoke-IsolatedPwsh -HomeDir $isoHome -File $syncScript -ArgumentList @('-Verify', '-Seat', 'Anvil', '-Rung', 'second')
     $verifyComboCombined = "$($verifyCombo.StdOut)`n$($verifyCombo.StdErr)"
     $homeAfterComboReject = Get-RecursiveFileSnapshot -Root $isoMaestri
     $porcelainAfterComboReject = Get-Porcelain
@@ -1928,7 +1928,7 @@ try {
     $helperLiteral = $helperPath.Replace("'", "''")
     $swapWriterBody = @(
         ". '$helperLiteral'"
-        "Write-SeatMapSwapLog -Seat 'Anvil' -Rung 'head' -Launch 'x' -Pool 'CURSOR' -WorkspaceId '$wsId' -LiveSwapped `$false -Detail 'live-test'"
+        "Write-SeatMapSwapLog -Seat 'Anvil' -Rung 'first' -Launch 'x' -Pool 'CURSOR' -WorkspaceId '$wsId' -LiveSwapped `$false -Detail 'live-test'"
     ) -join [Environment]::NewLine
     [System.IO.File]::WriteAllText($swapWriter, $swapWriterBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
     $swapWrite = Invoke-IsolatedPwsh -HomeDir $isoHome -File $swapWriter
@@ -1946,15 +1946,15 @@ try {
     $livePathLiteral = $livePath.Replace("'", "''")
     $probeFakeBody = @(
         "`$env:SEAT_MAP_PROBE_FAKE_LAUNCH = '1'"
-        "& '$probeScriptLiteral' -Host 'gemini' -Model 'gemini-3.5-flash-lite' -Test 'Verdict' -Seat 'conductor' -Rung 'alt' -SeatMapPath '$livePathLiteral'"
+        "& '$probeScriptLiteral' -Host 'gemini' -Model 'gemini-3.5-flash-lite' -Test 'Verdict' -Seat 'conductor' -Rung 'third' -SeatMapPath '$livePathLiteral'"
     ) -join [Environment]::NewLine
     [System.IO.File]::WriteAllText($probeFakeWriter, $probeFakeBody + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
     $probeFakeRes = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeFakeWriter
     Assert-True 'non-WhatIf probe fake write: exit 0' ($probeFakeRes.ExitCode -eq 0) '0' ("exit=$($probeFakeRes.ExitCode)`n$($probeFakeRes.StdOut)`n$($probeFakeRes.StdErr)")
     $writtenMap = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
     $condSeat = @($writtenMap.seats | Where-Object { $_.id -eq 'conductor' })[0]
-    Assert-True 'non-WhatIf probe fake write: activeRung unchanged (real write contract)' ($condSeat.activeRung -eq 'head') 'head' ([string]$condSeat.activeRung)
-    $altCell = @($condSeat.rungs | Where-Object { $_.name -eq 'alt' })[0]
+    Assert-True 'non-WhatIf probe fake write: activeRung unchanged (real write contract)' ($condSeat.activeRung -eq 'first') 'first' ([string]$condSeat.activeRung)
+    $altCell = @($condSeat.rungs | Where-Object { $_.name -eq 'third' })[0]
     Assert-True 'fake probe cell readback: host' ([string]$altCell.host -eq 'gemini') 'gemini' ([string]$altCell.host)
     Assert-True 'fake probe cell readback: model' ([string]$altCell.model -eq 'gemini-3.5-flash-lite') 'gemini-3.5-flash-lite' ([string]$altCell.model)
     Assert-True 'fake probe cell readback: pool' ([string]$altCell.pool -eq 'GEMINI') 'GEMINI' ([string]$altCell.pool)
@@ -1998,7 +1998,7 @@ try {
     Assert-True 'R1 A1 Start-SeatMapServer v1: exit 1' ($v1Server.ExitCode -eq 1) '1' ([string]$v1Server.ExitCode)
     Assert-True 'R1 A1 Start-SeatMapServer v1: exact diagnostic' (Test-TextContains "$($v1Server.StdOut)`n$($v1Server.StdErr)" $v1Diagnostic) $v1Diagnostic "$($v1Server.StdOut)`n$($v1Server.StdErr)"
 
-    $v1Probe = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList @('-Host', 'gemini', '-Model', 'gemini-3.5-flash-lite', '-Test', 'Verdict', '-Seat', 'conductor', '-Rung', 'alt', '-SeatMapPath', $v1MapPath, '-WhatIf')
+    $v1Probe = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList @('-Host', 'gemini', '-Model', 'gemini-3.5-flash-lite', '-Test', 'Verdict', '-Seat', 'conductor', '-Rung', 'third', '-SeatMapPath', $v1MapPath, '-WhatIf')
     Assert-True 'R1 A1 Test-ModelProbe v1: exit 1' ($v1Probe.ExitCode -eq 1) '1' ([string]$v1Probe.ExitCode)
     Assert-True 'R1 A1 Test-ModelProbe v1: exact diagnostic' (Test-TextContains "$($v1Probe.StdOut)`n$($v1Probe.StdErr)" $v1Diagnostic) $v1Diagnostic "$($v1Probe.StdOut)`n$($v1Probe.StdErr)"
 
@@ -2011,7 +2011,7 @@ try {
     Assert-True 'R1 A2 Start-SeatMapServer v2.5: exit 1' ($v25Server.ExitCode -eq 1) '1' ([string]$v25Server.ExitCode)
     Assert-True 'R1 A2 Start-SeatMapServer v2.5: exact diagnostic' (Test-TextContains "$($v25Server.StdOut)`n$($v25Server.StdErr)" $v25Diagnostic) $v25Diagnostic "$($v25Server.StdOut)`n$($v25Server.StdErr)"
 
-    $v25Probe = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList @('-Host', 'gemini', '-Model', 'gemini-3.5-flash-lite', '-Test', 'Verdict', '-Seat', 'conductor', '-Rung', 'alt', '-SeatMapPath', $v25MapPath, '-WhatIf')
+    $v25Probe = Invoke-IsolatedPwsh -HomeDir $isoHome -File $probeScript -ArgumentList @('-Host', 'gemini', '-Model', 'gemini-3.5-flash-lite', '-Test', 'Verdict', '-Seat', 'conductor', '-Rung', 'third', '-SeatMapPath', $v25MapPath, '-WhatIf')
     Assert-True 'R1 A2 Test-ModelProbe v2.5: exit 1' ($v25Probe.ExitCode -eq 1) '1' ([string]$v25Probe.ExitCode)
     Assert-True 'R1 A2 Test-ModelProbe v2.5: exact diagnostic' (Test-TextContains "$($v25Probe.StdOut)`n$($v25Probe.StdErr)" $v25Diagnostic) $v25Diagnostic "$($v25Probe.StdOut)`n$($v25Probe.StdErr)"
 
@@ -2022,7 +2022,7 @@ try {
     $quoteSeat.id = 'quote-seat'
     $quoteSeat.codename = 'Quote"Seat'
     $quoteSeat.preset = 'pre`set&whoami'
-    $quoteSeat.activeRung = 'alt'
+    $quoteSeat.activeRung = 'third'
     $quoteSeat.rungs[2].launch = 'pwsh -NoProfile -Command "Write-Output ''hi''; $x=1; Write-Output $x"'
     $quoteMapJson = $quoteMapObj | ConvertTo-Json -Depth 12
     [System.IO.File]::WriteAllText($quoteMapPath, $quoteMapJson, [System.Text.UTF8Encoding]::new($false))
@@ -2048,7 +2048,7 @@ try {
         "    `$tokenMatch = [regex]::Match(`$html, '<meta name=""seat-map-token"" content=""([^""]+)""')"
         "    if (-not `$tokenMatch.Success) { throw 'Token missing' }"
         "    `$token = `$tokenMatch.Groups[1].Value"
-        "    `$body = @{ seatId = 'quote-seat'; rung = 'alt' } | ConvertTo-Json"
+        "    `$body = @{ seatId = 'quote-seat'; rung = 'third' } | ConvertTo-Json"
         "    `$headers = @{ 'X-Seat-Map-Token' = `$token }"
         "    `$postResp = Invoke-WebRequest -Uri 'http://localhost:8792/api/seats/set' -Method POST -Headers `$headers -Body `$body -ContentType 'application/json' -UseBasicParsing"
         "    if (`$postResp.StatusCode -ne 200) { throw 'POST failed' }"
@@ -2069,7 +2069,7 @@ try {
     Copy-Item -LiteralPath $examplePath -Destination $livePath -Force
     $b3PortalMap = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
     $b3Conductor = @($b3PortalMap.seats | Where-Object { $_.id -eq 'conductor' })[0]
-    $b3AltRung = @($b3Conductor.rungs | Where-Object { $_.name -eq 'alt' })[0]
+    $b3AltRung = @($b3Conductor.rungs | Where-Object { $_.name -eq 'third' })[0]
     $b3FloorRung = @($b3Conductor.rungs | Where-Object { $_.name -eq 'floor' })[0]
     $b3AltRung.evidence = 'cleared'
     $b3FloorRung.evidence = 'measured'
@@ -2098,11 +2098,11 @@ try {
         "    `$html = `$resp.Content"
         "    if (-not `$html.Contains('seat-map-token')) { throw 'HTML missing token meta' }"
         "    `$apiResp = Invoke-WebRequest -Uri 'http://localhost:8789/api/seats' -UseBasicParsing"
-        "    if (`$apiResp.StatusCode -ne 200 -or -not `$apiResp.Content.Contains('alt')) { throw 'API seats missing alt' }"
+        "    if (`$apiResp.StatusCode -ne 200 -or -not `$apiResp.Content.Contains('third')) { throw 'API seats missing alt' }"
         "    `$tokenMatch = [regex]::Match(`$html, '<meta name=""seat-map-token"" content=""([^""]+)""')"
         "    if (-not `$tokenMatch.Success) { throw 'Token missing' }"
         "    `$token = `$tokenMatch.Groups[1].Value"
-        "    `$body = @{ seatId = 'conductor'; rung = 'alt' } | ConvertTo-Json"
+        "    `$body = @{ seatId = 'conductor'; rung = 'third' } | ConvertTo-Json"
         "    `$headers = @{ 'X-Seat-Map-Token' = `$token }"
         "    `$postResp = Invoke-WebRequest -Uri 'http://localhost:8789/api/seats/set' -Method POST -Headers `$headers -Body `$body -ContentType 'application/json' -UseBasicParsing"
         "    if (`$postResp.StatusCode -ne 200) { throw 'POST failed' }"
@@ -2111,7 +2111,7 @@ try {
         "    for (`$wait = 0; `$wait -lt 50; `$wait++) {"
         "        `$rbMap = Get-Content -LiteralPath '$livePathLiteral' -Raw | ConvertFrom-Json"
         "        `$rbSeat = @(`$rbMap.seats | Where-Object { `$_.id -eq 'conductor' })[0]"
-        "        if (`$rbSeat.activeRung -eq 'alt') { break }"
+        "        if (`$rbSeat.activeRung -eq 'third') { break }"
         "        Start-Sleep -Milliseconds 100"
         "    }"
         "} finally {"
@@ -2123,7 +2123,7 @@ try {
     Assert-True 'portal HTTP render+POST: exit 0' ($portalRes.ExitCode -eq 0) '0' ("exit=$($portalRes.ExitCode)`n$($portalRes.StdOut)`n$($portalRes.StdErr)")
     $portalReadbackMap = Get-Content -LiteralPath $livePath -Raw | ConvertFrom-Json
     $portalCondSeat = @($portalReadbackMap.seats | Where-Object { $_.id -eq 'conductor' })[0]
-    Assert-True 'portal HTTP POST: activeRung readback confirmed alt' ($portalCondSeat.activeRung -eq 'alt') 'alt' ([string]$portalCondSeat.activeRung)
+    Assert-True 'portal HTTP POST: activeRung readback confirmed third' ($portalCondSeat.activeRung -eq 'third') 'third' ([string]$portalCondSeat.activeRung)
 
     # --- DEV-246: portal POST with truthy MAESTRI_PIPE and fake MAESTRI_CLI ---
     $dev246WsId = [guid]::NewGuid().ToString()
@@ -2133,7 +2133,7 @@ try {
     Copy-Item -LiteralPath $examplePath -Destination $dev246MapPath -Force
     $dev246Map = Get-Content -LiteralPath $dev246MapPath -Raw | ConvertFrom-Json
     $dev246Conductor = @($dev246Map.seats | Where-Object { $_.id -eq 'conductor' })[0]
-    $dev246AltRung = @($dev246Conductor.rungs | Where-Object { $_.name -eq 'alt' })[0]
+    $dev246AltRung = @($dev246Conductor.rungs | Where-Object { $_.name -eq 'third' })[0]
     $dev246FloorRung = @($dev246Conductor.rungs | Where-Object { $_.name -eq 'floor' })[0]
     $dev246AltRung.evidence = 'cleared'
     $dev246FloorRung.evidence = 'measured'
@@ -2228,9 +2228,9 @@ try {
     $tw1MapObj = Get-Content -LiteralPath $tw1MapPath -Raw | ConvertFrom-Json
     $tw1Anvil = @($tw1MapObj.seats | Where-Object { $_.id -eq 'anvil' })[0]
     $tw1Anvil.rungs = @(
-        [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 1; evidence = 'measured' },
-        [pscustomobject]@{ name = 'then'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'probed' },
-        [pscustomobject]@{ name = 'alt'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'probed' },
+        [pscustomobject]@{ role = 'head'; name = 'first'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 1; evidence = 'measured' },
+        [pscustomobject]@{ name = 'second'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'probed' },
+        [pscustomobject]@{ name = 'third'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'probed' },
         [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORCMD'; pool = 'GEMINI'; host = 'gemini'; model = 'm-floor'; tier = 3; evidence = 'probed' }
     )
     $tw1MapJson = $tw1MapObj | ConvertTo-Json -Depth 12
@@ -2266,7 +2266,7 @@ try {
         "    `$tokenMatch = [regex]::Match(`$resp.Content, '<meta name=""seat-map-token"" content=""([^""]+)""')"
         "    if (-not `$tokenMatch.Success) { throw 'Token missing' }"
         "    `$token = `$tokenMatch.Groups[1].Value"
-        "    `$body = @{ seatId = 'anvil'; rung = 'then' } | ConvertTo-Json"
+        "    `$body = @{ seatId = 'anvil'; rung = 'second' } | ConvertTo-Json"
         "    `$headers = @{ 'X-Seat-Map-Token' = `$token }"
         "    `$postResp = Invoke-WebRequest -Uri 'http://localhost:8793/api/seats/set' -Method POST -Headers `$headers -Body `$body -ContentType 'application/json' -UseBasicParsing -SkipHttpErrorCheck"
         "    if (`$postResp.StatusCode -eq 200) { throw 'POST should fail' }"
@@ -2497,14 +2497,14 @@ try {
     & $mutateSeat $dev234MapPath 'Anvil' {
         param($s)
         $s.rungs = @(
-            [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 4; evidence = 'measured' },
-            [pscustomobject]@{ name = 'then'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 1; evidence = 'measured' },
-            [pscustomobject]@{ name = 'alt'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'measured' },
+            [pscustomobject]@{ role = 'head'; name = 'first'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 4; evidence = 'measured' },
+            [pscustomobject]@{ name = 'second'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 1; evidence = 'measured' },
+            [pscustomobject]@{ name = 'third'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'measured' },
             [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORCMD'; pool = 'GEMINI'; host = 'gemini'; model = 'm-floor'; tier = 2; evidence = 'measured' }
         )
     }
     [System.IO.File]::WriteAllText($anvilRoleFile, '{"prompt":"Model chain (best first): HEADCMD -> THENCMD -> FLOORCMD (FLOOR)."}' + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
-    $swapA1 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'then', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    $swapA1 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'second', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
     Assert-True 'A1 target swap: exit 0' ($swapA1.ExitCode -eq 0) '0' ([string]$swapA1.ExitCode)
     $anvilRoleJson = Get-Content -LiteralPath $anvilRoleFile -Raw | ConvertFrom-Json
     Assert-True 'A1 model chain FLOOR uses tier-1 launch' (Test-TextContains $anvilRoleJson.prompt '-> THENCMD (FLOOR).') '-> THENCMD (FLOOR).' $anvilRoleJson.prompt
@@ -2514,14 +2514,14 @@ try {
     & $mutateSeat $dev234MapPath 'Anvil' {
         param($s)
         $s.rungs = @(
-            [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 4; evidence = 'measured' },
-            [pscustomobject]@{ name = 'then'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 1; evidence = 'probed' },
-            [pscustomobject]@{ name = 'alt'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'measured' },
+            [pscustomobject]@{ role = 'head'; name = 'first'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 4; evidence = 'measured' },
+            [pscustomobject]@{ name = 'second'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 1; evidence = 'probed' },
+            [pscustomobject]@{ name = 'third'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'measured' },
             [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORCMD'; pool = 'GEMINI'; host = 'gemini'; model = 'm-floor'; tier = 2; evidence = 'measured' }
         )
     }
     [System.IO.File]::WriteAllText($anvilRoleFile, '{"prompt":"Model chain (best first): HEADCMD -> THENCMD -> FLOORCMD (FLOOR)."}' + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
-    $swapA2 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    $swapA2 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'first', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
     Assert-True 'A2 target swap: exit 0' ($swapA2.ExitCode -eq 0) '0' ([string]$swapA2.ExitCode)
     $anvilRoleJson2 = Get-Content -LiteralPath $anvilRoleFile -Raw | ConvertFrom-Json
     Assert-True 'A2 model chain FLOOR ignores probed tier 1 and uses measured tier 2' (Test-TextContains $anvilRoleJson2.prompt '-> FLOORCMD (FLOOR).') '-> FLOORCMD (FLOOR).' $anvilRoleJson2.prompt
@@ -2531,15 +2531,15 @@ try {
     & $mutateSeat $dev234MapPath 'Anvil' {
         param($s)
         $s.rungs = @(
-            [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 4; evidence = 'measured' },
-            [pscustomobject]@{ name = 'then'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'measured' },
-            [pscustomobject]@{ name = 'alt'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'measured' },
+            [pscustomobject]@{ role = 'head'; name = 'first'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 4; evidence = 'measured' },
+            [pscustomobject]@{ name = 'second'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'measured' },
+            [pscustomobject]@{ name = 'third'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'measured' },
             [pscustomobject]@{ name = 'cleared'; launch = 'CLEAREDCMD'; pool = 'GEMINI'; host = 'gemini'; model = 'm-cleared'; tier = 1; evidence = 'cleared' },
             [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORCMD'; pool = 'AGY-G'; host = 'agy'; model = 'm-floor'; tier = 3; evidence = 'measured' }
         )
     }
     [System.IO.File]::WriteAllText($anvilRoleFile, '{"prompt":"Model chain (best first): HEADCMD -> THENCMD -> FLOORCMD (FLOOR)."}' + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
-    $swapTw3 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    $swapTw3 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'first', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
     Assert-True 'TW3 cleared evidence target swap: exit 0' ($swapTw3.ExitCode -eq 0) '0' ([string]$swapTw3.ExitCode)
     $anvilRoleJsonTw3 = Get-Content -LiteralPath $anvilRoleFile -Raw | ConvertFrom-Json
     Assert-True 'TW3 model chain FLOOR uses lowest-tier cleared launch' (Test-TextContains $anvilRoleJsonTw3.prompt '-> CLEAREDCMD (FLOOR).') '-> CLEAREDCMD (FLOOR).' $anvilRoleJsonTw3.prompt
@@ -2549,14 +2549,14 @@ try {
     & $mutateSeat $dev234MapPath 'Anvil' {
         param($s)
         $s.rungs = @(
-            [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 4; evidence = 'measured' },
-            [pscustomobject]@{ name = 'then'; launch = 'opencode -m m-zen'; pool = 'ZEN'; host = 'opencode'; model = 'm-zen'; tier = 1; evidence = 'measured' },
-            [pscustomobject]@{ name = 'alt'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'measured' },
+            [pscustomobject]@{ role = 'head'; name = 'first'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 4; evidence = 'measured' },
+            [pscustomobject]@{ name = 'second'; launch = 'opencode -m m-zen'; pool = 'ZEN'; host = 'opencode'; model = 'm-zen'; tier = 1; evidence = 'measured' },
+            [pscustomobject]@{ name = 'third'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'measured' },
             [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORCMD'; pool = 'GEMINI'; host = 'gemini'; model = 'm-floor'; tier = 2; evidence = 'measured' }
         )
     }
     [System.IO.File]::WriteAllText($anvilRoleFile, '{"prompt":"Model chain (best first): HEADCMD -> opencode -m m-zen -> FLOORCMD (FLOOR)."}' + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
-    $swapA3 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    $swapA3 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'first', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
     Assert-True 'A3 target swap: exit 0' ($swapA3.ExitCode -eq 0) '0' ([string]$swapA3.ExitCode)
     $anvilRoleJson3 = Get-Content -LiteralPath $anvilRoleFile -Raw | ConvertFrom-Json
     Assert-True 'A3 model chain FLOOR excludes ZEN candidate and selects tier 2 GEMINI' (Test-TextContains $anvilRoleJson3.prompt '-> FLOORCMD (FLOOR).') '-> FLOORCMD (FLOOR).' $anvilRoleJson3.prompt
@@ -2566,14 +2566,14 @@ try {
     & $mutateSeat $dev234MapPath 'Anvil' {
         param($s)
         $s.rungs = @(
-            [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 1; evidence = 'measured' },
-            [pscustomobject]@{ name = 'then'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'measured' },
-            [pscustomobject]@{ name = 'alt'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'measured' },
+            [pscustomobject]@{ role = 'head'; name = 'first'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 1; evidence = 'measured' },
+            [pscustomobject]@{ name = 'second'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'measured' },
+            [pscustomobject]@{ name = 'third'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'measured' },
             [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORCMD'; pool = 'GEMINI'; host = 'gemini'; model = 'm-floor'; tier = 2; evidence = 'measured' }
         )
     }
     [System.IO.File]::WriteAllText($anvilRoleFile, '{"prompt":"Model chain (best first): HEADCMD -> THENCMD -> FLOORCMD (FLOOR)."}' + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
-    $swapA4 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    $swapA4 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'first', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
     Assert-True 'A4 target swap: exit 0' ($swapA4.ExitCode -eq 0) '0' ([string]$swapA4.ExitCode)
     $anvilRoleJson4 = Get-Content -LiteralPath $anvilRoleFile -Raw | ConvertFrom-Json
     Assert-True 'A4 excludes head pool and breaks tie to floor rung' (Test-TextContains $anvilRoleJson4.prompt '-> FLOORCMD (FLOOR).') '-> FLOORCMD (FLOOR).' $anvilRoleJson4.prompt
@@ -2583,18 +2583,18 @@ try {
     & $mutateSeat $dev234MapPath 'Anvil' {
         param($s)
         $s.rungs = @(
-            [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 2; evidence = 'measured' },
-            [pscustomobject]@{ name = 'then'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'measured' },
-            [pscustomobject]@{ name = 'alt'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 2; evidence = 'measured' },
+            [pscustomobject]@{ role = 'head'; name = 'first'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 2; evidence = 'measured' },
+            [pscustomobject]@{ name = 'second'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'measured' },
+            [pscustomobject]@{ name = 'third'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 2; evidence = 'measured' },
             [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORCMD'; pool = 'GEMINI'; host = 'gemini'; model = 'm-floor'; tier = 4; evidence = 'probed' }
         )
     }
     [System.IO.File]::WriteAllText($anvilRoleFile, '{"prompt":"Model chain (best first): HEADCMD -> THENCMD -> FLOORCMD (FLOOR)."}' + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
-    $swapTw4 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
-    Assert-True 'TW4 same-tier then-vs-head target swap: exit 0' ($swapTw4.ExitCode -eq 0) '0' ([string]$swapTw4.ExitCode)
+    $swapTw4 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'first', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    Assert-True 'TW4 same-tier second-vs-first target swap: exit 0' ($swapTw4.ExitCode -eq 0) '0' ([string]$swapTw4.ExitCode)
     $anvilRoleJsonTw4 = Get-Content -LiteralPath $anvilRoleFile -Raw | ConvertFrom-Json
-    Assert-True 'TW4 then beats head at same tier' (Test-TextContains $anvilRoleJsonTw4.prompt '-> THENCMD (FLOOR).') '-> THENCMD (FLOOR).' $anvilRoleJsonTw4.prompt
-    Assert-True 'TW4 then beats middle/alt at same tier' (Test-TextContains $anvilRoleJsonTw4.prompt '-> THENCMD (FLOOR).') '-> THENCMD (FLOOR).' $anvilRoleJsonTw4.prompt
+    Assert-True 'TW4 second beats first at same tier' (Test-TextContains $anvilRoleJsonTw4.prompt '-> THENCMD (FLOOR).') '-> THENCMD (FLOOR).' $anvilRoleJsonTw4.prompt
+    Assert-True 'TW4 second beats third at same tier' (Test-TextContains $anvilRoleJsonTw4.prompt '-> THENCMD (FLOOR).') '-> THENCMD (FLOOR).' $anvilRoleJsonTw4.prompt
 
     # TW2 / A5: Missing, blank, and non-numeric tier failures
     Copy-Item -LiteralPath $examplePath -Destination $dev234MapPath
@@ -2602,7 +2602,7 @@ try {
         param($s)
         $s.rungs[3].tier = 'invalid'
     }
-    $swapA5NonNumeric = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    $swapA5NonNumeric = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'first', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
     Assert-True 'A5 swap with non-numeric tier fails non-zero' ($swapA5NonNumeric.ExitCode -ne 0) 'non-zero' ([string]$swapA5NonNumeric.ExitCode)
     Assert-True 'TW2 non-numeric tier names seat and floor rung' (Test-TextContains $swapA5NonNumeric.StdErr $dev234InvalidTierLiteral) $dev234InvalidTierLiteral $swapA5NonNumeric.StdErr
 
@@ -2611,7 +2611,7 @@ try {
         param($s)
         $null = $s.rungs[3].PSObject.Properties.Remove('tier')
     }
-    $swapA5Missing = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    $swapA5Missing = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'first', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
     Assert-True 'TW2 missing tier fails non-zero' ($swapA5Missing.ExitCode -ne 0) 'non-zero' ([string]$swapA5Missing.ExitCode)
     Assert-True 'TW2 missing tier names seat and floor rung' (Test-TextContains $swapA5Missing.StdErr $dev234InvalidTierLiteral) $dev234InvalidTierLiteral $swapA5Missing.StdErr
 
@@ -2620,7 +2620,7 @@ try {
         param($s)
         $s.rungs[3].tier = ''
     }
-    $swapA5Blank = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'head', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    $swapA5Blank = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'first', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
     Assert-True 'TW2 blank tier fails non-zero' ($swapA5Blank.ExitCode -ne 0) 'non-zero' ([string]$swapA5Blank.ExitCode)
     Assert-True 'TW2 blank tier names seat and floor rung' (Test-TextContains $swapA5Blank.StdErr $dev234InvalidTierLiteral) $dev234InvalidTierLiteral $swapA5Blank.StdErr
 
@@ -2629,14 +2629,14 @@ try {
     & $mutateSeat $dev234MapPath 'Anvil' {
         param($s)
         $s.rungs = @(
-            [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 1; evidence = 'measured' },
-            [pscustomobject]@{ name = 'then'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'probed' },
-            [pscustomobject]@{ name = 'alt'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'probed' },
+            [pscustomobject]@{ role = 'head'; name = 'first'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 1; evidence = 'measured' },
+            [pscustomobject]@{ name = 'second'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'probed' },
+            [pscustomobject]@{ name = 'third'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'probed' },
             [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORCMD'; pool = 'GEMINI'; host = 'gemini'; model = 'm-floor'; tier = 3; evidence = 'probed' }
         )
     }
     $mapHashMutated = (Get-FileHash -LiteralPath $dev234MapPath -Algorithm SHA256).Hash
-    $swapA6 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'then', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
+    $swapA6 = Invoke-IsolatedPwsh -HomeDir $dev234Home -File $syncScript -ArgumentList @('-Seat', 'Anvil', '-Rung', 'second', '-SyncRoles', '-SeatMapPath', $dev234MapPath)
     Assert-True 'A6 swap with no safe floor fails non-zero' ($swapA6.ExitCode -ne 0) 'non-zero' ([string]$swapA6.ExitCode)
     Assert-True 'A6 failure names no capable runtime floor' (Test-TextContains $swapA6.StdErr $dev234NoFloorLiteral) $dev234NoFloorLiteral $swapA6.StdErr
     $mapHashAfterFail = (Get-FileHash -LiteralPath $dev234MapPath -Algorithm SHA256).Hash
@@ -2647,9 +2647,9 @@ try {
     & $mutateSeat $dev234MapPath 'Anvil' {
         param($s)
         $s.rungs = @(
-            [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 4; evidence = 'measured' },
-            [pscustomobject]@{ name = 'then'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 1; evidence = 'measured' },
-            [pscustomobject]@{ name = 'alt'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'measured' },
+            [pscustomobject]@{ role = 'head'; name = 'first'; launch = 'HEADCMD'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 4; evidence = 'measured' },
+            [pscustomobject]@{ name = 'second'; launch = 'THENCMD'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 1; evidence = 'measured' },
+            [pscustomobject]@{ name = 'third'; launch = 'ALTCMD'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'measured' },
             [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORCMD'; pool = 'GEMINI'; host = 'gemini'; model = 'm-floor'; tier = 2; evidence = 'measured' }
         )
     }
@@ -2672,9 +2672,9 @@ try {
     $tw5MapObj = Get-Content -LiteralPath $tw5MapPath -Raw | ConvertFrom-Json
     $tw5Keel = @($tw5MapObj.seats | Where-Object { $_.id -eq 'keel' })[0]
     $tw5Keel.rungs = @(
-        [pscustomobject]@{ role = 'head'; name = 'head'; launch = 'HEADK'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 1; evidence = 'probed' },
-        [pscustomobject]@{ name = 'then'; launch = 'THENK'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'unmeasured' },
-        [pscustomobject]@{ name = 'alt'; launch = 'ALTK'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'probed' },
+        [pscustomobject]@{ role = 'head'; name = 'first'; launch = 'HEADK'; pool = 'CODEX'; host = 'codex'; model = 'm-head'; tier = 1; evidence = 'probed' },
+        [pscustomobject]@{ name = 'second'; launch = 'THENK'; pool = 'CURSOR'; host = 'cursor'; model = 'm-then'; tier = 2; evidence = 'unmeasured' },
+        [pscustomobject]@{ name = 'third'; launch = 'ALTK'; pool = 'OPENROUTER'; host = 'cursor'; model = 'm-alt'; tier = 3; evidence = 'probed' },
         [pscustomobject]@{ role = 'floor'; name = 'floor'; launch = 'FLOORK'; pool = 'GEMINI'; host = 'gemini'; model = 'm-floor'; tier = 4; evidence = 'probed' }
     )
     $tw5MapJson = $tw5MapObj | ConvertTo-Json -Depth 12

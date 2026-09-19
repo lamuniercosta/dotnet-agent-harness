@@ -34,12 +34,12 @@ The live seat map at `~/.maestri/workspaces/<workspaceId>/seat-map.json` is
 keyed by seat, not by command. `scripts/local/seat-map.example.json` is the
 schema, the invariants block, and the CI contract. Each seat
 carries an ordered `rungs` array of declared named rungs — each a complete
-launch specification. Typical names include `head`, `then`, `alt`, and
+launch specification. Typical names include `first`, `second`, `third`, and
 `floor`; extra declared names are valid.
 
 ```json
 {
-  "name": "head",
+  "name": "first",
   "role": "head",
   "launch": "claude --model claude-opus-4-6 --effort high --permission-mode auto",
   "pool": "CLAUDE",
@@ -101,9 +101,22 @@ and is not a CI artefact:
 - At most 1 AGY-G-pool head.
 - At least 1 Gemini-API-pool head.
 - ZEN is never a floor pool (Quill is the documented exception).
-- Every seat's declared rungs use distinct pools.
 - Every OpenCode launch line contains `-m` or `--model` (the shared-config trap).
 - Tier values, when present, are integers 0–4 (runtime FLOOR selection still requires 1–4).
+
+**Amended 2026-09-19:** Rung names were renamed from `head`, `then`, `alt`, `floor` to `first`, `second`, `third`, `floor` (role properties unchanged). The invariant "every seat's declared rungs use distinct pools" (`distinctPoolsPerSeat: true`) was relaxed to `false`, allowing a seat to hold multiple rungs from the same pool — this enables adding models freely without violating pool-uniqueness constraints.
+
+The names are now ordinals because the operator adds and retires models
+continuously, and `then`/`alt` do not extend past two. **To add a model: give it
+the next ordinal — `fourth`, `fifth`, … — and insert it immediately before
+`floor`.** `first` keeps `role: "head"` and stays first; `floor` keeps
+`role: "floor"` and stays last. Nothing else moves, and the mechanism reads the
+`role` properties rather than the names, so no code changes with the roster.
+
+The rule still exists in code and is still tested — `Test-SeatMap.ps1` opts it
+in for its own negative fixture, and a positive fixture asserts that with the
+flag off a seat may stack several rungs from one pool. Setting
+`distinctPoolsPerSeat` back to `true` in a map re-arms it.
 
 This gate is defined in `lint-harness.yml` on both Windows and Ubuntu behind
 `vars.RUN_LOCAL_SELF_TESTS == 'true'` (DEV-260 parked it while DEV-253-259
