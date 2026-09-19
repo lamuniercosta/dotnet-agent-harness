@@ -68,9 +68,14 @@ $p = @{
     ghToken  = 'ghp' + '_' + 'aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456'
     slack    = 'xox' + 'b-1234567890-abcdefghijklmnop'
     google   = 'AIza' + 'SyA1234567890abcdefghijklmnopqrstuv'
+    openrouter = 'sk-or-v1-' + ('A' * 40)
+    openai     = 'sk-proj-' + ('B' * 40)
+    anthropic  = 'sk-ant-api03-' + ('C' * 40)
     stripe   = 'sk' + '_live_' + 'abcdefghijklmnopqrstuvwx'
     youtrack = 'perm' + ':YWRtaW4=.NDItMQ==.abcdefghijklmnop'
     mapbox   = 'sk' + '.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9abcdef'
+    azureAccountKey = ('Zm9v' * 12)
+    bearerOpaque    = ('Z' * 48)
     jwt      = 'eyJhbGciOiJIUzI1NiJ9' + '.eyJzdWIiOiIxMjM0NTY3ODkwIn0' + '.dozjgNryP4J3jVmNHl0w5N-XgL0n3I9PlFUP0THsR8U'
 }
 
@@ -84,6 +89,16 @@ Assert-Flags 'Stripe secret key'   $p.stripe
 Assert-Flags 'YouTrack perm token' "YOUTRACK_TOKEN=$($p.youtrack)"
 Assert-Flags 'Mapbox secret token' "mapbox: $($p.mapbox)"
 Assert-Flags 'JWT'                 "Authorization: Bearer $($p.jwt)"
+Assert-Flags 'OpenRouter key (bare)' $p.openrouter
+Assert-Flags 'OpenRouter key (assigned)' "apiKey = '$($p.openrouter)'"
+Assert-Flags 'OpenAI key (bare)' $p.openai
+Assert-Flags 'OpenAI key (assigned)' "api_key = '$($p.openai)'"
+Assert-Flags 'Anthropic key (bare)' $p.anthropic
+Assert-Flags 'Anthropic key (assigned)' "secret = '$($p.anthropic)'"
+Assert-Flags 'Azure AccountKey (bare)' "AccountKey=$($p.azureAccountKey)"
+Assert-Flags 'Azure AccountKey (assigned)' "connectionString = 'DefaultEndpointsProtocol=https;AccountName=x;AccountKey=$($p.azureAccountKey);EndpointSuffix=core.windows.net'"
+Assert-Flags 'Generic Bearer token (bare)' "Authorization: Bearer $($p.bearerOpaque)"
+Assert-Flags 'Generic Bearer token (assigned)' "authHeader = 'Bearer $($p.bearerOpaque)'"
 Assert-Flags 'connection password' 'Server=db;Database=app;User Id=sa;Password=hunter2hunter2;'
 Assert-Flags 'assigned api key'    'const apiKey = "abcdef1234567890abcdef1234567890"'
 
@@ -95,6 +110,11 @@ Assert-Quiet 'env var reference'     'apiKey = Environment.GetEnvironmentVariabl
 Assert-Quiet 'config key name only'  'Add the ApiKey setting to appsettings.json'
 Assert-Quiet 'git sha'               'Vendored at upstream commit 4f2e1a9c8b7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f'
 Assert-Quiet 'short assignment'      'var token = "abc123"'
+Assert-Quiet 'OpenRouter short token'  'sk-or-v1-ABC123'
+Assert-Quiet 'OpenAI short token'     'sk-proj-abc123'
+Assert-Quiet 'Anthropic short token'  'sk-ant-api03-abc123'
+Assert-Quiet 'Azure short AccountKey' 'AccountKey=abc123'
+Assert-Quiet 'Bearer short token'     'Authorization: Bearer abc123'
 Assert-Quiet 'ordinary code'         'public static decimal Clamp(decimal value) => Math.Clamp(value, 0m, 100m);'
 Assert-Quiet 'empty payload'         ''
 
@@ -106,8 +126,12 @@ try {
     $permToken = 'perm:test-' + ('x' * 20)
     $flagFile = Join-Path $readTemp 'flagged.txt'
     $quietFile = Join-Path $readTemp 'quiet.txt'
+    $largeFile = Join-Path $readTemp 'large.txt'
     Set-Content -LiteralPath $flagFile -Value "token = $permToken"
     Set-Content -LiteralPath $quietFile -Value 'ordinary file content'
+    # Must exceed the 512KB threshold so the hook intentionally skips the
+    # read path while still writing a stderr diagnostic.
+    Set-Content -LiteralPath $largeFile -Value ('x' * (600KB)) -Encoding UTF8
 
     $checks++
     if ((Invoke-Scan (File-Payload $flagFile)).ExitCode -eq 2) { Write-Host '  ok       flagged: file-read perm token' }
@@ -116,6 +140,39 @@ try {
     $checks++
     if ((Invoke-Scan (File-Payload $quietFile)).ExitCode -eq 0) { Write-Host '  ok       quiet:   ordinary file' }
     else { Write-Host '  FAIL     false positive: ordinary file' -ForegroundColor Red; $failures++ }
+
+    $checks++
+    $largeLegacy = Invoke-Scan (File-Payload $largeFile)
+    if ($largeLegacy.ExitCode -eq 0 -and
+        $largeLegacy.Output -match 'secret-scan: skipped large file read') {
+        Write-Host '  ok       skipped: large file uses stderr diagnostic and allows'
+    } else {
+        Write-Host '  FAIL     missed: large-file skip diagnostic contract' -ForegroundColor Red; $failures++
+    }
+
+    $checks++
+    $largeCursor = Invoke-Scan (File-Payload $largeFile) 'CursorPrompt'
+    $jsonLine = ($largeCursor.Output -split "`r?`n" | Where-Object { $_.TrimStart().StartsWith('{') } | Select-Object -First 1)
+    try { $cursorJson = $jsonLine | ConvertFrom-Json -ErrorAction Stop } catch { $cursorJson = $null }
+    if ($largeCursor.ExitCode -eq 0 -and
+        $largeCursor.Output -match 'secret-scan: skipped large file read' -and
+        $cursorJson -and $cursorJson.continue -eq $true) {
+        Write-Host '  ok       CursorPrompt still outputs valid JSON on large-file skip'
+    } else {
+        Write-Host '  FAIL     CursorPrompt JSON contract on large-file skip' -ForegroundColor Red; $failures++
+    }
+
+    $checks++
+    $largeCursorRead = Invoke-Scan (File-Payload $largeFile) 'CursorReadFile'
+    $jsonLine = ($largeCursorRead.Output -split "`r?`n" | Where-Object { $_.TrimStart().StartsWith('{') } | Select-Object -First 1)
+    try { $cursorReadJson = $jsonLine | ConvertFrom-Json -ErrorAction Stop } catch { $cursorReadJson = $null }
+    if ($largeCursorRead.ExitCode -eq 0 -and
+        $largeCursorRead.Output -match 'secret-scan: skipped large file read' -and
+        $cursorReadJson -and $cursorReadJson.permission -eq 'allow') {
+        Write-Host '  ok       CursorReadFile still outputs valid JSON on large-file skip'
+    } else {
+        Write-Host '  FAIL     CursorReadFile JSON contract on large-file skip' -ForegroundColor Red; $failures++
+    }
 
     $checks++
     $claudeFinding = Invoke-Scan (File-Payload $flagFile) 'ClaudePreTool'
@@ -146,20 +203,80 @@ if ((Invoke-Scan 'not json at all').ExitCode -eq 0) { Write-Host '  ok       qui
 else { Write-Host '  FAIL     unparseable payload did not exit 0' -ForegroundColor Red; $failures++ }
 
 Write-Host ''
-Write-Host 'Codex output contract remains warn-only:'
-$checks++
+Write-Host 'Redaction holds across output contracts:'
 $secret = $p.ghToken
-$result = Invoke-Scan (Prompt-Payload "GH_TOKEN=$secret") 'Codex'
-try { $json = $result.Output | ConvertFrom-Json -ErrorAction Stop } catch { $json = $null }
-if ($result.ExitCode -eq 0 -and $json -and
-    $json.hookSpecificOutput.hookEventName -eq 'UserPromptSubmit' -and
-    $json.systemMessage -and
-    $json.hookSpecificOutput.additionalContext -and
-    -not ($json.PSObject.Properties.Name -contains 'decision') -and
-    $result.Output -notmatch [regex]::Escape($secret)) {
-    Write-Host '  ok       Codex warning JSON is nonblocking and redacted'
-} else {
-    Write-Host '  FAIL     Codex warning JSON contract' -ForegroundColor Red; $failures++
+
+function Extract-JsonLine {
+    param([string]$Text)
+    return ($Text -split "`r?`n" |
+        Where-Object { $_.TrimStart().StartsWith('{') } |
+        Select-Object -First 1)
+}
+
+$cases = @(
+    @{ Contract = 'Legacy';         ExpectedExit = 2; Kind = 'text' },
+    @{ Contract = 'ClaudePreTool'; ExpectedExit = 0; Kind = 'text' },
+    @{ Contract = 'Codex';          ExpectedExit = 0; Kind = 'codex' },
+    @{ Contract = 'CursorPrompt';  ExpectedExit = 0; Kind = 'cursorPrompt' },
+    @{ Contract = 'CursorReadFile'; ExpectedExit = 0; Kind = 'cursorReadFile' }
+)
+
+foreach ($case in $cases) {
+    $checks++
+    $contract = $case.Contract
+    $expected = $case.ExpectedExit
+    $kind = $case.Kind
+
+    $result = Invoke-Scan (Prompt-Payload "GH_TOKEN=$secret") $contract
+    $nonLeak = $result.Output -notmatch [regex]::Escape($secret)
+
+    if ($result.ExitCode -ne $expected -or -not $nonLeak) {
+        Write-Host "  FAIL     $contract exit-code/redaction contract" -ForegroundColor Red
+        $failures++
+        continue
+    }
+
+    switch ($kind) {
+        'text' {
+            if ($result.Output -match 'secret-scan: possible credential') {
+                Write-Host "  ok       $contract warns and stays redacted"
+            } else {
+                Write-Host "  FAIL     $contract missing advisory wording" -ForegroundColor Red
+                $failures++
+            }
+        }
+        'codex' {
+            try { $json = (Extract-JsonLine $result.Output) | ConvertFrom-Json -ErrorAction Stop } catch { $json = $null }
+            if ($json -and
+                $json.hookSpecificOutput.hookEventName -eq 'UserPromptSubmit' -and
+                $json.systemMessage -and
+                $json.hookSpecificOutput.additionalContext -and
+                -not ($json.PSObject.Properties.Name -contains 'decision')) {
+                Write-Host '  ok       Codex warning JSON is nonblocking and redacted'
+            } else {
+                Write-Host '  FAIL     Codex warning JSON contract' -ForegroundColor Red
+                $failures++
+            }
+        }
+        'cursorPrompt' {
+            try { $json = (Extract-JsonLine $result.Output) | ConvertFrom-Json -ErrorAction Stop } catch { $json = $null }
+            if ($json -and $json.continue -eq $true -and $json.user_message) {
+                Write-Host '  ok       CursorPrompt JSON contract is valid and redacted'
+            } else {
+                Write-Host '  FAIL     CursorPrompt JSON contract' -ForegroundColor Red
+                $failures++
+            }
+        }
+        'cursorReadFile' {
+            try { $json = (Extract-JsonLine $result.Output) | ConvertFrom-Json -ErrorAction Stop } catch { $json = $null }
+            if ($json -and $json.permission -eq 'allow' -and $json.user_message) {
+                Write-Host '  ok       CursorReadFile JSON contract is valid and redacted'
+            } else {
+                Write-Host '  FAIL     CursorReadFile JSON contract' -ForegroundColor Red
+                $failures++
+            }
+        }
+    }
 }
 
 Write-Host ''

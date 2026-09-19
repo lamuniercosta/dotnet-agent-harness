@@ -23,7 +23,7 @@
     ],
     "beforeReadFile": [
       {
-        "$comment": "Same scan on files about to be read into context. Skips binaries and anything over 512KB.",
+        "$comment": "Same scan on files about to be read into context. Skips binaries and anything over 512 KB; size skips log a diagnostic to stderr and still allow the read (stdout stays valid JSON).",
         "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File \"scripts/hooks/secret-scan.ps1\" -OutputContract CursorReadFile",
         "matcher": "Read|TabRead",
         "timeout": 15,

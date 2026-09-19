@@ -69,7 +69,10 @@ if (-not $content -and $file) {
     # Skip binaries and anything large enough that scanning is not worth the
     # latency on every read.
     $info = Get-Item -LiteralPath $file
-    if ($info.Length -gt 512KB) { Allow }
+    if ($info.Length -gt 512KB) {
+        [Console]::Error.WriteLine("secret-scan: skipped large file read (>512KB): $file")
+        Allow
+    }
     if ($info.Extension -match '^\.(png|jpg|jpeg|gif|ico|pdf|zip|dll|exe|so|dylib|nupkg)$') { Allow }
 
     $content = Get-Content -LiteralPath $file -Raw
@@ -84,12 +87,17 @@ $patterns = [ordered]@{
     'private key block'        = '-----BEGIN [A-Z ]*PRIVATE KEY-----'
     'GitHub token'             = '\b(ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}'
     'Slack token'              = '\bxox[abprs]-[A-Za-z0-9-]{10,}'
+    'OpenRouter API key'      = 'sk-or-v1-[A-Za-z0-9_-]{32,}'
+    'OpenAI API key'          = '\bsk-proj-[A-Za-z0-9_-]{20,}\b'
+    'Anthropic API key'       = '\bsk-ant-api03-[A-Za-z0-9_-]{20,}\b'
     'Google API key'           = '\bAIza[0-9A-Za-z_-]{35}\b'
     'Stripe secret key'        = '\b(sk|rk)_(live|test)_[A-Za-z0-9]{20,}'
     # `=` is in the class because these are base64 segments and routinely padded.
     'JetBrains/YouTrack token' = '\bperm:[A-Za-z0-9._=-]{20,}'
     'Mapbox secret token'      = '\bsk\.eyJ[A-Za-z0-9._-]{20,}'
     'JWT'                      = '\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
+    'Generic Bearer token'     = '(?i)\bBearer\s+(?!eyJ)[A-Za-z0-9_-]{20,}\b'
+    'Azure storage AccountKey' = '(?i)\bAccountKey\s*=\s*[A-Za-z0-9+/]{20,}={0,2}\b'
     'connection string password' = '(?i)(password|pwd)\s*=\s*[^;''"\s]{8,}'
     'assigned secret literal'  = '(?i)\b(api[_-]?key|secret|token|passwd|password)\b\s*[:=]\s*[''"][A-Za-z0-9_/+=.-]{20,}[''"]'
 }

@@ -3,22 +3,15 @@
 # A single [allowlist] map, not repeated [[allowlist]] tables - gitleaks 8.x
 # rejects the array form with "'Allowlist' expected a map, got 'slice'".
 #
-# Three paths contain credential-SHAPED strings on purpose:
-#
-#   hooks/Test-SecretScan.ps1  the secret scanner's own test suite. It must
-#                              contain realistic shapes or it asserts nothing.
-#                              Every value is assembled at runtime from string
-#                              fragments, so no credential-shaped literal
-#                              exists in the file - GitHub push protection
-#                              rejected the first version, correctly, and that
-#                              is why.
-#
-#   hooks/secret-scan.ps1      the detection patterns themselves.
+# Only the fixture path is allowlisted.
 #
 #   fixtures/BadCode/          the gate fixture: deliberate code violations,
-#                              no credentials. Allowlisted so a future fixture
-#                              addition cannot fail this job over a planted,
-#                              non-secret string.
+#                              no credentials. Allowlisted so this job is
+#                              deterministic even if the fixture evolves.
+#
+# Deliberately retained: Gitleaks must still be able to fail the job on
+# synthetic credentials injected by CI into previously-exempted scanner
+# sources; this allowlist exists to keep the fixture itself credential-free.
 #
 # Allowlisting the scanner's own tests is not a loophole. An exception that
 # lets the test suite keep proving the scanner works is worth more than a green
@@ -38,9 +31,7 @@ description = "OpenRouter API key"
 regex = '''sk-or-v1-[A-Za-z0-9_-]{32,}'''
 
 [allowlist]
-description = "Test fixtures and detection patterns - shapes by design, not secrets"
+description = "Test fixture only - deliberately credential-free"
 paths = [
-    '''hooks/Test-SecretScan\.ps1''',
-    '''hooks/secret-scan\.ps1''',
     '''fixtures/BadCode/.*''',
 ]
