@@ -99,6 +99,10 @@ public static class Program
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
 
+        // Redirect child stdio to fresh pipes so sleep grandchildren do not
+        // inherit Test-ModelProbe's redirected stdout/stderr file handles.
+        // Inherited writers keep those files open and make the outer
+        // Start-Process redirect pumps hang past "passed" until the sleeps end.
         for (int i = 0; i < children; i++)
         {
             try
@@ -108,9 +112,18 @@ public static class Program
                     FileName = "pwsh",
                     Arguments = $"-NoProfile -Command \"Start-Sleep -Seconds {seconds}\"",
                     UseShellExecute = false,
-                    CreateNoWindow = true
+                    CreateNoWindow = true,
+                    RedirectStandardInput = true,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true
                 };
-                Process.Start(psi);
+                var child = Process.Start(psi);
+                if (child != null)
+                {
+                    try { child.StandardInput.Close(); } catch { /* best-effort */ }
+                    try { child.StandardOutput.Close(); } catch { /* best-effort */ }
+                    try { child.StandardError.Close(); } catch { /* best-effort */ }
+                }
             }
             catch { /* best-effort */ }
         }
@@ -265,14 +278,47 @@ else {
     Assert-True ($orphanPid -gt 0) "Expected orphan PID to be non-zero, got $orphanPid."
 }
 
-# Cleanup: avoid leaving a 600s sleep in place.
-if ($orphanPid -gt 0) {
+# Cleanup: kill the orphan tree and any test-created hung sleeps so we do not
+# leave 600s children behind, and so redirected-handle writers cannot block
+# PowerShell's Start-Process stream pumps on process exit (Windows flaky hang
+# after the pass line with EXIT_IS never arriving).
+function Stop-ProbeTimeoutOrphans {
+    param(
+        [int]$RootPid,
+        [int]$HungSeconds
+    )
+    if ($RootPid -gt 0) {
+        if ($IsWindows) {
+            & taskkill /T /F /PID $RootPid 2>$null | Out-Null
+            Stop-Process -Id $RootPid -Force -ErrorAction SilentlyContinue | Out-Null
+        }
+        else {
+            & kill -9 $RootPid 2>$null | Out-Null
+        }
+    }
+
     if ($IsWindows) {
-        Stop-Process -Id $orphanPid -Force -ErrorAction SilentlyContinue | Out-Null
+        $sleepNeedle = "Start-Sleep -Seconds $HungSeconds"
+        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+            Where-Object { $_.CommandLine -and $_.CommandLine.Contains($sleepNeedle) } |
+            ForEach-Object {
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue | Out-Null
+            }
     }
     else {
-        & kill -9 $orphanPid 2>$null | Out-Null
+        # Unix shim is `sleep N` under the ignored-TERM root; root kill above is enough.
+        # Best-effort sweep if a sleep child was reparented.
+        & pkill -f "sleep $HungSeconds" 2>$null | Out-Null
     }
+}
+
+Stop-ProbeTimeoutOrphans -RootPid ([int]$orphanPid) -HungSeconds $HungChildSeconds
+
+# Drop the Start-Process Process object before exit so redirect pumps are not
+# held across teardown after orphans (handle writers) are gone.
+if ($null -ne $p) {
+    try { $p.Dispose() } catch { /* best-effort */ }
+    $p = $null
 }
 
 Write-Host "Test-ProbeTimeout passed (exit=1, orphanPid=$orphanPid)."
