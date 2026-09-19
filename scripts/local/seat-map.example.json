@@ -12,7 +12,7 @@
                        "zenFloorExceptions":  [
                                                   "Quill"
                                               ],
-                       "distinctPoolsPerSeat":  true,
+                       "distinctPoolsPerSeat":  false,
                        "tierPolicy":  {
                                           "note":  "Operator consumption preferences (2026-09-16). Every finding from this block is a WARNING: any model may run on any seat; the validator only says which preference the choice crosses.",
                                           "consumptionOrder":  [
@@ -104,11 +104,11 @@
                       "name":  "Conductor",
                       "codename":  "Dudamel",
                       "roleId":  "0FD7CF98-CCD8-44DF-B78A-957262622A27",
-                      "activeRung":  "head",
+                      "activeRung":  "first",
                       "preset":  "opencode",
                       "rungs":  [
                                     {
-                                        "name":  "head",
+                                        "name":  "first",
                                         "role":  "head",
                                         "launch":  "codex --model gpt-5.6-luna -c model_reasoning_effort=xhigh --dangerously-bypass-approvals-and-sandbox",
                                         "pool":  "CODEX",
@@ -118,7 +118,7 @@
                                         "tier":  1
                                     },
                                     {
-                                        "name":  "then",
+                                        "name":  "second",
                                         "launch":  "opencode --model opencode/muse-spark-1.3-contributor-free --auto",
                                         "pool":  "ZEN",
                                         "evidence":  "unmeasured",
@@ -127,7 +127,7 @@
                                         "tier":  0
                                     },
                                     {
-                                        "name":  "alt",
+                                        "name":  "third",
                                         "launch":  "gemini -m gemini-3.5-flash-lite --yolo",
                                         "pool":  "GEMINI",
                                         "evidence":  "cleared",
@@ -152,11 +152,11 @@
                       "name":  "Thinker",
                       "codename":  "Keel",
                       "roleId":  "3D84958E-075E-4739-8307-77D2F46FEA31",
-                      "activeRung":  "head",
+                      "activeRung":  "second",
                       "preset":  "Claude Code",
                       "rungs":  [
                                     {
-                                        "name":  "head",
+                                        "name":  "first",
                                         "role":  "head",
                                         "launch":  "agent --model glm-5.2-high --trust",
                                         "pool":  "CURSOR",
@@ -166,7 +166,7 @@
                                         "tier":  2
                                     },
                                     {
-                                        "name":  "then",
+                                        "name":  "second",
                                         "launch":  "codex --model gpt-5.5 --effort high",
                                         "pool":  "CODEX",
                                         "evidence":  "unmeasured",
@@ -175,7 +175,7 @@
                                         "tier":  1
                                     },
                                     {
-                                        "name":  "alt",
+                                        "name":  "third",
                                         "launch":  "gemini -m gemini-3.5-flash-lite --yolo",
                                         "pool":  "GEMINI",
                                         "evidence":  "cleared",
@@ -200,11 +200,11 @@
                       "name":  "Builder",
                       "codename":  "Anvil",
                       "roleId":  "BA23D857-A79B-4128-B154-8D05C3D5DC31",
-                      "activeRung":  "head",
+                      "activeRung":  "third",
                       "preset":  "Cursor",
                       "rungs":  [
                                     {
-                                        "name":  "head",
+                                        "name":  "first",
                                         "role":  "head",
                                         "launch":  "agent --model cursor-grok-4.6-high --trust",
                                         "pool":  "CURSOR",
@@ -214,7 +214,7 @@
                                         "tier":  1
                                     },
                                     {
-                                        "name":  "then",
+                                        "name":  "second",
                                         "launch":  "agy --model gemini-3.7-flash-low --dangerously-skip-permissions",
                                         "pool":  "AGY-G",
                                         "evidence":  "measured",
@@ -223,7 +223,7 @@
                                         "tier":  1
                                     },
                                     {
-                                        "name":  "alt",
+                                        "name":  "third",
                                         "launch":  "opencode --model openrouter/deepseek/deepseek-v4.1-flash --auto",
                                         "pool":  "OPENROUTER",
                                         "evidence":  "measured",
@@ -248,11 +248,11 @@
                       "name":  "Mechanic",
                       "codename":  "Cog",
                       "roleId":  "1E272DA5-EB12-4E33-8A46-5D5579AB066C",
-                      "activeRung":  "head",
+                      "activeRung":  "first",
                       "preset":  "junie",
                       "rungs":  [
                                     {
-                                        "name":  "head",
+                                        "name":  "first",
                                         "role":  "head",
                                         "launch":  "agy --model gemini-3.6-flash-low --dangerously-skip-permissions",
                                         "pool":  "AGY-G",
@@ -262,7 +262,7 @@
                                         "tier":  1
                                     },
                                     {
-                                        "name":  "then",
+                                        "name":  "second",
                                         "launch":  "gemini -m gemini-3.5-flash-lite --yolo",
                                         "pool":  "GEMINI",
                                         "evidence":  "cleared",
@@ -271,7 +271,7 @@
                                         "tier":  3
                                     },
                                     {
-                                        "name":  "alt",
+                                        "name":  "third",
                                         "launch":  "agent --model composer-2.5 --trust",
                                         "pool":  "CURSOR",
                                         "evidence":  "unmeasured",
@@ -296,11 +296,11 @@
                       "name":  "Scout",
                       "codename":  "Wisp",
                       "roleId":  "BC1DFB5E-A5F9-44A0-B7F6-B54E1A8C92A1",
-                      "activeRung":  "head",
+                      "activeRung":  "second",
                       "preset":  "gemini",
                       "rungs":  [
                                     {
-                                        "name":  "head",
+                                        "name":  "first",
                                         "role":  "head",
                                         "launch":  "gemini -m gemini-3.5-flash-lite --yolo",
                                         "pool":  "GEMINI",
@@ -310,7 +310,7 @@
                                         "tier":  3
                                     },
                                     {
-                                        "name":  "then",
+                                        "name":  "second",
                                         "launch":  "opencode --model opencode/muse-spark-1.3-contributor-free --auto",
                                         "pool":  "ZEN",
                                         "evidence":  "measured",
@@ -319,7 +319,7 @@
                                         "tier":  0
                                     },
                                     {
-                                        "name":  "alt",
+                                        "name":  "third",
                                         "launch":  "agent --model composer-2.5 --trust",
                                         "pool":  "CURSOR",
                                         "evidence":  "unmeasured",
@@ -344,11 +344,11 @@
                       "name":  "Verifier",
                       "codename":  "Gauge",
                       "roleId":  "10F01BD9-13DA-486F-A4B9-2871C99C3F3A",
-                      "activeRung":  "head",
+                      "activeRung":  "floor",
                       "preset":  "Cursor",
                       "rungs":  [
                                     {
-                                        "name":  "head",
+                                        "name":  "first",
                                         "role":  "head",
                                         "launch":  "agent --model composer-2.5 --trust",
                                         "pool":  "CURSOR",
@@ -358,7 +358,7 @@
                                         "tier":  1
                                     },
                                     {
-                                        "name":  "then",
+                                        "name":  "second",
                                         "launch":  "opencode --model opencode/muse-spark-1.3-contributor-free",
                                         "pool":  "ZEN",
                                         "evidence":  "measured",
@@ -367,7 +367,7 @@
                                         "tier":  0
                                     },
                                     {
-                                        "name":  "alt",
+                                        "name":  "third",
                                         "launch":  "opencode --model openrouter/z-ai/glm-5.3-flash --auto",
                                         "pool":  "OPENROUTER",
                                         "evidence":  "measured",
@@ -392,11 +392,11 @@
                       "name":  "Challenger Risk",
                       "codename":  "Sentry",
                       "roleId":  "B8809D4A-1FA3-4FC7-A778-43BC15EE3E39",
-                      "activeRung":  "head",
+                      "activeRung":  "first",
                       "preset":  "opencode",
                       "rungs":  [
                                     {
-                                        "name":  "head",
+                                        "name":  "first",
                                         "role":  "head",
                                         "launch":  "opencode --model openrouter/z-ai/glm-5.3-flash --auto",
                                         "pool":  "OPENROUTER",
@@ -406,7 +406,7 @@
                                         "tier":  4
                                     },
                                     {
-                                        "name":  "then",
+                                        "name":  "second",
                                         "launch":  "junie --model grok-4.3",
                                         "pool":  "JETBRAINS",
                                         "evidence":  "probed",
@@ -415,7 +415,7 @@
                                         "tier":  3
                                     },
                                     {
-                                        "name":  "alt",
+                                        "name":  "third",
                                         "launch":  "gemini -m gemini-3.5-flash-lite --yolo",
                                         "pool":  "GEMINI",
                                         "evidence":  "cleared",
@@ -440,11 +440,11 @@
                       "name":  "Challenger Standards",
                       "codename":  "Ledger",
                       "roleId":  "5B0DFF23-B156-4ACF-90C4-49EF76DB8177",
-                      "activeRung":  "head",
+                      "activeRung":  "third",
                       "preset":  "Codex",
                       "rungs":  [
                                     {
-                                        "name":  "head",
+                                        "name":  "first",
                                         "role":  "head",
                                         "launch":  "codex --model gpt-5.6-luna -c model_reasoning_effort=high --dangerously-bypass-approvals-and-sandbox",
                                         "pool":  "CODEX",
@@ -454,7 +454,7 @@
                                         "tier":  1
                                     },
                                     {
-                                        "name":  "then",
+                                        "name":  "second",
                                         "launch":  "agy --model gemini-3.7-flash-medium --dangerously-skip-permissions",
                                         "pool":  "AGY-G",
                                         "evidence":  "measured",
@@ -463,7 +463,7 @@
                                         "tier":  1
                                     },
                                     {
-                                        "name":  "alt",
+                                        "name":  "third",
                                         "launch":  "agent --model composer-2.5 --trust",
                                         "pool":  "CURSOR",
                                         "evidence":  "unmeasured",
@@ -488,11 +488,11 @@
                       "name":  "Challenger Spec",
                       "codename":  "Compass",
                       "roleId":  "1E7515A4-5F96-4DD4-96DE-11A5916635CA",
-                      "activeRung":  "head",
+                      "activeRung":  "second",
                       "preset":  "agy",
                       "rungs":  [
                                     {
-                                        "name":  "head",
+                                        "name":  "first",
                                         "role":  "head",
                                         "launch":  "agy --model gemini-3.8-flash-high --dangerously-skip-permissions",
                                         "pool":  "AGY-G",
@@ -502,7 +502,7 @@
                                         "tier":  1
                                     },
                                     {
-                                        "name":  "then",
+                                        "name":  "second",
                                         "launch":  "agent --model muse-spark-1.3-high --trust",
                                         "pool":  "CURSOR",
                                         "evidence":  "probed",
@@ -511,7 +511,7 @@
                                         "tier":  2
                                     },
                                     {
-                                        "name":  "alt",
+                                        "name":  "third",
                                         "launch":  "gemini -m gemini-3.5-flash-lite --yolo",
                                         "pool":  "GEMINI",
                                         "evidence":  "cleared",
@@ -536,11 +536,11 @@
                       "name":  "Writer",
                       "codename":  "Quill",
                       "roleId":  "AD8EE43F-9AE5-46C6-88C8-375C7C935AEA",
-                      "activeRung":  "head",
+                      "activeRung":  "first",
                       "preset":  "agy",
                       "rungs":  [
                                     {
-                                        "name":  "head",
+                                        "name":  "first",
                                         "role":  "head",
                                         "launch":  "agy --model claude-sonnet-4-6 --dangerously-skip-permissions",
                                         "pool":  "AGY-C",
@@ -550,7 +550,7 @@
                                         "tier":  2
                                     },
                                     {
-                                        "name":  "then",
+                                        "name":  "second",
                                         "launch":  "claude --model claude-sonnet-4-6",
                                         "pool":  "CLAUDE",
                                         "evidence":  "unmeasured",
@@ -559,7 +559,7 @@
                                         "tier":  1
                                     },
                                     {
-                                        "name":  "alt",
+                                        "name":  "third",
                                         "launch":  "gemini -m gemini-3.5-flash-lite --yolo",
                                         "pool":  "GEMINI",
                                         "evidence":  "cleared",
@@ -584,11 +584,11 @@
                       "name":  "Operator",
                       "codename":  "Rigger",
                       "roleId":  "2138D9EB-6583-4964-AA5C-E88D17CB343F",
-                      "activeRung":  "head",
+                      "activeRung":  "second",
                       "preset":  "opencode",
                       "rungs":  [
                                     {
-                                        "name":  "head",
+                                        "name":  "first",
                                         "role":  "head",
                                         "launch":  "agent --model cursor-grok-4.5-low --trust",
                                         "pool":  "CURSOR",
@@ -598,7 +598,7 @@
                                         "tier":  1
                                     },
                                     {
-                                        "name":  "then",
+                                        "name":  "second",
                                         "launch":  "opencode --model opencode/muse-spark-1.2-contributor-free --auto",
                                         "pool":  "ZEN",
                                         "evidence":  "measured",
@@ -607,7 +607,7 @@
                                         "tier":  0
                                     },
                                     {
-                                        "name":  "alt",
+                                        "name":  "third",
                                         "launch":  "gemini -m gemini-3.5-flash-lite --yolo",
                                         "pool":  "GEMINI",
                                         "evidence":  "cleared",
