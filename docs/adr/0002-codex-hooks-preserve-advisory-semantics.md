@@ -21,7 +21,7 @@ explicit Codex output contract when invoked by the Codex adapter.
 - `gate-nudge.ps1` exits 0 and returns `PostToolUse` `additionalContext` plus a
   `systemMessage`. Exit 2 at that event would replace the completed tool result
   and can make a successful edit appear to have failed.
-- `format-on-edit.ps1` remains silent and always exits 0.
+- `format-on-edit.ps1` is silent on success, logs failure to stderr, and always exits 0.
 
 The output-contract switch is explicit rather than inferred from a generic
 `prompt`, `tool_name`, or `tool_input` field. Other hosts use the same field names,
