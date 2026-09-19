@@ -246,8 +246,10 @@ before submitted text leaves the machine, but it cannot inspect a credential tha
 Codex reads from a file. **Never ask Codex to read a file containing a live
 credential.** If one reaches a model provider, rotate it; no later commit hook can
 recall it. `gitleaks` in CI covers only the commit-time half.
-On all hosts, the file-read scanner skips files larger than 512 KB and does
-not cover shell-based reads (`cat`, `Get-Content`) or content-mode grep output.
+On all hosts, the file-read scanner skips files larger than 512 KB; when it
+skips for size, it writes a diagnostic to stderr (not stdout, so JSON output
+contracts stay valid) and still allows the read. It does not cover shell-based
+reads (`cat`, `Get-Content`) or content-mode grep output.
 
 Hooks are guardrails, not a complete enforcement boundary. Keep Codex's sandbox
 enabled and read approval prompts rather than approving reflexively.

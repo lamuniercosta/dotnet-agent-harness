@@ -3,26 +3,15 @@
 # A single [allowlist] map, not repeated [[allowlist]] tables - gitleaks 8.x
 # rejects the array form with "'Allowlist' expected a map, got 'slice'".
 #
-# Three paths contain credential-SHAPED strings on purpose:
-#
-#   hooks/Test-SecretScan.ps1  the secret scanner's own test suite. It must
-#                              contain realistic shapes or it asserts nothing.
-#                              Every value is assembled at runtime from string
-#                              fragments, so no credential-shaped literal
-#                              exists in the file - GitHub push protection
-#                              rejected the first version, correctly, and that
-#                              is why.
-#
-#   hooks/secret-scan.ps1      the detection patterns themselves.
+# Only the fixture path is allowlisted.
 #
 #   fixtures/BadCode/          the gate fixture: deliberate code violations,
-#                              no credentials. Allowlisted so a future fixture
-#                              addition cannot fail this job over a planted,
-#                              non-secret string.
+#                              no credentials. Allowlisted so this job is
+#                              deterministic even if the fixture evolves.
 #
-# Allowlisting the scanner's own tests is not a loophole. An exception that
-# lets the test suite keep proving the scanner works is worth more than a green
-# job with no scanner behind it.
+# Deliberately retained: Gitleaks must still be able to fail the job on
+# synthetic credentials injected by CI into previously-exempted scanner
+# sources; this allowlist exists to keep the fixture itself credential-free.
 
 [extend]
 useDefault = true
@@ -37,10 +26,28 @@ id = "openrouter-api-key"
 description = "OpenRouter API key"
 regex = '''sk-or-v1-[A-Za-z0-9_-]{32,}'''
 
-[allowlist]
-description = "Test fixtures and detection patterns - shapes by design, not secrets"
+#
+# Historical-only: `hooks/Test-SecretScan.ps1` used to contain a
+# `generic-api-key`-shaped value for scanner self-testing.
+#
+# Adjudication: those historical blobs contain no real credential. The
+# synthetic “shape” existed only to prove detection. Current code
+# fragments/assembles the token at runtime, but the git-history scan still
+# sees the older commit payloads unless we narrow-allowlist them by commit
+# and file path.
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Adjudicated: historical scanner self-test token; no real credential."
+condition = "AND"
+commits = ["ee74fff5e83cbef20dc98d393031bc5ffe75ba06", "f536a9ebef01dd633f8a90a3f8ff28ae523ac2d3"]
 paths = [
-    '''hooks/Test-SecretScan\.ps1''',
-    '''hooks/secret-scan\.ps1''',
+    '''^hooks/Test-SecretScan\.ps1$''',
+]
+
+[[allowlists]]
+description = "Test fixture only - deliberately credential-free"
+paths = [
     '''fixtures/BadCode/.*''',
 ]
