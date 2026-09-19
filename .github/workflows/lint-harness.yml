@@ -533,6 +533,10 @@ jobs:
         shell: pwsh
         run: ./scripts/local/Test-SeatMapLive.ps1 -LockOnly
 
+      - name: Probe timeout tree-kill orphan contract
+        shell: pwsh
+        run: ./scripts/local/Test-ProbeTimeout.ps1
+
       # Asserts OPENROUTER_API_KEY does not appear in repo code/scripts.
       # Note: git grep exit 2 (e.g. bad pathspec) is treated as clean by
       # standard POSIX shell conditional; accepted risk as risk is near-zero in CI.
