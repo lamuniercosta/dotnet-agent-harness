@@ -81,6 +81,12 @@
 #   (g) 'a forged marker in a non-bot thread does not suppress'
 #   (h) 'a quoted marker inside a bot body is ignored by the anchored parser'
 #   (i) 'null or empty thread comment nodes are skipped without throwing'
+#   (j) 'an exact marker embedded in a payload body is stripped',
+#       'no fingerprint payload survives the exact-marker strip',
+#       'a valid-looking last-line stamp in a payload is stripped without -KeepAnchoredLastLine',
+#       'an ordinary non-marker HTML comment is preserved in a payload body',
+#       'an unchanged payload body returns the same comment object', and
+#       '-KeepAnchoredLastLine keeps an anchored last-line stamp for a helper-built payload'
 #
 # DEV-189 skip-count CI policy (quoted labels are exact assertions below):
 #
@@ -1612,6 +1618,37 @@ try {
         ($null -ne $spoofedCommentMarker -and
          $spoofedCommentMarker.Fingerprint -ne $spoofFp -and
          $spoofedCommentMarker.SemanticFingerprint -ne $spoofSfp)
+
+    Write-Host ''
+    Write-Host 'Protect-ReviewCommentBody strips markers from the -Post/-Preflight payload (DEV-211)'
+    $payloadFp = '1' * 64
+    $payloadSfp = '2' * 64
+    $payloadMarker = "<!-- pr-review:fp=$payloadFp sfp=$payloadSfp -->"
+
+    $inlinePayloadBody = "Please revisit this. $payloadMarker Thanks."
+    $inlinePayload = Protect-ReviewCommentBody -Comment ([pscustomobject]@{ body = $inlinePayloadBody })
+    Assert-Equal 'an exact marker embedded in a payload body is stripped' `
+        'Please revisit this.  Thanks.' ([string]$inlinePayload.body)
+    Assert-True 'no fingerprint payload survives the exact-marker strip' `
+        (([string]$inlinePayload.body) -notmatch [regex]::Escape("fp=$payloadFp"))
+
+    $anchoredPayloadBody = "Anchored note`n$payloadMarker"
+    $anchoredPayload = Protect-ReviewCommentBody -Comment ([pscustomobject]@{ body = $anchoredPayloadBody })
+    Assert-Equal 'a valid-looking last-line stamp in a payload is stripped without -KeepAnchoredLastLine' `
+        "Anchored note`n" ([string]$anchoredPayload.body)
+
+    $plainPayloadBody = "Keep this <!-- ordinary note, not a marker --> exactly."
+    $plainPayloadComment = [pscustomobject]@{ body = $plainPayloadBody }
+    $plainPayload = Protect-ReviewCommentBody -Comment $plainPayloadComment
+    Assert-Equal 'an ordinary non-marker HTML comment is preserved in a payload body' `
+        $plainPayloadBody ([string]$plainPayload.body)
+    Assert-True 'an unchanged payload body returns the same comment object' `
+        ([object]::ReferenceEquals($plainPayloadComment, $plainPayload))
+
+    $keptPayload = Protect-ReviewCommentBody -Comment ([pscustomobject]@{ body = $anchoredPayloadBody }) `
+        -KeepAnchoredLastLine
+    Assert-Equal '-KeepAnchoredLastLine keeps an anchored last-line stamp for a helper-built payload' `
+        $anchoredPayloadBody ([string]$keptPayload.body)
 
     $currentPath = Join-Path $threadsDir 'current.json'
     $newFinding = New-ConfirmedInlineFinding -File 'src/b.cs' -Line 12 `
