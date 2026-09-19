@@ -692,10 +692,10 @@ jobs:
 
           # Inject credential-shaped literals into paths that used to be
           # exempted as a whole-file allowlist.
-          openrouter="sk-or-v1-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-          openai="sk-proj-BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
-          anthropic="sk-ant-api03-CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"
-          azure="AccountKey=Zm9vZm9vZm9vZm9vZm9vZm9vZm9vZm9vZm9vZm9v"
+          openrouter='sk-or-v1-'"$(printf 'A%.0s' {1..40})"
+          openai='sk-proj-'"$(printf 'B%.0s' {1..40})"
+          anthropic='sk-ant-api03-'"$(printf 'C%.0s' {1..40})"
+          azure='AccountKey='"$(printf 'Zm9v%.0s' {1..12})"
           bearer="Authorization: Bearer ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
 
           {
@@ -729,8 +729,13 @@ jobs:
           code="$?"
           set -e
 
-          if [ "${code}" -eq 0 ]; then
+          if [ "${code}" -eq 1 ]; then
+            echo "Synthetic credential gate detected findings (gitleaks exit 1)."
+          elif [ "${code}" -eq 0 ]; then
             echo "::error::Synthetic credential gate did not detect any findings (gitleaks exit 0)."
+            exit 1
+          else
+            echo "::error::Synthetic credential gate returned unexpected gitleaks exit code ${code} (expected 1 for findings; 0 for none)."
             exit 1
           fi
 

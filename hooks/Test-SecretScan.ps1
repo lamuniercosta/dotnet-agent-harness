@@ -76,6 +76,7 @@ $p = @{
     mapbox   = 'sk' + '.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9abcdef'
     azureAccountKey = ('Zm9v' * 12)
     bearerOpaque    = ('Z' * 48)
+    assignedApiKey = ('abcdef' * 8)
     jwt      = 'eyJhbGciOiJIUzI1NiJ9' + '.eyJzdWIiOiIxMjM0NTY3ODkwIn0' + '.dozjgNryP4J3jVmNHl0w5N-XgL0n3I9PlFUP0THsR8U'
 }
 
@@ -100,7 +101,7 @@ Assert-Flags 'Azure AccountKey (assigned)' "connectionString = 'DefaultEndpoints
 Assert-Flags 'Generic Bearer token (bare)' "Authorization: Bearer $($p.bearerOpaque)"
 Assert-Flags 'Generic Bearer token (assigned)' "authHeader = 'Bearer $($p.bearerOpaque)'"
 Assert-Flags 'connection password' 'Server=db;Database=app;User Id=sa;Password=hunter2hunter2;'
-Assert-Flags 'assigned api key'    'const apiKey = "abcdef1234567890abcdef1234567890"'
+Assert-Flags 'assigned api key'    ('const apiKey = "' + $p.assignedApiKey + '"')
 
 Write-Host ''
 Write-Host 'Look-alikes stay quiet:'
