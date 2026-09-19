@@ -101,6 +101,12 @@ $PSNativeCommandUseErrorActionPreference = $false
 
 $BlockedModels = @('openai/gpt-oss-120b')
 $TimeoutSeconds = 600
+if (-not [string]::IsNullOrWhiteSpace($env:PROBE_TIMEOUT_SECONDS)) {
+    $parsed = 0
+    if ([int]::TryParse($env:PROBE_TIMEOUT_SECONDS, [ref]$parsed)) {
+        $TimeoutSeconds = $parsed
+    }
+}
 $JunieProbeEffort = 'high'
 # $SeatMapPath is a param; live path is resolved lazily after _seat-map.ps1.
 
@@ -205,7 +211,7 @@ function Stop-ProbeProcessTree {
     }
     $result.Survived = Test-ProcessAlive -ProcessId $ProcessId
     if ($result.Survived) {
-        Write-Warning "PID $ProcessId still alive after tree-kill and 3 polls."
+        # Caller owns the orphan summary (stderr) + exit behavior so stdout JSON stays parseable.
     }
     return $result
 }
@@ -961,12 +967,17 @@ function Invoke-ProbeLaunch {
     $cutoff = $false
     $killInfo = $null
     $waitMs = [Math]::Max(1, $WaitSeconds) * 1000
-    if (-not $proc.WaitForExit($waitMs)) {
+    $exited = $proc.WaitForExit($waitMs)
+    if (-not $exited) {
         $cutoff = $true
         $killInfo = Stop-ProbeProcessTree -ProcessId $proc.Id -ProcessGroupId $pgid
-        $null = $proc.WaitForExit(5000)
+        $exited = $proc.WaitForExit(5000)
     }
-    $code = if ($null -ne $proc.ExitCode) { $proc.ExitCode } else { -1 }
+    $code = -1
+    if ($exited) {
+        # Guard against ExitCode access when the hung process survives the timeout.
+        $code = $proc.ExitCode
+    }
     $stdout = Get-Content -LiteralPath $outFile -Raw -ErrorAction SilentlyContinue
     $stderr = Get-Content -LiteralPath $errFile -Raw -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $outFile, $errFile -Force -ErrorAction SilentlyContinue
@@ -1214,6 +1225,10 @@ try {
     }
     else {
         $result | ConvertTo-Json -Depth 8
+    }
+
+    if ($null -ne $run.TreeKill -and $run.TreeKill.Survived) {
+        Write-Error "Probe tree-kill orphan PID $($run.Pid) (process survived kill)." -ErrorAction Continue
     }
 
     if ($run.Cutoff -or ($null -ne $run.TreeKill -and $run.TreeKill.Survived) -or $evidence -eq 'failed') { exit 1 }
