@@ -119,7 +119,25 @@ function Create-DotnetSpyShim {
         $shimContent = @'
 param([Parameter(ValueFromRemainingArguments=$true)] [string[]] $Args)
 
-$record = @{ argv = @($Args) } | ConvertTo-Json -Compress -Depth 5
+$argvOut = @($Args)
+try {
+    $projPath = $Args[1]
+    $projDir = Split-Path -Parent $projPath
+    $incIdx = -1
+    for ($k = 0; $k -lt $Args.Count; $k++) {
+        if ($Args[$k] -eq '--include') { $incIdx = $k; break }
+    }
+    if ($incIdx -ge 0 -and ($incIdx + 1) -lt $Args.Count) {
+        $k = $incIdx + 1
+        while ($k -lt $Args.Count -and -not $Args[$k].StartsWith('--')) {
+            if (-not [System.IO.Path]::IsPathRooted($Args[$k])) {
+                $argvOut[$k] = [System.IO.Path]::Combine($projDir, $Args[$k])
+            }
+            $k++
+        }
+    }
+} catch { }
+$record = @{ argv = @($argvOut) } | ConvertTo-Json -Compress -Depth 5
 Add-Content -LiteralPath '__LOGFILE__' -Value $record
 
 $real = Get-Command -CommandType Application dotnet -ErrorAction SilentlyContinue | Select-Object -Skip 1 -First 1
@@ -139,7 +157,25 @@ exit $LASTEXITCODE
 #!/usr/bin/env pwsh
 param([Parameter(ValueFromRemainingArguments=$true)] [string[]] $Args)
 
-$record = @{ argv = @($Args) } | ConvertTo-Json -Compress -Depth 5
+$argvOut = @($Args)
+try {
+    $projPath = $Args[1]
+    $projDir = Split-Path -Parent $projPath
+    $incIdx = -1
+    for ($k = 0; $k -lt $Args.Count; $k++) {
+        if ($Args[$k] -eq '--include') { $incIdx = $k; break }
+    }
+    if ($incIdx -ge 0 -and ($incIdx + 1) -lt $Args.Count) {
+        $k = $incIdx + 1
+        while ($k -lt $Args.Count -and -not $Args[$k].StartsWith('--')) {
+            if (-not [System.IO.Path]::IsPathRooted($Args[$k])) {
+                $argvOut[$k] = [System.IO.Path]::Combine($projDir, $Args[$k])
+            }
+            $k++
+        }
+    }
+} catch { }
+$record = @{ argv = @($argvOut) } | ConvertTo-Json -Compress -Depth 5
 Add-Content -LiteralPath '__LOGFILE__' -Value $record
 
 $real = Get-Command -CommandType Application dotnet -ErrorAction SilentlyContinue | Select-Object -Skip 1 -First 1
@@ -260,12 +296,20 @@ namespace Orphan;public class Orphan{public int X{get;set;}}
         (Join-Path 'ProjectB' 'File10.cs')
     )
 
+    # --- capture pre-format hashes for equivalence proof (B1) ---------------
+    $preFormatHashes = @{}
+    foreach ($rel in ($payloadRel | Select-Object -Unique)) {
+        $srcFile = Join-Path $fixtureBase $rel
+        $preFormatHashes[$rel] = (Get-FileHash -LiteralPath $srcFile -Algorithm SHA256).Hash
+    }
+
     $null = Clear-LogFile $logFile
     $shimDir = Create-DotnetSpyShim -LogFile $logFile
 
     $oldPath = $env:PATH
     $sep = if ($IsWindows) { ';' } else { ':' }
     $env:PATH = $shimDir + $sep + $env:PATH
+    $env:FORMAT_ON_EDIT_DOTNET_SEAM = '1'
 
     # --- sequential baseline (20 hook invocations) ------------------------
     $null = Remove-Item -LiteralPath $logFile -Force -ErrorAction SilentlyContinue
@@ -324,9 +368,65 @@ namespace Orphan;public class Orphan{public int X{get;set;}}
     $uniqueProjects = $projects | Select-Object -Unique
     if ($uniqueProjects.Count -ne 2) { throw "Expected 2 projects formatted in batch payload" }
 
+    # --- A4: assert batch --include values per project ---------------------
+    $projACsproj = Join-Path (Join-Path $batchRoot 'ProjectA') 'ProjectA.csproj'
+    $projBCsproj = Join-Path (Join-Path $batchRoot 'ProjectB') 'ProjectB.csproj'
+
+    foreach ($call in $batchFormatCalls) {
+        $proj = Extract-DotnetFormatProject -Call $call
+        $includes = Extract-IncludesAfterIncludeFlag -Argv $call.argv
+
+        if ($proj -eq $projACsproj) {
+            $expectedA = @(
+                (Join-Path (Join-Path $batchRoot 'ProjectA') 'File1.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectA') 'File2.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectA') 'File3.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectA') 'File4.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectA') 'File5.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectA') 'File6.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectA') 'File7.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectA') 'File8.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectA') 'File With Space.cs')
+            ) | Sort-Object
+            $actualA = @($includes) | Sort-Object
+            $diffA = Compare-Object -ReferenceObject $expectedA -DifferenceObject $actualA
+            if ($diffA) { throw "A4: ProjectA --include mismatch" }
+        }
+        elseif ($proj -eq $projBCsproj) {
+            $expectedB = @(
+                (Join-Path (Join-Path $batchRoot 'ProjectB') 'File1.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectB') 'File2.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectB') 'File3.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectB') 'File4.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectB') 'File5.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectB') 'File6.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectB') 'File7.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectB') 'File8.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectB') 'File9.cs'),
+                (Join-Path (Join-Path $batchRoot 'ProjectB') 'File10.cs')
+            ) | Sort-Object
+            $actualB = @($includes) | Sort-Object
+            $diffB = Compare-Object -ReferenceObject $expectedB -DifferenceObject $actualB
+            if ($diffB) { throw "A4: ProjectB --include mismatch" }
+        }
+    }
+
+    # Assert File9.cs in ProjectA was NOT in batch payload and remains untouched
+    $file9Rel = Join-Path 'ProjectA' 'File9.cs'
+    $file9Batch = Join-Path $batchRoot $file9Rel
+    $file9Fixture = Join-Path $fixtureBase $file9Rel
+    $file9BatchHash = (Get-FileHash -LiteralPath $file9Batch -Algorithm SHA256).Hash
+    $file9FixtureHash = (Get-FileHash -LiteralPath $file9Fixture -Algorithm SHA256).Hash
+    if ($file9BatchHash -ne $file9FixtureHash) {
+        throw "A4: ProjectA/File9.cs was modified but was not in payload"
+    }
+
     # --- required stdout literals (frozen-plan exactness) -----------------
     Write-Host ("Sequential: {0} invocations, {1} processes" -f $hookInvocationCount, $seqProcesses)
     Write-Host ("Batch: 1 invocation, {0} processes" -f $batchProcesses)
+
+    Write-Host ("Sequential elapsed: {0:F0} ms" -f $seqTimer.Elapsed.TotalMilliseconds)
+    Write-Host ("Batch elapsed: {0:F0} ms" -f $batchTimer.Elapsed.TotalMilliseconds)
 
     # --- formatting equivalence vs sequential baseline -------------------
     $uniquePayloadRel = $payloadRel | Select-Object -Unique
@@ -340,6 +440,53 @@ namespace Orphan;public class Orphan{public int X{get;set;}}
             throw "Formatting mismatch for $rel"
         }
     }
+
+    # --- B1: assert formatting actually happened (not vacuous) ---------------
+    $formattedCount = 0
+    foreach ($rel in ($payloadRel | Select-Object -Unique)) {
+        $batchFile = Join-Path $batchRoot $rel
+        $postHash = (Get-FileHash -LiteralPath $batchFile -Algorithm SHA256).Hash
+        if ($postHash -ne $preFormatHashes[$rel]) {
+            $formattedCount++
+        }
+    }
+    if ($formattedCount -eq 0) {
+        throw "B1: Formatting vacuity — no fixture file changed. dotnet format may be a no-op."
+    }
+    Write-Host "B1: Formatting verified — $formattedCount of $($preFormatHashes.Count) files changed by formatter"
+
+    # --- A6: single-project 20-file batch (AC1 literal) --------------------
+    $singleProjRoot = Join-Path $tempRoot 'single-proj'
+    Copy-Item -Path $fixtureBase -Destination $singleProjRoot -Recurse -Force
+
+    # Build 20-file payload targeting only ProjectA (reuse File1-8, File With Space, File9 = 10 files)
+    # For 20 files, add 10 more entries (with duplicates allowed, will dedupe to 10 unique).
+    $singleProjPayload = @()
+    for ($i = 1; $i -le 10; $i++) {
+        $name = switch ($i) {
+            9 { 'File9.cs' }
+            10 { 'File With Space.cs' }
+            default { "File$i.cs" }
+        }
+        $singleProjPayload += (Join-Path 'ProjectA' $name)
+    }
+    # Duplicate to reach 20 entries
+    $singleProjPayload += $singleProjPayload
+
+    $null = Remove-Item -LiteralPath $logFile -Force -ErrorAction SilentlyContinue
+    $null = Clear-LogFile $logFile
+
+    $singleProjCmd = ($singleProjPayload | ForEach-Object { '*** Update File: ' + (Join-Path $singleProjRoot $_) }) -join "`n"
+    $stderrPath = Join-Path $tempRoot ('stderr-single-proj-' + [guid]::NewGuid().ToString('N') + '.txt')
+    $singleProjRes = Invoke-FormatOnEditHook -Cwd $singleProjRoot -CommandText $singleProjCmd -StderrPath $stderrPath
+
+    if ($singleProjRes.ExitCode -ne 0) { throw "A6: hook exit code $($singleProjRes.ExitCode) on single-project 20-file payload" }
+
+    $singleProjCalls = @(Get-DotnetFormatCalls -LogFile $logFile)
+    if ($singleProjCalls.Count -ne 1) {
+        throw "A6: Expected exactly 1 dotnet format call for single-project 20-file batch, got $($singleProjCalls.Count)"
+    }
+    Write-Host "A6: Single-project 20-file batch verified — 1 dotnet format call"
 
     # --- edge: empty payload ---------------------------------------------
     $null = Remove-Item -LiteralPath $logFile -Force -ErrorAction SilentlyContinue
@@ -402,6 +549,7 @@ namespace Orphan;public class Orphan{public int X{get;set;}}
     if ($env:PATH -and $shimDir) {
         $env:PATH = $oldPath
     }
+    $env:FORMAT_ON_EDIT_DOTNET_SEAM = $null
     if ($shimDir -and (Test-Path -LiteralPath $shimDir)) {
         if ($success) {
             Remove-Item -LiteralPath $shimDir -Recurse -Force -ErrorAction SilentlyContinue
@@ -418,4 +566,3 @@ namespace Orphan;public class Orphan{public int X{get;set;}}
 }
 
 exit 0
-

@@ -79,12 +79,20 @@ foreach ($candidate in (Get-EditedFiles $payload $toolInput)) {
     if (($file -replace '\\', '/') -match '/(bin|obj|node_modules)/') { continue }
 
     # `dotnet format` needs a project or solution; find the nearest one upward.
-    $dir = Split-Path -Parent $file
+    try {
+        $dir = Split-Path -LiteralPath $file -Parent
+    } catch {
+        $dir = Split-Path -LiteralPath $file
+    }
     $project = $null
     while ($dir -and -not $project) {
         $found = @(Get-ChildItem -LiteralPath $dir -Filter '*.csproj' -File -ErrorAction SilentlyContinue)
         if ($found.Count -gt 0) { $project = $found[0].FullName; break }
-        $parent = Split-Path -Parent $dir
+        try {
+            $parent = Split-Path -LiteralPath $dir -Parent
+        } catch {
+            $parent = Split-Path -LiteralPath $dir
+        }
         if ($parent -eq $dir) { break }
         $dir = $parent
     }
@@ -96,15 +104,17 @@ foreach ($candidate in (Get-EditedFiles $payload $toolInput)) {
     [void]$filesByProject[$project].Add($file)
 }
 
-# Prefer a PATH-shimmed `dotnet` if one exists (test seam).
+# Resolve dotnet runner. Test seam: if FORMAT_ON_EDIT_DOTNET_SEAM=1, prefer a PATH shim.
 $dotnetRunner = $null
-$pathSep = if ($IsWindows) { ';' } else { ':' }
-foreach ($dir in ($env:PATH -split [regex]::Escape($pathSep))) {
-    if ([string]::IsNullOrWhiteSpace($dir)) { continue }
-    $shimCandidate = if ($IsWindows) { Join-Path $dir 'dotnet.ps1' } else { Join-Path $dir 'dotnet' }
-    if (Test-Path -LiteralPath $shimCandidate) {
-        $dotnetRunner = $shimCandidate
-        break
+if ($env:FORMAT_ON_EDIT_DOTNET_SEAM -eq '1') {
+    $pathSep = if ($IsWindows) { ';' } else { ':' }
+    foreach ($dir in ($env:PATH -split [regex]::Escape($pathSep))) {
+        if ([string]::IsNullOrWhiteSpace($dir)) { continue }
+        $shimCandidate = if ($IsWindows) { Join-Path $dir 'dotnet.ps1' } else { Join-Path $dir 'dotnet' }
+        if ((Test-Path -LiteralPath $shimCandidate) -and -not (Test-Path -LiteralPath $shimCandidate -PathType Container)) {
+            $dotnetRunner = $shimCandidate
+            break
+        }
     }
 }
 
@@ -120,10 +130,22 @@ foreach ($kvp in $filesByProject.GetEnumerator()) {
 
     # --include scopes the run to the edited files; formatting the whole
     # project on every keystroke would be unusably slow on a large solution.
-    & $dotnetRunner format $project --include $includeFiles --verbosity quiet 1>$null 2>$null
+    $global:LASTEXITCODE = $null
+    $projectDir = Split-Path -Parent $project
+    $includeRelFiles = foreach ($f in $includeFiles) {
+        [System.IO.Path]::GetRelativePath($projectDir, $f)
+    }
+    $dotnetArgs = @('format', $project, '--include') + $includeRelFiles + @('--verbosity', 'quiet')
+    $origLocation = Get-Location
+    try {
+        Set-Location -LiteralPath $projectDir
+        & $dotnetRunner @dotnetArgs 1>$null 2>$null
+    } finally {
+        Set-Location -LiteralPath $origLocation
+    }
     $exit = $LASTEXITCODE
-    if ($exit -ne 0) {
-        [Console]::Error.WriteLine("format-on-edit: dotnet format failed for $project")
+    if ($null -ne $exit -and $exit -ne 0) {
+        [Console]::Error.WriteLine("format-on-edit: dotnet format failed for $project (exit $exit)")
     }
 }
 
