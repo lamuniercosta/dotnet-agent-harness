@@ -551,6 +551,10 @@ jobs:
         shell: pwsh
         run: ./hooks/Test-GateNudge.ps1
 
+      - name: Format-on-edit batch test
+        shell: pwsh
+        run: ./hooks/Test-FormatOnEditBatch.ps1
+
       - name: harness.yml parser rejects malformed config
         shell: pwsh
         run: ./packs/dotnet/scripts/Test-HarnessConfig.ps1
