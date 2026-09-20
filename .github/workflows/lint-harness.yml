@@ -642,8 +642,10 @@ jobs:
     # is a different failure and needs a different check.
     #
     # The fixture deliberately contains violations but NO credentials.
-    # Only fixtures/BadCode itself is allowlisted in .gitleaks.toml; scanner
-    # sources are scanned for real after the synthetic-credential gate.
+    # Do not plant credential-shaped mocks in this workflow; use an explicit
+    # non-secret placeholder such as {{credential}} if a textual stand-in is
+    # ever required. Detection proof for shapes lives in hooks/Test-SecretScan.ps1
+    # (assembled at runtime), not in CI YAML literals or obfuscation.
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -680,64 +682,6 @@ jobs:
           # Extract only after verifying the exact downloaded file.
           tar -xzf "${tarball}" -C . gitleaks
           chmod +x ./gitleaks
-
-      - name: Gitleaks synthetic credentials gate (expect non-zero)
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          tmpRepo="$(mktemp -d)"
-          cp -R hooks "${tmpRepo}/hooks"
-          cp .gitleaks.toml "${tmpRepo}/.gitleaks.toml"
-
-          # Inject credential-shaped literals into paths that used to be
-          # exempted as a whole-file allowlist.
-          openrouter='sk-or-v1-'"$(printf 'A%.0s' {1..40})"
-          openai='sk-proj-'"$(printf 'B%.0s' {1..40})"
-          anthropic='sk-ant-api03-'"$(printf 'C%.0s' {1..40})"
-          azure='AccountKey='"$(printf 'Zm9v%.0s' {1..12})"
-          bearer='Authorization: Bearer '"$(printf 'Z%.0s' {1..48})"
-
-          {
-            echo ""
-            echo "# synthetic credentials (CI-only) - expected to be detected"
-            echo "${openrouter}"
-            echo "${openai}"
-            echo "${anthropic}"
-            echo "${azure}"
-            echo "${bearer}"
-          } >> "${tmpRepo}/hooks/secret-scan.ps1"
-
-          {
-            echo ""
-            echo "# synthetic credentials (CI-only) - expected to be detected"
-            echo "${openrouter}"
-            echo "${openai}"
-            echo "${anthropic}"
-            echo "${azure}"
-            echo "${bearer}"
-          } >> "${tmpRepo}/hooks/Test-SecretScan.ps1"
-
-          set +e
-          ./gitleaks detect \
-            --source "${tmpRepo}" \
-            --config .gitleaks.toml \
-            --no-git \
-            --redact \
-            --verbose \
-            --exit-code 1
-          code="$?"
-          set -e
-
-          if [ "${code}" -eq 1 ]; then
-            echo "Synthetic credential gate detected findings (gitleaks exit 1)."
-          elif [ "${code}" -eq 0 ]; then
-            echo "::error::Synthetic credential gate did not detect any findings (gitleaks exit 0)."
-            exit 1
-          else
-            echo "::error::Synthetic credential gate returned unexpected gitleaks exit code ${code} (expected 1 for findings; 0 for none)."
-            exit 1
-          fi
 
       - name: Gitleaks fixture contract (expect zero)
         shell: bash
