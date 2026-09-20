@@ -38,7 +38,7 @@ jobs:
       # That never showed up because this workflow had only ever run on pushes
       # to main, where the target and the checked-out ref are the same commit -
       # the pull_request trigger below had never actually been exercised.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
 
