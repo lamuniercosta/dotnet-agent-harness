@@ -1,6 +1,6 @@
 # dotnet-agent-harness
 
-`v0.7.0`
+`v0.7.1`
 
 A gated, spec-driven development pipeline for AI coding agents — for **Cursor**,
 **Claude Code**, and **Codex**, with no paid third-party service.

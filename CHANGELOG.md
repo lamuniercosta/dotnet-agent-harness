@@ -10,6 +10,8 @@ means a consuming repo's gates may start failing on code that previously passed.
 
 ## [Unreleased]
 
+## [0.7.1] — 2026-09-20
+
 ### Changed
 
 - **Remove the open-PR dependency/file-overlap guard from ship-review rebase-delta self-tests (PR-overlap-guard).** Multiple concurrent PRs may touch the same paths; origin/main base, freshness, discriminated transport, and artifact consumer checks remain. See ADR 0027.
@@ -346,7 +348,8 @@ account:
 [0.3.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.3.0
 [0.4.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.4.0
 [0.4.1]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.4.1
-[Unreleased]: https://github.com/lamuniercosta/dotnet-agent-harness/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/lamuniercosta/dotnet-agent-harness/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.7.1
 [0.7.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.7.0
 [0.6.0]: https://github.com/lamuniercosta/dotnet-agent-harness/releases/tag/v0.6.0
 [0.5.0]: https://github.com/lamuniercosta/dotnet-agent-harness/compare/v0.4.1...v0.5.0
