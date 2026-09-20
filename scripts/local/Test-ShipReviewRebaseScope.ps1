@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 # DEV-209 repository-local proof for ship-review post-rebase scope semantics.
 # Exercises positive git/range behavior, empty-delta confirmation, artifact-field
-# synchronization, malformed-range fail-closed transport, and base/no-stacking.
+# synchronization, malformed-range fail-closed transport, and base.
 
 [CmdletBinding()]
 param()
@@ -157,34 +157,25 @@ try {
         ($baseProof.Ok -and -not [string]::IsNullOrWhiteSpace($baseProof.Detail)) `
         $baseProof.Detail
 
-    $detachedIdentity = [pscustomobject]@{
-        Number                 = 173
-        HeadRefName            = 'HEAD'
-        HeadRepositoryOwner    = 'origin-owner'
-        HeadRepositoryFullName = 'origin-owner/dotnet-agent-harness'
-        ResolvedFrom           = 'github-event'
-    }
-    $currentPrRecord = [pscustomobject]@{
-        number             = 173
-        headRefName        = 'bug/dev-209-ship-review-rebase-scope'
-        headRepositoryOwner = [pscustomobject]@{ login = 'origin-owner' }
-    }
-    $forkNameCollision = [pscustomobject]@{
-        number             = 999
-        headRefName        = 'bug/dev-209-ship-review-rebase-scope'
-        headRepositoryOwner = [pscustomobject]@{ login = 'fork-user' }
-    }
-    Assert-That 'detached HEAD current PR is excluded by number and repository identity' `
-        (Test-OpenPrIsCurrentPullRequest -OpenPr $currentPrRecord -CurrentIdentity $detachedIdentity) `
-        'branch-name HEAD must not block PR-number exclusion'
-    Assert-That 'fork PR reusing the branch name is not treated as the current PR' `
-        (-not (Test-OpenPrIsCurrentPullRequest -OpenPr $forkNameCollision -CurrentIdentity $detachedIdentity)) `
-        'fork branch-name collision must remain in the overlap set'
+    $n1Root = New-TempRepoRoot
+    New-ShipReviewRebaseFixtureRepo -Root $n1Root -Scenario clean | Out-Null
+    # Divergent HEAD: commit on a root not reachable from origin/main.
+    Invoke-GitAtRoot -RepoRoot $n1Root -ArgumentList @('checkout','-q','--orphan','divergent') | Out-Null
+    Invoke-GitAtRoot -RepoRoot $n1Root -ArgumentList @('commit','-q','--allow-empty','-m','divergent-root') | Out-Null
+    $n1 = Test-BranchBasedOnOriginMain -RepoRoot $n1Root
+    Assert-That 'branch not based on origin/main fails closed' `
+        ($n1.Ok -eq $false) `
+        $n1.Detail
 
-    $overlapProof = Test-NoOpenPrDependencyOverlap -RepoRoot $repoRoot
-    Assert-That 'no open PR dependency or file overlap for other PR heads' `
-        $overlapProof.Ok `
-        $overlapProof.Detail
+    $n2Root = New-TempRepoRoot
+    New-Item -ItemType Directory -Force -Path $n2Root | Out-Null
+    Invoke-GitAtRoot -RepoRoot $n2Root -ArgumentList @('init','-q') | Out-Null
+    if (-not (Test-Path -LiteralPath (Join-Path $n2Root '.git'))) {
+        throw "N2 fixture: git init failed in $n2Root"
+    }
+    Assert-That 'origin/main resolution fails closed when no origin remote exists' `
+        (-not (Ensure-OriginMainRef -RepoRoot $n2Root)) `
+        'Ensure-OriginMainRef must return false when the origin remote cannot be resolved'
 }
 finally {
     foreach ($root in $temporaryRoots) {

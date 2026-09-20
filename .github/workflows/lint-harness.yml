@@ -206,6 +206,27 @@ jobs:
             echo "::error file=$t::fixture must exercise the DEV-209 helper"
             fail=1
           fi
+          # Fail closed if either source file is missing before any absence scan.
+          for f in "$h" "$t"; do
+            if [ ! -f "$f" ]; then
+              echo "::error file=$f::source file missing; absence gate cannot run"
+              fail=1
+            fi
+          done
+          # Absence/gate scans SOURCE FILES ONLY. This workflow file legitimately
+          # contains these literals as the gate itself and is excluded by design.
+          if grep -qE 'Test-NoOpenPrDependencyOverlap|Get-CurrentPullRequestIdentity|Get-OpenPrHeadRepositoryOwner|Test-OpenPrIsCurrentPullRequest' "$h" "$t"; then
+            echo "::error::open-PR overlap guard identifiers must not be reintroduced"
+            fail=1
+          fi
+          if grep -qF 'no open PR dependency or file overlap' "$h" "$t"; then
+            echo "::error::open-PR overlap policy text must be gone"
+            fail=1
+          fi
+          if ! grep -qF 'Test-BranchBasedOnOriginMain' "$h"; then
+            echo "::error file=$h::base-safety check must remain"
+            fail=1
+          fi
           [ "$fail" -eq 0 ] && echo "DEV-209 helper contract references are present."
           exit $fail
 
@@ -490,8 +511,6 @@ jobs:
 
       - name: Ship-review rebase-delta scope fixture
         shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: ./scripts/local/Test-ShipReviewRebaseScope.ps1
 
       # DEV-260: scripts/local self-tests are parked pending DEV-253-259 relocation to maestri-toolkit; set RUN_LOCAL_SELF_TESTS=true to run them.

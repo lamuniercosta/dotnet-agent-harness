@@ -10,6 +10,10 @@ means a consuming repo's gates may start failing on code that previously passed.
 
 ## [Unreleased]
 
+### Changed
+
+- **Remove the open-PR dependency/file-overlap guard from ship-review rebase-delta self-tests (PR-overlap-guard).** Multiple concurrent PRs may touch the same paths; origin/main base, freshness, discriminated transport, and artifact consumer checks remain. See ADR 0027.
+
 ## [0.7.0] — 2026-09-13
 
 ### Fixed
