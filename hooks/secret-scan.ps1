@@ -93,7 +93,7 @@ $patterns = [ordered]@{
     'Google API key'           = '\bAIza[0-9A-Za-z_-]{35}\b'
     'Stripe secret key'        = '\b(sk|rk)_(live|test)_[A-Za-z0-9]{20,}'
     # `=` is in the class because these are base64 segments and routinely padded.
-    'JetBrains/YouTrack token' = '\bperm:[A-Za-z0-9._=-]{20,}'
+    'JetBrains/YouTrack token' = '\bperm[:-][A-Za-z0-9._=-]{20,}'
     'Mapbox secret token'      = '\bsk\.eyJ[A-Za-z0-9._-]{20,}'
     'JWT'                      = '\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}'
     'Generic Bearer token'     = '(?i)\bBearer\s+(?!eyJ)[A-Za-z0-9_-]{20,}\b'

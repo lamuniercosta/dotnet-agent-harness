@@ -306,10 +306,10 @@ function Get-YouTrackTask {
         throw 'YOUTRACK_URL is not set. Set it in the process environment, or on Windows as a User-scope variable. The file holds only the token. YOUTRACK_URL stays in the environment.'
     }
     if ([string]::IsNullOrWhiteSpace($token)) {
-        throw 'YOUTRACK_TOKEN is not set. Set a permanent token (perm:...) in the process environment, or on Windows in the DPAPI file ($env:USERPROFILE\.dotnet-agent-harness\youtrack-token) or as a User-scope variable. The file holds only the token. YOUTRACK_URL stays in the environment.'
+        throw 'YOUTRACK_TOKEN is not set. Set a permanent token (perm:... or perm-...) in the process environment, or on Windows in the DPAPI file ($env:USERPROFILE\.dotnet-agent-harness\youtrack-token) or as a User-scope variable. The file holds only the token. YOUTRACK_URL stays in the environment.'
     }
-    if (-not $token.StartsWith('perm:', [StringComparison]::Ordinal)) {
-        throw "YOUTRACK_TOKEN must be a YouTrack permanent token beginning with 'perm:'."
+    if (-not ($token.StartsWith('perm:', [StringComparison]::Ordinal) -or $token.StartsWith('perm-', [StringComparison]::Ordinal))) {
+        throw "YOUTRACK_TOKEN must be a YouTrack permanent token beginning with 'perm:' or 'perm-'."
     }
 
     $base = $url.Trim().TrimEnd('/')
