@@ -143,11 +143,7 @@ public static class Program
 '@ -Encoding UTF8
 
     # Build to a dedicated temp output, then copy to shimRoot as `claude`.
-    # No node reuse and no shared compiler: reusable MSBuild nodes and the
-    # VBCSCompiler server outlive the build holding this script's inherited
-    # stdout, so a caller reading it through a pipe (CI steps, Start-Job)
-    # never sees EOF and hangs after the pass line.
-    & dotnet build $csprojPath -c Release -v:q -nodeReuse:false -p:UseSharedCompilation=false *> $null
+    & dotnet build $csprojPath -c Release -v:q *> $null
     $builtExe = Get-ChildItem -LiteralPath $shimProjDir -Recurse -File -Filter 'claude.exe' |
         Sort-Object FullName |
         Select-Object -First 1
