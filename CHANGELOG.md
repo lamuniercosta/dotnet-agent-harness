@@ -10,6 +10,10 @@ means a consuming repo's gates may start failing on code that previously passed.
 
 ## [Unreleased]
 
+### Fixed
+
+- **ship-review no longer makes the consuming clone shallow.** The `origin/main` refresh in `_Get-ShipReviewRebaseDelta.ps1` (and the matching SKILL.md and ADR 0014 wording) dropped `--depth=1`. In a full clone that flag wrote `.git/shallow` at the fetched tip, hiding the history `git merge-base HEAD origin/main` needs and making later pulls fail with `refusing to merge unrelated histories`. Freshness is still established by the forced fetch plus the `ls-remote` tip check.
+
 ## [0.7.1] — 2026-09-20
 
 ### Changed
