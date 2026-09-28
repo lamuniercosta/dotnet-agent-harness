@@ -84,7 +84,7 @@ dotnet test --no-build --verbosity quiet                # Phase 5
 ./scripts/run-property-tests.ps1                        # Phase 6
 ./scripts/run-vulnerable-packages.ps1                   # Phase 7
 dotnet format --verify-no-changes --verbosity quiet     # Phase 8
-dotnet stryker                                          # Phase 9 (pre-PR)
+dotnet stryker --since:$(git merge-base HEAD origin/main)   # Phase 9 (pre-PR)
 ```
 
 Phases 2–3 run `dotnet build --no-incremental` internally — the flag forces

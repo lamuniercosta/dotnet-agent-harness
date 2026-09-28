@@ -28,7 +28,7 @@ Pick the narrowest set that answers the caller's question.
 ./scripts/run-property-tests.ps1
 ./scripts/run-vulnerable-packages.ps1
 dotnet test --no-build --verbosity quiet
-dotnet stryker                                   # minutes-expensive; pre-PR only
+dotnet stryker --since:$(git merge-base HEAD origin/main)   # minutes-expensive; pre-PR only
 ```
 
 Only the three analyzer gates — roslyn-analyzers, cyclomatic-complexity, jetbrains-inspectcode — take `-BaseRef`/`-Files`/`-All`: no args analyses changed files vs the base branch, `-Files "a.cs","b.cs"` an explicit set, `-All` the whole solution. Property tests scope with `-Project`/`-Category`, and gherkin-mutation with `-Project`/`-SpecsPath` — where `-SpecsPath <dir>` is what aims it at feature files outside the default `specs/`, so a repo whose features live elsewhere needs it or the gate just skips. Vulnerable-packages takes `-Severity`/`-IncludeTransitive` and has no scope flag at all. Never pass `-All` to property tests, gherkin-mutation or vulnerable-packages — PowerShell rejects the unknown parameter and the script exits 1 without scanning anything. That is a launch failure, not a red gate: fix the invocation and re-run rather than reporting a failure.

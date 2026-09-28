@@ -47,9 +47,11 @@ if ($current -in $protected) {
     throw "Refusing to rebase '$current' - it is a protected/integration branch. Switch to your task branch first."
 }
 
-$dirty = git status --porcelain
+# Untracked files (e.g. local recon notes) cannot be lost by a rebase; git itself
+# stops if one would be overwritten. Only uncommitted tracked changes block it.
+$dirty = git status --porcelain --untracked-files=no
 if ($dirty) {
-    throw "Working tree is not clean. Commit or stash changes before rebasing."
+    throw "Working tree has uncommitted changes to tracked files. Commit or stash them before rebasing."
 }
 
 # Record the local tip BEFORE fetching/rebasing. The remote-tracking ref is only a

@@ -13,6 +13,11 @@ means a consuming repo's gates may start failing on code that previously passed.
 ### Fixed
 
 - **ship-review no longer makes the consuming clone shallow.** The `origin/main` refresh in `_Get-ShipReviewRebaseDelta.ps1` (and the matching SKILL.md and ADR 0014 wording) dropped `--depth=1`. In a full clone that flag wrote `.git/shallow` at the fetched tip, hiding the history `git merge-base HEAD origin/main` needs and making later pulls fail with `refusing to merge unrelated histories`. Freshness is still established by the forced fetch plus the `ls-remote` tip check.
+- **Stryker diffs against the branch fork point.** Every unscoped pipeline invocation (architect, verify, architect-gate rule, gate-runner and mutation-analyst agents, consumer CLAUDE.md/AGENTS.md) now passes `--since:$(git merge-base HEAD origin/main)`, and the rendered `stryker-config.json` sets `since.target` to `origin/<baseBranch>`. A local `main` goes stale and a moving `origin/main` pulls in upstream churn; neither is the branch's own change set. Ported from LamuFlix.
+- **`gates.web.enabled` is a known `harness.yml` key** (default `false`), for a repo-owned web gate script. A consumer that set it failed every gate with `unknown key` after a reinstall. Ported from LamuFlix.
+- **`rebase-task-branch.ps1` ignores untracked files** in its clean-tree check (`--untracked-files=no`). A rebase can't lose them and git stops if one would be overwritten; local notes no longer block a rebase. Ported from LamuFlix.
+- **`Test-SecretScan.ps1` builds its fake PEM header and DB password from parts**, so repository secret scanners (gitleaks) don't flag the test fixture itself. Ported from LamuFlix.
+- **YouTrack permanent tokens may start with `perm-`** as well as `perm:` (`get-task.ps1` validation and the secret-scan pattern).
 
 ## [0.7.1] — 2026-09-20
 

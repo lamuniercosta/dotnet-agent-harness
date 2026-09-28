@@ -33,6 +33,7 @@ $script:HarnessSchema = @{
     'gates.vulnerablePackages.includeTransitive' = 'bool'
     'gates.inspectCode.enabled'                  = 'bool'
     'gates.propertyTests.enabled'                = 'bool'
+    'gates.web.enabled'                          = 'bool'
     'agents.tiers.fast.claude.model'             = 'scalar'
     'agents.tiers.fast.claude.effort'            = 'scalar'
     'agents.tiers.fast.cursor.model'             = 'scalar'
@@ -73,6 +74,7 @@ function Get-HarnessDefaults {
         'gates.vulnerablePackages.includeTransitive' = $true
         'gates.inspectCode.enabled'                  = $true
         'gates.propertyTests.enabled'                = $true
+        'gates.web.enabled'                          = $false
         'agents.tiers.fast.claude.model'             = 'claude-haiku-4-5-20251001'
         'agents.tiers.fast.claude.effort'            = 'low'
         'agents.tiers.fast.cursor.model'             = 'gpt-5.6-luna'
