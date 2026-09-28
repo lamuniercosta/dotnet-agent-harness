@@ -16,7 +16,7 @@ After `/refactor` passes all refactor gates.
 From repository root:
 
 ```powershell
-dotnet stryker --config-file stryker-config.json
+dotnet stryker --config-file stryker-config.json --since:$(git merge-base HEAD origin/main)
 dotnet test
 # Only when acceptance tests exist (opt-in for now):
 ./scripts/run-gherkin-mutation.ps1

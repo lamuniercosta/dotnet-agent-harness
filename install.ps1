@@ -1025,7 +1025,7 @@ $breakAt = $config['gates.mutation.threshold']
 $stryker = [ordered]@{
     'stryker-config' = [ordered]@{
         'mutation-level' = 'Standard'
-        'since'          = [ordered]@{ 'target' = $config['baseBranch'] }
+        'since'          = [ordered]@{ 'target' = "origin/$($config['baseBranch'])" }
         'thresholds'     = [ordered]@{
             'high'  = [Math]::Min(100, $breakAt + 10)
             'low'   = $breakAt

@@ -102,7 +102,7 @@ have trusted the project.
 ./scripts/run-property-tests.ps1
 ./scripts/run-vulnerable-packages.ps1
 dotnet test
-dotnet stryker                              # minutes-expensive; pre-PR only
+dotnet stryker --since:$(git merge-base HEAD origin/main)   # minutes-expensive; pre-PR only
 ```
 
 The three analyzer gates — `run-roslyn-analyzers.ps1`,

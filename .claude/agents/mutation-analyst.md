@@ -13,7 +13,7 @@ Stryker's raw report is long, largely noise, and the main reason people stop run
 ## Run
 
 ```powershell
-dotnet stryker                                  # config from stryker-config.json
+dotnet stryker --since:$(git merge-base HEAD origin/main)   # diff base = branch fork point
 dotnet stryker --mutate "**/ImportHandler.cs"   # scoped to one file
 ```
 

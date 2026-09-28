@@ -62,7 +62,7 @@ overwrites it.
 ./scripts/run-property-tests.ps1
 ./scripts/run-vulnerable-packages.ps1
 dotnet test
-dotnet stryker                              # minutes-expensive; pre-PR only
+dotnet stryker --since:$(git merge-base HEAD origin/main)   # minutes-expensive; pre-PR only
 ```
 
 `-BaseRef`/`-Files`/`-All` exist **only on the three analyzer gates** — roslyn-analyzers,

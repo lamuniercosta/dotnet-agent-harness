@@ -27,7 +27,7 @@ $ARGUMENTS
 Run from repository root:
 
 ```powershell
-dotnet stryker --config-file stryker-config.json
+dotnet stryker --config-file stryker-config.json --since:$(git merge-base HEAD origin/main)
 dotnet test --collect:"XPlat Code Coverage"
 dotnet test
 # Only when acceptance tests exist (opt-in for now):

@@ -78,11 +78,13 @@ $p = @{
     bearerOpaque    = ('Z' * 48)
     assignedApiKey = ('abcdef' * 8)
     jwt      = 'eyJhbGciOiJIUzI1NiJ9' + '.eyJzdWIiOiIxMjM0NTY3ODkwIn0' + '.dozjgNryP4J3jVmNHl0w5N-XgL0n3I9PlFUP0THsR8U'
+    pemHeader  = '-----BEGIN RSA ' + 'PRIVATE KEY-----'
+    dbPassword = 'hunter2' + 'hunter2'
 }
 
 Write-Host 'Credential shapes are flagged:'
 Assert-Flags 'AWS access key'      "aws_access_key_id = $($p.aws)"
-Assert-Flags 'private key block'   "-----BEGIN RSA PRIVATE KEY-----`nMIIEow..."
+Assert-Flags 'private key block'   "$($p.pemHeader)`nMIIEow..."
 Assert-Flags 'GitHub token'        "GH_TOKEN=$($p.ghToken)"
 Assert-Flags 'Slack token'         $p.slack
 Assert-Flags 'Google API key'      "key: $($p.google)"
@@ -100,7 +102,7 @@ Assert-Flags 'Azure AccountKey (bare)' "AccountKey=$($p.azureAccountKey)"
 Assert-Flags 'Azure AccountKey (assigned)' "connectionString = 'DefaultEndpointsProtocol=https;AccountName=x;AccountKey=$($p.azureAccountKey);EndpointSuffix=core.windows.net'"
 Assert-Flags 'Generic Bearer token (bare)' "Authorization: Bearer $($p.bearerOpaque)"
 Assert-Flags 'Generic Bearer token (assigned)' "authHeader = 'Bearer $($p.bearerOpaque)'"
-Assert-Flags 'connection password' 'Server=db;Database=app;User Id=sa;Password=hunter2hunter2;'
+Assert-Flags 'connection password' ('Server=db;Database=app;User Id=sa;Password=' + $p.dbPassword + ';')
 Assert-Flags 'assigned api key'    ('const apiKey = "' + $p.assignedApiKey + '"')
 
 Write-Host ''
