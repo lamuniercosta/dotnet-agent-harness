@@ -99,7 +99,7 @@ function Ensure-OriginMainRef {
     }
 
     $fetch = Invoke-GitAtRoot -RepoRoot $RepoRoot -ArgumentList @(
-        'fetch', '--no-tags', '--depth=1', 'origin', '+refs/heads/main:refs/remotes/origin/main'
+        'fetch', '--no-tags', 'origin', '+refs/heads/main:refs/remotes/origin/main'
     )
     if (-not $fetch.Ok) {
         return $false
