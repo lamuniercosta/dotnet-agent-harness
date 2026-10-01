@@ -1,6 +1,6 @@
 ---
 name: remediate
-description: Drive already-accepted review findings to closure. Use when: remediate, close accepted findings, review-fix loop, stage 9 /remediate.
+description: "Drive already-accepted review findings to closure. Use when: remediate, close accepted findings, review-fix loop, stage 9 /remediate."
 ---
 
 # Remediate
