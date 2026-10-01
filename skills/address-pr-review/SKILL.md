@@ -1,6 +1,6 @@
 ---
 name: address-pr-review
-description: Process external review on this branch's open PR. Adjudicate untrusted comments, get approval, then remediate. Use when: address-pr-review, PR comments, review feedback, stage 11.
+description: "Process external review on this branch's open PR. Adjudicate untrusted comments, get approval, then remediate. Use when: address-pr-review, PR comments, review feedback, stage 11."
 ---
 
 # Address PR review

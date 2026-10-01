@@ -10,6 +10,7 @@ name: Lint harness
 #   - constitution placeholders shipping unsubstituted
 #   - a skill-load pipeline rule losing its last SKILL.md reference
 #   - a skill index Read target resolving to a missing companion file
+#   - skill or agent frontmatter that strict YAML parsers reject
 
 on:
   push:
@@ -71,6 +72,39 @@ jobs:
           done
           [ "$fail" -eq 0 ] && echo "All $(ls -d skills/*/ | wc -l) skills valid."
           exit $fail
+
+      # ---- frontmatter parses as strict YAML -----------------------------
+      # The grep above passes an unquoted description containing ": ", which
+      # strict parsers reject ("mapping values are not allowed in this
+      # context") - GitHub's renderer among them. Ruby's Psych is the parser
+      # GitHub uses and ships on the runner. Agent profiles are included
+      # because install.ps1 re-emits their description unquoted.
+      - name: Skill and agent frontmatter is valid YAML
+        run: |
+          ruby -ryaml -e '
+            fail = false
+            (Dir["skills/*/SKILL.md"] + Dir[".claude/agents/*.md"]).sort.each do |f|
+              text = File.read(f, encoding: "UTF-8").gsub("\r\n", "\n")
+              m = text.match(/\A---\n(.*?)\n---\n/m)
+              unless m
+                puts "::error file=#{f}::frontmatter missing or not closed"
+                fail = true
+                next
+              end
+              begin
+                data = YAML.safe_load(m[1])
+                unless data.is_a?(Hash) && data["description"].is_a?(String)
+                  puts "::error file=#{f}::frontmatter description is not a string"
+                  fail = true
+                end
+              rescue Psych::Exception => e
+                puts "::error file=#{f}::#{e.message}"
+                fail = true
+              end
+            end
+            puts "All skill and agent frontmatter is valid YAML." unless fail
+            exit(fail ? 1 : 0)
+          '
 
       # ---- skill index Read targets resolve --------------------------------
       # An index (SKILL.md) that says "Read ./X.md in this skill's directory"

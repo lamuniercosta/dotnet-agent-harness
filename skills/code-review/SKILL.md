@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Review C# changes since a fixed point (commit, branch, tag, or merge-base) along three axes — Risk (bugs, security, concurrency, coverage gaps), Standards (does the code follow this repo's documented standards?), and Spec (does it match what the issue/spec asked for?). Classifies the diff first: no `.cs` files is out of scope for this skill. Scores blast radius, runs a Roslyn pre-pass, fans out to parallel sub-agents, verifies findings, and reports them severity-ranked. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to "review since X".
+description: "Review C# changes since a fixed point (commit, branch, tag, or merge-base) along three axes — Risk (bugs, security, concurrency, coverage gaps), Standards (does the code follow this repo's documented standards?), and Spec (does it match what the issue/spec asked for?). Classifies the diff first: no `.cs` files is out of scope for this skill. Scores blast radius, runs a Roslyn pre-pass, fans out to parallel sub-agents, verifies findings, and reports them severity-ranked. Use when the user wants to review a branch, a PR, work-in-progress changes, or asks to \"review since X\"."
 ---
 
 Three-axis review of the **C#** diff between `HEAD` and a fixed point the user supplies:
