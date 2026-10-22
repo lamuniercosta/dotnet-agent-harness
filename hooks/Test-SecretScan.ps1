@@ -89,7 +89,7 @@ Assert-Flags 'GitHub token'        "GH_TOKEN=$($p.ghToken)"
 Assert-Flags 'Slack token'         $p.slack
 Assert-Flags 'Google API key'      "key: $($p.google)"
 Assert-Flags 'Stripe secret key'   $p.stripe
-Assert-Flags 'YouTrack perm token' "YOUTRACK_TOKEN=$($p.youtrack)"
+Assert-Flags 'YouTrack perm token' "YOUTRACK_API_KEY=$($p.youtrack)"
 Assert-Flags 'Mapbox secret token' "mapbox: $($p.mapbox)"
 Assert-Flags 'JWT'                 "Authorization: Bearer $($p.jwt)"
 Assert-Flags 'OpenRouter key (bare)' $p.openrouter

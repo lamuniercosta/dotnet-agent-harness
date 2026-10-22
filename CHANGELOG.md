@@ -20,6 +20,8 @@ means a consuming repo's gates may start failing on code that previously passed.
 
 ### Changed
 
+- **YouTrack intake uses `YOUTRACK_API_URL` and `YOUTRACK_API_KEY`.** Ported from LamuFlix: the task script, installed task skill and workflow rule, setup instructions, configuration example, and regression fixtures now use the same variable names. Existing environment-based setups must rename `YOUTRACK_URL` and `YOUTRACK_TOKEN`; the DPAPI token file path and process/file/User-scope resolution order are unchanged.
+
 - **The no-comments rule names the three exemptions it actually has.** `coding-conventions.mdc` allowed only AAA test headers, while the consumer repos carrying this harness had added two more: a stated reason on an intentionally empty block, and narrowly scoped warning suppressions (`#pragma warning disable`/`restore` pairs, `// ReSharper disable once …`) justified on the same line. Both are exemptions a reviewer would grant anyway, and a rule that does not name them pushes an agent to either delete the justification or write it somewhere worse. The rule, `skills/testing/SKILL.md`, and the Codex/Claude digests of the non-negotiables now list all three. Ported from LamuFlix, whose local rule already said this and which lost the wording on reinstall because the rule is harness-owned.
 
 - **The mutation gate is invoked as `pwsh -NoProfile -File ./scripts/run-mutation.ps1`**, not `dotnet stryker --since:$(git merge-base HEAD origin/main)`, in the architect and verify skills, the architect-gate rule, the `mutation-analyst` and `gate-runner` agents, and the consumer `CLAUDE.md`/`AGENTS.md`. Stryker's `--since` filter measures nothing from a linked worktree, so an unscoped pipeline run could score another branch's code. Ported from LamuFlix.

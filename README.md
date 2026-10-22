@@ -218,7 +218,7 @@ gates:
     threshold: 80
 ```
 
-Intake is **tracker-neutral**. `tracker: github` (the default) keeps GitHub Issues via `gh`. `tracker: youtrack` reads tasks through YouTrack REST using `YOUTRACK_URL` and `YOUTRACK_TOKEN`. Token resolution checks process env, then on Windows the DPAPI file (`$env:USERPROFILE\.dotnet-agent-harness\youtrack-token`) and User-scope env in that order — the token is sent as `Authorization: Bearer`, never in a URL, error, or log, and must begin with `perm:`. The DPAPI file holds only the token; `YOUTRACK_URL` stays in the environment. `tracker: none` is description-only and does not contact a tracker. There is no `task.tracker` setting and no CLI override.
+Intake is **tracker-neutral**. `tracker: github` (the default) keeps GitHub Issues via `gh`. `tracker: youtrack` reads tasks through YouTrack REST using `YOUTRACK_API_URL` and `YOUTRACK_API_KEY`. Token resolution checks process env, then on Windows the DPAPI file (`$env:USERPROFILE\.dotnet-agent-harness\youtrack-token`) and User-scope env in that order — the token is sent as `Authorization: Bearer`, never in a URL, error, or log, and must begin with `perm:`. The DPAPI file holds only the token; `YOUTRACK_API_URL` stays in the environment. `tracker: none` is description-only and does not contact a tracker. There is no `task.tracker` setting and no CLI override.
 
 Existing consumer `AGENTS.md`, `CLAUDE.md`, and constitutions are skip-if-exists / rendered only when absent — reinstalling this harness does not rewrite them. Fresh installs get the updated constitution wording; already-installed docs keep their current text until the repo edits them.
 
@@ -247,11 +247,11 @@ try {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     $secureToken | ConvertFrom-SecureString | Set-Content -Path "$dir\youtrack-token" -Encoding UTF8
 
-    [Environment]::SetEnvironmentVariable('YOUTRACK_URL', $youTrackUrl, 'User')
-    [Environment]::SetEnvironmentVariable('YOUTRACK_TOKEN', $null, 'User')
-    Remove-Item Env:\YOUTRACK_TOKEN -ErrorAction SilentlyContinue
+    [Environment]::SetEnvironmentVariable('YOUTRACK_API_URL', $youTrackUrl, 'User')
+    [Environment]::SetEnvironmentVariable('YOUTRACK_API_KEY', $null, 'User')
+    Remove-Item Env:\YOUTRACK_API_KEY -ErrorAction SilentlyContinue
 
-    Write-Host 'YouTrack token saved to DPAPI-encrypted file and user-scope YOUTRACK_URL was set.'
+    Write-Host 'YouTrack token saved to DPAPI-encrypted file and user-scope YOUTRACK_API_URL was set.'
 }
 finally {
     if ($tokenHandle -ne [IntPtr]::Zero) {
@@ -279,11 +279,11 @@ try {
         throw "Expected a YouTrack permanent token beginning with 'perm:'."
     }
 
-    [Environment]::SetEnvironmentVariable('YOUTRACK_URL', $youTrackUrl, 'User')
-    [Environment]::SetEnvironmentVariable('YOUTRACK_TOKEN', $plainToken, 'User')
+    [Environment]::SetEnvironmentVariable('YOUTRACK_API_URL', $youTrackUrl, 'User')
+    [Environment]::SetEnvironmentVariable('YOUTRACK_API_KEY', $plainToken, 'User')
 
-    $env:YOUTRACK_URL = $youTrackUrl
-    $env:YOUTRACK_TOKEN = $plainToken
+    $env:YOUTRACK_API_URL = $youTrackUrl
+    $env:YOUTRACK_API_KEY = $plainToken
 
     Write-Host 'YouTrack environment variables were set for this shell and the current Windows user.'
 }
@@ -298,7 +298,7 @@ finally {
 
 #### Rotating the token
 
-To rotate, revoke the old token in YouTrack, run Hardened setup to save the new token, and execute `[Environment]::SetEnvironmentVariable('YOUTRACK_TOKEN', $null, 'User')` to remove any lingering HKCU plaintext token. Close open shells or execute `Remove-Item Env:\YOUTRACK_TOKEN` to clear any stale process environment variables.
+To rotate, revoke the old token in YouTrack, run Hardened setup to save the new token, and execute `[Environment]::SetEnvironmentVariable('YOUTRACK_API_KEY', $null, 'User')` to remove any lingering HKCU plaintext token. Close open shells or execute `Remove-Item Env:\YOUTRACK_API_KEY` to clear any stale process environment variables.
 
 It is parsed by a strict subset reader: 2-space indent, `key: value`, nested maps,
 `#` comments. **No flow mappings** (`{ a: 1 }`), lists, or anchors — and **unknown keys
