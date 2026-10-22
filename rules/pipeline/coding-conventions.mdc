@@ -12,7 +12,11 @@ alwaysApply: false
 
 Do not add descriptive comments (inline `//`, XML `///`, or block comments) unless the user explicitly requests them or a best practice requires them.
 
-**Exception:** test methods may use `// arrange`, `// act`, and `// assert` section comments.
+**Exceptions (exactly three):**
+
+- AAA test headers in test methods: `// arrange`, `// act`, `// assert`.
+- Intentional empty-block justifications stating why a block that is empty on purpose is empty.
+- Narrowly scoped warning suppressions: `#pragma warning disable`/`restore` pairs and `// ReSharper disable once …` directives, scoped to the fewest lines possible and carrying a brief justification on the same line.
 
 ## Interface placement
 

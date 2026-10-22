@@ -104,8 +104,10 @@ configured model and effort. Only `fast` is pinned to a cheaper model by default
 - A surviving mutant is a missing test. Fix the test, never the threshold.
 - Match the repo's existing architecture, assertion library, and mocking library.
   Introducing a second one is a defect.
-- No explanatory comments (`// arrange` / `// act` / `// assert` in tests are the
-  one exception).
+- No explanatory comments. Three exemptions only: AAA test headers (`// arrange` /
+  `// act` / `// assert`), a stated reason on an intentionally empty block, and
+  narrowly scoped warning suppressions (`#pragma warning disable`/`restore` pairs,
+  `// ReSharper disable once …`) justified on the same line.
 - Never mock the data-access driver for behaviour that depends on real query
   translation or serialisation — use Testcontainers.
 
