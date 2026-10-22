@@ -27,7 +27,7 @@ $ARGUMENTS
 Run from repository root:
 
 ```powershell
-dotnet stryker --config-file stryker-config.json --since:$(git merge-base HEAD origin/main)
+pwsh -NoProfile -File ./scripts/run-mutation.ps1 # Stryker's --since filter is unusable from git worktrees
 dotnet test --collect:"XPlat Code Coverage"
 dotnet test
 # Only when acceptance tests exist (opt-in for now):
@@ -39,7 +39,7 @@ Stryker requires `dotnet tool restore` (see `dotnet-tools.json`).
 ## Mutation Score
 
 - Threshold: `gates.mutation.threshold` in `harness.yml` (default **80%**) on mutated code in scope
-- Scope: the assemblies listed in `stryker-config.json` (see `stryker-config.json`)
+- Scope: changed production files (grouped by project; a file that belongs to a test project is not production scope, and Stryker's `--since` filter is unusable from git worktrees)
 - If score below threshold: strengthen unit/property tests or simplify code — re-run Stryker
 
 ## Gherkin Survivors *(only when acceptance tests exist)*

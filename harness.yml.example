@@ -74,6 +74,55 @@ gates:
     # A surviving mutant means the test is inadequate — fix the test, not this number.
     threshold: 80
 
+    # Artifact-kill guard, expressed as a share of tested mutants. One test that
+    # kills more than this percentage of the mutants a run tested is a suspected
+    # artifact kill - usually a test that fails on every run, which inflates the
+    # score without asserting anything. 1..100. The rule is not applied when a
+    # run tested fewer than 20 mutants, because one test can legitimately hold
+    # most of a sample that small.
+    maxKillShare: 50
+
+    # Artifact-kill guard, expressed as a file span: the most distinct source
+    # files one test may kill mutants in. A unit test exercises a few related
+    # types, so a wider span means the test is failing for a reason outside the
+    # mutation (state leaking across mutant runs). Integer >= 1. It catches
+    # contamination that stays under the share limit.
+    maxKillFileSpan: 15
+
+    # Test-runner parallelism. `null` means half the runner's logical cores,
+    # which is Stryker's own ceiling and recommendation. Raise it only if you
+    # have measured that it does not turn survivors into timeouts: a timeout
+    # counts as detected, so over-subscription raises the score dishonestly.
+    concurrency: null
+
+    # The project `-WholeProject` mutates when the command line names none. `null`
+    # auto-detects: the one production project that has an eligible test project
+    # and is not excluded. Set it when a repo has more than one, because mutating
+    # whichever one happens to sort first would make a failing gate unauditable.
+    # The value is the project name as `-Project` takes it (no .csproj suffix).
+    wholeProject: null
+
+    # The Stryker test runner `install.ps1` renders into stryker-config.json.
+    # `vstest` is Stryker's default and right for xUnit v2, NUnit and MSTest.
+    # `mtp` is required by xUnit v3 test projects, whose tests are executables:
+    # under VSTest they run in a child process that never sees the active mutant,
+    # so every mutant survives and the gate reports a false failure. `null`
+    # leaves the file's own `test-runner` untouched, which is what a repo that
+    # already chose a runner on purpose wants. scripts/run-mutation.ps1 refuses
+    # to run until stryker-config.json names its runner, and requires
+    # `coverage-analysis: off` plus `additional-timeout` of at least 30000 ms
+    # when it is `mtp`.
+    runner: null
+
+    # Projects that are never mutated, each with the reason printed alongside
+    # its NOT APPLICABLE verdict. The key is the project name as `-Project`
+    # takes it (no .csproj suffix), matched case-insensitively; a name here that
+    # matches no changed project is inert. Use it for a project whose proof
+    # needs a host, a database, or another process this gate does not drive.
+    # The delete-me pair below documents the shape - remove it for your repo.
+    exclusions:
+      Contoso.Api: "host proof lives in integration tests this gate does not drive"
+
   analyzers:
     # `All` enables the full CA rule set including the security families
     # (CA2100, CA3xxx, CA5xxx) that are off by default. This is what replaces

@@ -10,7 +10,23 @@ means a consuming repo's gates may start failing on code that previously passed.
 
 ## [Unreleased]
 
+### Added
+
+- **`scripts/run-mutation.ps1`: the mutation gate, ported from LamuFlix.** A worktree-safe replacement for `dotnet stryker --since` that resolves the diff through `git merge-base`, maps changed files to their projects, writes one temporary Stryker config per project with `since` disabled, and evaluates each report itself. It exits 0/1/2 with `SKIPPED (scope-empty)` and `NOT APPLICABLE` as distinct exit-2 verdicts, refuses to report a pass when no report was produced, and writes `mutation-timing.json`. Artifact kills fail the gate: kills attributed to `*ArchitectureTests`, one test killing more than `gates.mutation.maxKillShare` percent of tested mutants (default 50, not applied below 20 tested), or one test spanning more than `gates.mutation.maxKillFileSpan` source files (default 15). See ADR 0028.
+- **`scripts/new-mutation-receipt.ps1`**: measures one pushed commit and writes a committable receipt per project, including whether the test process actually loaded the mutated assembly.
+- **`scripts/run-web-gates.ps1`**: the repo-owned frontend gate (`gates.web.enabled`), lint, `tsc --noEmit`, tests and build, `-All` to ignore the diff.
+- **Four `harness.yml` keys under `gates.mutation`**: `maxKillShare` (50), `maxKillFileSpan` (15), `concurrency` (unset: half the runner's cores), and `exclusions`, the first map-typed key: project name to the reason printed with its `NOT APPLICABLE` verdict. `gates.mutation.runner` (`vstest`/`mtp`, unset by default) is what `install.ps1` renders into `stryker-config.json`.
+- **`Test-RunMutation.ps1`**: a synthesised-fixture suite (47 cases) for the mutation gate, covering classification, scope, the artifact-kill rules, runner wiring and whole-project mode. It builds its own git repository and a stub `dotnet`, so it runs in this repo, which has no C# solution of its own.
+
+### Changed
+
+- **The mutation gate is invoked as `pwsh -NoProfile -File ./scripts/run-mutation.ps1`**, not `dotnet stryker --since:$(git merge-base HEAD origin/main)`, in the architect and verify skills, the architect-gate rule, the `mutation-analyst` and `gate-runner` agents, and the consumer `CLAUDE.md`/`AGENTS.md`. Stryker's `--since` filter measures nothing from a linked worktree, so an unscoped pipeline run could score another branch's code. Ported from LamuFlix.
+- **`install.ps1` merges into `stryker-config.json` instead of rebuilding it.** Only the keys the harness owns are rendered; `test-runner`, `ignore-methods`, `solution`, `project` and anything the team added survive a reinstall. The old behaviour deleted `test-runner` on every run, which left the mutation gate reporting `GATE NOT WIRED` for a gate that had been wired the day before.
+- **The shipped `stryker-config.json` and `dotnet-tools.json` templates move to Stryker 5.0.0 and ReSharper 2026.1.5.2**, and the Stryker template now names its runner (`vstest`) and sets `additional-timeout: 30000`.
+
 ### Fixed
+
+- **`harness.yml` accepts an explicitly written `null` for any non-map key**, so `gates.mutation.concurrency: null` and `gates.mutation.runner: null` read as unset instead of failing the integer parser.
 
 - **ship-review no longer makes the consuming clone shallow.** The `origin/main` refresh in `_Get-ShipReviewRebaseDelta.ps1` (and the matching SKILL.md and ADR 0014 wording) dropped `--depth=1`. In a full clone that flag wrote `.git/shallow` at the fetched tip, hiding the history `git merge-base HEAD origin/main` needs and making later pulls fail with `refusing to merge unrelated histories`. Freshness is still established by the forced fetch plus the `ls-remote` tip check.
 - **Stryker diffs against the branch fork point.** Every unscoped pipeline invocation (architect, verify, architect-gate rule, gate-runner and mutation-analyst agents, consumer CLAUDE.md/AGENTS.md) now passes `--since:$(git merge-base HEAD origin/main)`, and the rendered `stryker-config.json` sets `since.target` to `origin/<baseBranch>`. A local `main` goes stale and a moving `origin/main` pulls in upstream churn; neither is the branch's own change set. Ported from LamuFlix.

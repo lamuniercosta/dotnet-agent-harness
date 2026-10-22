@@ -649,6 +649,14 @@ jobs:
         shell: pwsh
         run: ./packs/dotnet/scripts/Test-GherkinMutation.ps1
 
+      # The code-mutation gate decides a repo's verdict from a diff, so its
+      # classification cases (scope-empty vs NOT APPLICABLE vs FAILED) are the
+      # contract, not an implementation detail. The suite synthesises its own git
+      # repository and stub `dotnet`, so it needs no solution and no restore.
+      - name: Mutation gate classifies and evaluates as documented
+        shell: pwsh
+        run: ./packs/dotnet/scripts/Test-RunMutation.ps1
+
       - name: Task branch helpers never push through a protected upstream
         shell: pwsh
         run: ./packs/dotnet/scripts/Test-TaskBranchScripts.ps1

@@ -35,7 +35,7 @@ The point of the harness. Each is a script, not a suggestion.
 | Roslyn analyzers | CA/IDE/VSTHRD at warning+, **incl. the security families** | `Microsoft.CodeAnalysis.NetAnalyzers` |
 | Cyclomatic complexity | 15 implementing, **6** after refactor | CA1502 + `CodeMetricsConfig.txt` |
 | Inspections & duplication | zero findings on changed files | JetBrains InspectCode (free CLI tool) |
-| Mutation score | **80%** on changed code | Stryker.NET |
+| Mutation score | **80%** on changed code, minus artifact kills | Stryker.NET |
 | Property tests | required for pure/domain logic | FsCheck |
 | Vulnerable packages | zero, including transitive | `dotnet list package --vulnerable` |
 
@@ -59,7 +59,10 @@ Three details that carry more weight than they look:
   three analyzer gates, re-run with `-All` when you want verification rather than a
   diff check. The other gates take their own scope parameters instead of `-All` —
   gherkin-mutation's `-SpecsPath`, for instance, aims it at acceptance tests outside
-  `specs/`, turning a skip into a run.
+  `specs/`, turning a skip into a run. Mutation testing has one more exit 2:
+  `run-mutation.ps1` returns **NOT APPLICABLE** when every changed project is listed in
+  `harness.yml` `gates.mutation.exclusions` with its reason, because a project whose
+  proof needs a host or a database has nothing this gate can measure.
 
 Every threshold lives in exactly one place: `harness.yml`. The tool configs
 (`CodeMetricsConfig.txt`, `stryker-config.json`, `.editorconfig` severities) and the
