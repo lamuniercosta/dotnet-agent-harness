@@ -16,7 +16,7 @@ After `/refactor` passes all refactor gates.
 From repository root:
 
 ```powershell
-dotnet stryker --config-file stryker-config.json --since:$(git merge-base HEAD origin/main)
+pwsh -NoProfile -File ./scripts/run-mutation.ps1 # Stryker's --since filter is unusable from git worktrees
 dotnet test
 # Only when acceptance tests exist (opt-in for now):
 ./scripts/run-gherkin-mutation.ps1
@@ -26,7 +26,7 @@ Ensure tools are restored: `dotnet tool restore`
 
 ## Thresholds
 
-- **Stryker mutation score:** at or above `gates.mutation.threshold` in `harness.yml` (default **80%**), rendered into `stryker-config.json` by `install.ps1`.
+- **Stryker mutation score:** at or above `gates.mutation.threshold` in `harness.yml` (default **80%**), read by `scripts/run-mutation.ps1`. Artifact kills fail the gate too: no single test may kill more than `gates.mutation.maxKillShare` percent of tested mutants (default 50) or span more than `gates.mutation.maxKillFileSpan` source files (default 15).
 
   A surviving mutant means the mutated line's behaviour is unasserted. **Fix the test, never the threshold** — lowering the number is accepting the defect, not resolving it. Route survivors through `mutation-analyst`, which separates real gaps from equivalent mutants.
 - **Gherkin mutation** *(only when `specs/<feature>/acceptance/*.feature` exists)*: zero survivors — mutated scenarios must cause test failures. Acceptance tests are opt-in for now; skip this check when there are none.

@@ -62,7 +62,7 @@ overwrites it.
 ./scripts/run-property-tests.ps1
 ./scripts/run-vulnerable-packages.ps1
 dotnet test
-dotnet stryker --since:$(git merge-base HEAD origin/main)   # minutes-expensive; pre-PR only
+pwsh -NoProfile -File ./scripts/run-mutation.ps1            # minutes-expensive; pre-PR only (Stryker's --since is unusable from worktrees)
 ```
 
 `-BaseRef`/`-Files`/`-All` exist **only on the three analyzer gates** — roslyn-analyzers,
@@ -73,7 +73,7 @@ rest take their own scope instead: `run-property-tests.ps1 -Project -Category`,
 -IncludeTransitive`. Passing `-All` to one of those exits 1 on a parameter-binding
 error — a failure to launch, not a failed scan; do not report it as a red gate.
 
-**Exit 0 = pass, 1 = fail, 2 = SKIPPED or OPT-OUT.** SKIPPED (scope-empty) is blocking and never green; OPT-OUT (gate disabled in harness.yml) is non-blocking `SKIP`, reported as `SKIP` not PASS.
+**Exit 0 = pass, 1 = fail, 2 = SKIPPED or OPT-OUT.** SKIPPED (scope-empty) is blocking and never green; OPT-OUT (gate disabled in harness.yml) is non-blocking `SKIP`, reported as `SKIP` not PASS. `run-mutation.ps1` also returns 2 as **NOT APPLICABLE** when every changed project is listed in `harness.yml` `gates.mutation.exclusions`; that is non-blocking too, reported as N/A and never as PASS.
 
 **A gate that could not run has not passed.** The scripts enforce this themselves:
 if the analyzer they depend on is not wired, they exit 1 with remediation rather

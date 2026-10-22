@@ -1,8 +1,11 @@
 {
   "stryker-config": {
-    "reporters": ["html", "progress"],
+    "mutation-level": "Standard",
+    "test-runner": "vstest",
+    "additional-timeout": 30000,
+    "since": { "target": "origin/main" },
     "thresholds": { "high": 90, "low": 80, "break": 80 },
-    "ignore-methods": ["ToString", "GetHashCode"],
-    "mutation-level": "Standard"
+    "reporters": ["progress", "html", "json"],
+    "ignore-methods": ["ToString", "GetHashCode"]
   }
 }

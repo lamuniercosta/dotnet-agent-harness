@@ -35,6 +35,10 @@ Copied into <target-repo>:
   scripts/run-property-tests.ps1
   scripts/run-gherkin-mutation.ps1
   scripts/_gherkin-mutation-lib.ps1
+  scripts/run-mutation.ps1
+  scripts/Test-RunMutation.ps1  (self-contained fixture; proves the gate's contract)
+  scripts/run-web-gates.ps1
+  scripts/new-mutation-receipt.ps1
   Directory.Build.props        (skipped if present)
   CodeMetricsConfig.txt        (skipped if present)
   .config/dotnet-tools.json    (skipped if present)
@@ -75,6 +79,12 @@ $gateScripts = @(
     'run-property-tests.ps1',
     'run-gherkin-mutation.ps1',
     '_gherkin-mutation-lib.ps1',
+    # The code-mutation gate sits beside the Gherkin one rather than replacing it:
+    # one mutates production C# through Stryker, the other mutates scenarios.
+    'run-mutation.ps1',
+    'Test-RunMutation.ps1',
+    'run-web-gates.ps1',
+    'new-mutation-receipt.ps1',
     'run-vulnerable-packages.ps1',
     '_harness-config.ps1'
 )

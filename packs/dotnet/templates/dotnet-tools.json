@@ -3,14 +3,14 @@
   "isRoot": true,
   "tools": {
     "jetbrains.resharper.globaltools": {
-      "version": "2026.1.3",
+      "version": "2026.1.5.2",
       "commands": [
         "jb"
       ],
       "rollForward": false
     },
     "dotnet-stryker": {
-      "version": "4.16.0",
+      "version": "5.0.0",
       "commands": [
         "dotnet-stryker"
       ],

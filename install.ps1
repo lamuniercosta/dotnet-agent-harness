@@ -1019,29 +1019,84 @@ if ($PSCmdlet.ShouldProcess($metricsFile, 'render CA1502 threshold')) {
 }
 Add-Result 'CodeMetricsConfig.txt' 'RENDERED' "CA1502: $($config['gates.complexity.implement'])"
 
-# 5b. stryker-config.json — mutation threshold
+# 5b. stryker-config.json — mutation threshold, merged into whatever the repo owns.
+#
+# This file is the project's own: it names the test runner, may pin ignore-methods,
+# a solution path or a mutation level, and carries whatever the team added. Only
+# the keys this harness actually owns are rendered, and everything else is
+# preserved. Rebuilding it from a fixed key list - which is what the first version
+# did - silently deleted test-runner and additional-timeout on every reinstall,
+# which left scripts/run-mutation.ps1 reporting GATE NOT WIRED for a gate that had
+# been wired the day before.
 $strykerFile = Join-Path $TargetRepo 'stryker-config.json'
 $breakAt = $config['gates.mutation.threshold']
-$stryker = [ordered]@{
-    'stryker-config' = [ordered]@{
-        'mutation-level' = 'Standard'
-        'since'          = [ordered]@{ 'target' = "origin/$($config['baseBranch'])" }
-        'thresholds'     = [ordered]@{
+$strykerTemplate = Join-Path $harnessRoot 'packs/dotnet/templates/stryker-config.json'
+
+$strykerBase = $null
+$strykerExisted = Test-Path $strykerFile
+if ($strykerExisted) {
+    try {
+        $strykerBase = Get-Content -LiteralPath $strykerFile -Raw | ConvertFrom-Json
+    }
+    catch {
+        $strykerBase = $null
+    }
+}
+elseif (Test-Path $strykerTemplate) {
+    $strykerBase = Get-Content -LiteralPath $strykerTemplate -Raw | ConvertFrom-Json
+}
+
+if ($null -eq $strykerBase) {
+    # An unreadable existing file is left untouched: turning a JSON syntax error
+    # into a silently rewritten config would hide it behind a green install.
+    Add-Result 'stryker-config.json' 'MANUAL' $(if ($strykerExisted) { 'not valid JSON - left alone; fix it and re-run' } else { 'template missing - create it from harness.yml.example' })
+}
+else {
+    if ($strykerBase.PSObject.Properties.Match('stryker-config').Count -eq 0) {
+        $strykerBase | Add-Member -NotePropertyName 'stryker-config' -NotePropertyValue ([PSCustomObject]@{}) -Force
+    }
+    $strykerNode = $strykerBase.'stryker-config'
+
+    $render = @{
+        'thresholds' = [PSCustomObject]@{
             'high'  = [Math]::Min(100, $breakAt + 10)
             'low'   = $breakAt
             'break' = $breakAt
         }
-        'reporters'      = @('progress', 'html', 'json')
+        'since'      = [PSCustomObject]@{ 'target' = "origin/$($config['baseBranch'])" }
     }
+
+    # The runner is a tracked decision, not an install-time guess: vstest covers
+    # xUnit v2, NUnit and MSTest, and xUnit v3 test projects need mtp. Render it
+    # only when harness.yml declares it, so a repo that already chose a runner
+    # keeps that choice across reinstalls.
+    $declaredRunner = $config['gates.mutation.runner']
+    if (-not [string]::IsNullOrWhiteSpace($declaredRunner)) {
+        $render['test-runner'] = $declaredRunner
+        if ($declaredRunner -eq 'mtp') {
+            # The MTP runner cannot use coverage analysis, and a tight timeout
+            # allowance turns survivors into detected timeouts as the machine
+            # gets busy. Both are requirements of an honest verdict, not tuning.
+            $render['coverage-analysis'] = 'off'
+            $existingTimeout = if ($strykerNode.PSObject.Properties.Match('additional-timeout').Count -gt 0) { $strykerNode.'additional-timeout' } else { 0 }
+            if ($existingTimeout -isnot [long] -and $existingTimeout -isnot [int]) { $existingTimeout = 0 }
+            if ([long]$existingTimeout -lt 30000) { $render['additional-timeout'] = 30000 }
+        }
+    }
+
+    if ($config['solution']) {
+        $render['solution'] = [System.IO.Path]::GetRelativePath($TargetRepo, $config['solution']).Replace('\', '/')
+    }
+
+    foreach ($key in $render.Keys) {
+        $strykerNode | Add-Member -NotePropertyName $key -NotePropertyValue $render[$key] -Force
+    }
+
+    if ($PSCmdlet.ShouldProcess($strykerFile, 'render mutation threshold')) {
+        $strykerBase | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $strykerFile -Encoding UTF8
+    }
+    Add-Result 'stryker-config.json' $(if ($strykerExisted) { 'RENDERED' } else { 'ADDED' }) "break at $breakAt%, other keys preserved"
 }
-if ($config['solution']) {
-    $rel = [System.IO.Path]::GetRelativePath($TargetRepo, $config['solution']).Replace('\', '/')
-    $stryker['stryker-config']['solution'] = $rel
-}
-if ($PSCmdlet.ShouldProcess($strykerFile, 'render mutation threshold')) {
-    $stryker | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $strykerFile -Encoding UTF8
-}
-Add-Result 'stryker-config.json' 'RENDERED' "break at $breakAt%"
 
 # 5c. Directory.Build.props — AnalysisMode gates the security CA families
 $propsFile = Join-Path $TargetRepo 'Directory.Build.props'

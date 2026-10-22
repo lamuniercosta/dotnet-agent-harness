@@ -10,9 +10,19 @@
 # threshold to its default and let a gate report a pass the repo never earned -
 # the exact failure mode the gates exist to prevent.
 #
+# One value type is a map rather than a scalar: gates.mutation.exclusions, whose
+# direct children are project names that carry dots (LamuFlix.Api). The key
+# grammar below widens for exactly that parent path, and nowhere else - nesting
+# under an entry, a scalar on the map key itself, and near-miss spellings such as
+# gates.mutation.exclusion or gates.mutations.exclusions stay hard errors.
+#
 # Dot-sourced by _gate-common.ps1; not intended to be run directly.
 
 Set-StrictMode -Version Latest
+
+# The one map-typed key. Anchoring the widened key grammar on this exact path
+# is what keeps a near-miss spelling of any segment a hard error.
+$script:HarnessMapPrefix = 'gates.mutation.exclusions'
 
 # Dotted key -> value type. This doubles as the allow-list: anything not here
 # is rejected by the parser.
@@ -27,6 +37,12 @@ $script:HarnessSchema = @{
     'gates.complexity.implement'                 = 'int'
     'gates.complexity.refactor'                  = 'int'
     'gates.mutation.threshold'                   = 'int'
+    'gates.mutation.maxKillShare'                = 'int'
+    'gates.mutation.maxKillFileSpan'             = 'int'
+    'gates.mutation.concurrency'                 = 'int'
+    'gates.mutation.wholeProject'                = 'scalar'
+    'gates.mutation.exclusions'                  = 'map'
+    'gates.mutation.runner'                      = 'scalar'
     'gates.analyzers.mode'                       = 'scalar'
     'gates.analyzers.warningsAsErrors'           = 'bool'
     'gates.vulnerablePackages.fail'              = 'bool'
@@ -68,6 +84,12 @@ function Get-HarnessDefaults {
         'gates.complexity.implement'                 = 15
         'gates.complexity.refactor'                  = 6
         'gates.mutation.threshold'                   = 80
+        'gates.mutation.maxKillShare'                = 50
+        'gates.mutation.maxKillFileSpan'             = 15
+        'gates.mutation.concurrency'                 = $null   # resolved from the runner core count in run-mutation.ps1
+        'gates.mutation.wholeProject'                = $null   # unset: -WholeProject auto-detects, or names the project on the command line
+        'gates.mutation.exclusions'                  = @{}
+        'gates.mutation.runner'                      = $null   # unset: stryker-config.json owns the runner choice
         'gates.analyzers.mode'                       = 'All'
         'gates.analyzers.warningsAsErrors'           = $false
         'gates.vulnerablePackages.fail'              = $true
@@ -134,13 +156,28 @@ function ConvertFrom-HarnessYaml {
         if ($line -match "`t") {
             throw "${Path}:${lineNo}: tabs are not supported; use 2 spaces per level."
         }
-        if ($line -notmatch '^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$') {
+        # Project names carry dots, so a child of the one map prefix also matches a
+        # dotted grammar. Which grammar is legal is decided after the parent path
+        # is known, below; $Matches is captured eagerly because the second -match
+        # overwrites it.
+        $widenedMatch = $line -match '^(\s*)([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)+)\s*:\s*(.*)$'
+        $widenedGroups = if ($widenedMatch) { @($Matches[1], $Matches[2], $Matches[3]) } else { $null }
+
+        if ($line -match '^(\s*)([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$') {
+            $indent = $Matches[1].Length
+            $key = $Matches[2]
+            $value = $Matches[3].Trim()
+            $widened = $false
+        }
+        elseif ($widenedGroups) {
+            $indent = $widenedGroups[0].Length
+            $key = $widenedGroups[1]
+            $value = $widenedGroups[2].Trim()
+            $widened = $true
+        }
+        else {
             throw "${Path}:${lineNo}: expected 'key: value', got '$($raw.Trim())'."
         }
-
-        $indent = $Matches[1].Length
-        $key = $Matches[2]
-        $value = $Matches[3].Trim()
 
         if ($indent % 2 -ne 0) {
             throw "${Path}:${lineNo}: indent must be a multiple of 2 spaces (got $indent)."
@@ -152,42 +189,82 @@ function ConvertFrom-HarnessYaml {
             $indents.RemoveAt($indents.Count - 1)
         }
 
+        $parentPath = @($stack.ToArray()) -join '.'
+
+        # Anchored on the whole path, so a near-miss spelling of any segment is
+        # rejected here rather than silently collecting entries of its own.
+        if ($widened -and $parentPath -ne $script:HarnessMapPrefix) {
+            throw "${Path}:${lineNo}: dotted key '$key' is only a direct child of '$script:HarnessMapPrefix'; under '$parentPath' it is an unknown key."
+        }
+
         if ($value -eq '') {
+            if ($parentPath -eq $script:HarnessMapPrefix) {
+                throw "${Path}:${lineNo}: '$key' under '$script:HarnessMapPrefix' needs a reason on the same line; nesting below an entry is not supported."
+            }
             [void]$stack.Add($key)
             [void]$indents.Add($indent)
             continue
         }
 
-        $dotted = (@($stack.ToArray()) + $key) -join '.'
+        $dottedKey = (@($stack.ToArray()) + $key) -join '.'
 
-        if ($result.ContainsKey($dotted)) {
-            throw "${Path}:${lineNo}: duplicate key '$dotted'."
+        if ($result.ContainsKey($dottedKey)) {
+            throw "${Path}:${lineNo}: duplicate key '$dottedKey'."
         }
-        if (-not $script:HarnessSchema.ContainsKey($dotted)) {
-            if ($dotted -match '^agents\.tiers\.(fast|balanced|deep)\.(claude|cursor|codex)$') {
-                throw "${Path}:${lineNo}: legacy scalar agent tier '$dotted' is unsupported in 0.3.0; nest 'model:' and 'effort:' below the host. See CHANGELOG.md."
+
+        $schemaType = if ($script:HarnessSchema.ContainsKey($dottedKey)) {
+            $script:HarnessSchema[$dottedKey]
+        }
+        elseif ($dottedKey.StartsWith($script:HarnessMapPrefix + '.', [System.StringComparison]::Ordinal)) {
+            'map:entry'
+        }
+        else {
+            $null
+        }
+
+        if ($null -eq $schemaType) {
+            if ($dottedKey -match '^agents\.tiers\.(fast|balanced|deep)\.(claude|cursor|codex)$') {
+                throw "${Path}:${lineNo}: legacy scalar agent tier '$dottedKey' is unsupported in 0.3.0; nest 'model:' and 'effort:' below the host. See CHANGELOG.md."
             }
             $known = ($script:HarnessSchema.Keys | Sort-Object) -join ', '
-            throw "${Path}:${lineNo}: unknown key '$dotted'.`n  Known keys: $known"
+            throw "${Path}:${lineNo}: unknown key '$dottedKey'.`n  Known keys: $known"
         }
 
-        $result[$dotted] = switch ($script:HarnessSchema[$dotted]) {
-            'int' {
-                $parsed = 0
-                if (-not [int]::TryParse($value, [ref]$parsed)) {
-                    throw "${Path}:${lineNo}: '$dotted' must be an integer, got '$value'."
+        # 'null' means "unset" to the loader below, so an entry written that way
+        # would vanish from the map instead of naming its reason.
+        if ($schemaType -eq 'map:entry' -and $value -eq 'null') {
+            throw "${Path}:${lineNo}: '$dottedKey' needs a reason; 'null' is not one."
+        }
+
+        # A map entry's reason is coerced exactly like a scalar, so it lands in
+        # the default branch rather than repeating that coercion here. 'null'
+        # means unset for every other type, which is how an optional int or
+        # scalar is written out explicitly instead of being omitted.
+        $result[$dottedKey] = if ($value -eq 'null' -and $schemaType -ne 'map') {
+            $null
+        }
+        else {
+            switch ($schemaType) {
+                'int' {
+                    $parsed = 0
+                    if (-not [int]::TryParse($value, [ref]$parsed)) {
+                        throw "${Path}:${lineNo}: '$dottedKey' must be an integer, got '$value'."
+                    }
+                    $parsed
                 }
-                $parsed
-            }
-            'bool' {
-                switch ($value.ToLowerInvariant()) {
-                    'true' { $true }
-                    'false' { $false }
-                    default { throw "${Path}:${lineNo}: '$dotted' must be true or false, got '$value'." }
+                'bool' {
+                    switch ($value.ToLowerInvariant()) {
+                        'true' { $true }
+                        'false' { $false }
+                        default { throw "${Path}:${lineNo}: '$dottedKey' must be true or false, got '$value'." }
+                    }
                 }
-            }
-            default {
-                if ($value -eq 'null') { $null } else { $value.Trim('"').Trim("'") }
+                'map' {
+                    throw "${Path}:${lineNo}: '$dottedKey' must be a map of project names to reasons, got the scalar '$value'."
+                }
+                default {
+                    $value.Trim('"').Trim("'")
+                }
             }
         }
     }
@@ -254,8 +331,53 @@ function Get-HarnessValue {
     if (-not $script:HarnessSchema.ContainsKey($Key)) {
         throw "Unknown harness key '$Key'. See harness.yml.example."
     }
+    if ($script:HarnessSchema[$Key] -eq 'map') {
+        throw "Harness key '$Key' is a map; read it with Get-HarnessMap."
+    }
 
     return (Get-HarnessConfig -RepoRoot $RepoRoot)[$Key]
+}
+
+function Get-HarnessMap {
+    <#
+      Reads one map-typed key and returns its entries as
+      [PSCustomObject]@{ Project; Reason }, ordered by project name.
+
+      Every entry is validated as it is read, including entries that match no
+      project in the diff, so a policy typo is a configuration error at read
+      time instead of a silently ignored line. Throws on a blank reason and on a
+      key that names a .csproj file, because -Project and the policy map address
+      the same projects by name alone.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Key,
+        [string]$RepoRoot
+    )
+
+    if (-not $script:HarnessSchema.ContainsKey($Key) -or $script:HarnessSchema[$Key] -ne 'map') {
+        throw "Unknown harness map '$Key'. See harness.yml.example."
+    }
+
+    $config = Get-HarnessConfig -RepoRoot $RepoRoot
+    $prefix = "$Key."
+    $entries = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+    $keys = @($config.Keys | Where-Object { $_.StartsWith($prefix, [System.StringComparison]::Ordinal) } | Sort-Object)
+    foreach ($dottedKey in $keys) {
+        $project = $dottedKey.Substring($prefix.Length)
+        $reason = ([string]$config[$dottedKey]).Trim()
+
+        if ($project.EndsWith('.csproj', [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "harness.yml $Key entry '$project' names a .csproj file; use the project name alone, the form -Project takes."
+        }
+        if ([string]::IsNullOrWhiteSpace($reason)) {
+            throw "harness.yml $Key entry '$project' has an empty reason; every excluded project must say why it is not mutated."
+        }
+
+        $entries.Add([PSCustomObject]@{ Project = $project; Reason = $reason })
+    }
+
+    return $entries.ToArray()
 }
 
 # Paths that are never part of the repo under analysis: build output, vendored
