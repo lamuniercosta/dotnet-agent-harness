@@ -11,7 +11,7 @@ Intake is **tracker-neutral**. `harness.yml` `tracker` is `github` (default), `y
 
 ## Task intake
 
-Delegate retrieval to `./scripts/get-task.ps1` — do not call `gh` or YouTrack REST yourself, and never print `YOUTRACK_TOKEN`:
+Delegate retrieval to `./scripts/get-task.ps1` — do not call `gh` or YouTrack REST yourself, and never print `YOUTRACK_API_KEY`:
 
 ```powershell
 ./scripts/get-task.ps1 -TaskId 142

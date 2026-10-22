@@ -448,8 +448,8 @@ try {
     $tempUri = Join-Path $tempRoot 'uri.txt'
     $invoke = { param($Method, $Uri, $Headers, $TimeoutSec) ($Headers | ConvertTo-Json -Compress) | Out-File $tempHeaders; $Uri.ToString() | Out-File $tempUri }
     Set-Content -LiteralPath (Join-Path $wtWork 'harness.yml') -Encoding UTF8 -Value 'tracker: youtrack'
-    $Env:YOUTRACK_URL = 'https://example.invalid'
-    $Env:YOUTRACK_TOKEN = 'perm:test-token'
+    $Env:YOUTRACK_API_URL = 'https://example.invalid'
+    $Env:YOUTRACK_API_KEY = 'perm:test-token'
     & $getTask -TaskId DAH-123 -Description 'Bug' -RepoRoot $wtWork -RestMethodInvoker $invoke | Out-Null
     $capturedHeaders = Get-Content -Raw $tempHeaders
     $capturedUri = Get-Content -Raw $tempUri
@@ -465,8 +465,8 @@ try {
 
     # (c) Test subprocess call with stubbed token
     Set-Content -LiteralPath (Join-Path $wtWork 'harness.yml') -Encoding UTF8 -Value 'tracker: youtrack'
-    $env:YOUTRACK_URL = 'https://example.invalid'
-    $env:YOUTRACK_TOKEN = 'perm:test-token'
+    $env:YOUTRACK_API_URL = 'https://example.invalid'
+    $env:YOUTRACK_API_KEY = 'perm:test-token'
     $invoke = { param($Method, $Uri, $Headers, $TimeoutSec) return [PSCustomObject]@{idReadable='DAH-123'; summary='Bug'; description='Bug'; customFields=@(@{name='Type'; value='Bug'})} }
     # Cannot pass scriptblock to subprocess, so we must mock the invoker differently or just expect 401/error.
     # The simplest fix for the token error is just to stub the env.
@@ -476,23 +476,23 @@ try {
 
     # (d) Drop GET_TASK_MOCK_TRACKER and Scope property
     Set-Content -LiteralPath (Join-Path $wtWork 'harness.yml') -Encoding UTF8 -Value 'tracker: youtrack'
-    $env:YOUTRACK_URL = 'https://example.invalid'
-    $env:YOUTRACK_TOKEN = 'perm:test-token'
+    $env:YOUTRACK_API_URL = 'https://example.invalid'
+    $env:YOUTRACK_API_KEY = 'perm:test-token'
     $tempEnv = Join-Path $tempRoot 'env.txt'
     $reader = {
         param($Name, $Target)
         "${Name}:${Target}" | Out-File $tempEnv -Append
-        if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
-        if ($Name -eq 'YOUTRACK_TOKEN' -and $Target -eq 'Process') { return 'perm:test-token' }
+        if ($Name -eq 'YOUTRACK_API_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
+        if ($Name -eq 'YOUTRACK_API_KEY' -and $Target -eq 'Process') { return 'perm:test-token' }
         return ''
     }
     $task = & $getTask -TaskId DAH-123 -RepoRoot $wtWork -EnvironmentReader $reader -RestMethodInvoker { param($Method, $Uri, $Headers, $TimeoutSec) return [PSCustomObject]@{idReadable='DAH-123'; summary='Bug'; description='Bug'; customFields=@(@{name='Type'; value='Bug'})} } | ConvertFrom-Json
     Assert-That 'Id equals literal DAH-123' ($task.Id -eq 'DAH-123')
     $onWin = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform([System.Runtime.InteropServices.OSPlatform]::Windows)
-    if ($onWin) { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) } else { Assert-That 'env log contains YOUTRACK_TOKEN:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_TOKEN:Process')) }
+    if ($onWin) { Assert-That 'env log contains YOUTRACK_API_KEY:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_API_KEY:Process')) } else { Assert-That 'env log contains YOUTRACK_API_KEY:Process' ([bool]((Get-Content $tempEnv) -match 'YOUTRACK_API_KEY:Process')) }
     Remove-Item -LiteralPath (Join-Path $wtWork 'harness.yml') -Force -ErrorAction SilentlyContinue
 
-    # ── DEV-206: YOUTRACK_TOKEN DPAPI three-source resolution ────────────────
+    # ── DEV-206: YOUTRACK_API_KEY DPAPI three-source resolution ────────────────
     # Seam-driven order tests run on every platform. Real DPAPI is Windows-only.
     # HARNESS_SKIP_REAL_DPAPI=1 forces that branch off (ubuntu-CI simulation).
     # Fake tokens stay in comparisons; Assert-That Detail is a source tag only.
@@ -511,7 +511,7 @@ try {
     # (e) DPAPI seam wins when process env is empty; reader trims trailing newline
     $envReaderE = {
         param($Name, $Target)
-        if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
+        if ($Name -eq 'YOUTRACK_API_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
         return ''
     }
     $dpapiReaderE = { param($Path) return "perm:test-token-dpapi`n" }
@@ -523,8 +523,8 @@ try {
     # (f) process env wins over DPAPI seam
     $envReaderF = {
         param($Name, $Target)
-        if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
-        if ($Name -eq 'YOUTRACK_TOKEN' -and $Target -eq 'Process') { return 'perm:test-token-process' }
+        if ($Name -eq 'YOUTRACK_API_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
+        if ($Name -eq 'YOUTRACK_API_KEY' -and $Target -eq 'Process') { return 'perm:test-token-process' }
         return ''
     }
     $dpapiReaderF = { param($Path) return 'perm:test-token-dpapi' }
@@ -536,8 +536,8 @@ try {
     # (g) DPAPI seam returns nothing → User-scope env is the fallback
     $envReaderG = {
         param($Name, $Target)
-        if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
-        if ($Name -eq 'YOUTRACK_TOKEN' -and $Target -eq 'User') { return 'perm:test-token-user' }
+        if ($Name -eq 'YOUTRACK_API_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
+        if ($Name -eq 'YOUTRACK_API_KEY' -and $Target -eq 'User') { return 'perm:test-token-user' }
         return ''
     }
     $dpapiReaderG = { param($Path) return '' }
@@ -546,13 +546,13 @@ try {
     Assert-That 'g: empty DPAPI seam falls through to User-scope env' `
         ((Get-Content -LiteralPath $tokenSourceFile -Raw).Trim() -eq 'user') 'source-tag'
 
-    # (h) DPAPI seam is not consulted when resolving YOUTRACK_URL
+    # (h) DPAPI seam is not consulted when resolving YOUTRACK_API_URL
     $dpapiCallLog = Join-Path $tempRoot 'dpapi-calls.txt'
     Set-Content -LiteralPath $dpapiCallLog -Value '' -Encoding UTF8
     $envReaderH = {
         param($Name, $Target)
-        if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'User') { return 'https://example.invalid' }
-        if ($Name -eq 'YOUTRACK_TOKEN' -and $Target -eq 'User') { return 'perm:test-token-user' }
+        if ($Name -eq 'YOUTRACK_API_URL' -and $Target -eq 'User') { return 'https://example.invalid' }
+        if ($Name -eq 'YOUTRACK_API_KEY' -and $Target -eq 'User') { return 'perm:test-token-user' }
         return ''
     }
     $dpapiReaderH = {
@@ -563,7 +563,7 @@ try {
     & $getTask -TaskId DAH-123 -RepoRoot $wtWork -EnvironmentReader $envReaderH `
         -DpapiFileReader $dpapiReaderH -RestMethodInvoker $newTokenInvoker | Out-Null
     $dpapiCallCount = @(Get-Content -LiteralPath $dpapiCallLog | Where-Object { $_.Trim() -eq 'called' }).Count
-    Assert-That 'h: DPAPI seam is not consulted for YOUTRACK_URL' `
+    Assert-That 'h: DPAPI seam is not consulted for YOUTRACK_API_URL' `
         ($dpapiCallCount -eq 1) 'call-count'
     Assert-That 'h: token still comes from DPAPI when URL uses User env' `
         ((Get-Content -LiteralPath $tokenSourceFile -Raw).Trim() -eq 'dpapi') 'source-tag'
@@ -572,8 +572,8 @@ try {
     $dpapiBlobHex = '01000000D08C9DDF0115D1118C7A00C04FC297EBDEADBEEF'
     $envReaderFail = {
         param($Name, $Target)
-        if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
-        if ($Name -eq 'YOUTRACK_TOKEN' -and $Target -eq 'User') { return 'perm:test-token-user' }
+        if ($Name -eq 'YOUTRACK_API_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
+        if ($Name -eq 'YOUTRACK_API_KEY' -and $Target -eq 'User') { return 'perm:test-token-user' }
         return ''
     }
     $dpapiReaderFail = {
@@ -616,15 +616,15 @@ try {
         [System.IO.File]::WriteAllText($tokenFile, $blob + "`r`n", $utf8Bom)
 
         $oldProfile = $env:USERPROFILE
-        $oldProcToken = $env:YOUTRACK_TOKEN
-        $oldProcUrl = $env:YOUTRACK_URL
+        $oldProcToken = $env:YOUTRACK_API_KEY
+        $oldProcUrl = $env:YOUTRACK_API_URL
         $env:USERPROFILE = $fakeProfile
-        $env:YOUTRACK_TOKEN = $null
-        $env:YOUTRACK_URL = $null
+        $env:YOUTRACK_API_KEY = $null
+        $env:YOUTRACK_API_URL = $null
         try {
             $envReaderI = {
                 param($Name, $Target)
-                if ($Name -eq 'YOUTRACK_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
+                if ($Name -eq 'YOUTRACK_API_URL' -and $Target -eq 'Process') { return 'https://example.invalid' }
                 return ''
             }
             & $getTask -TaskId DAH-123 -RepoRoot $wtWork -EnvironmentReader $envReaderI `
@@ -634,8 +634,8 @@ try {
         }
         finally {
             $env:USERPROFILE = $oldProfile
-            if ($null -eq $oldProcToken) { Remove-Item Env:YOUTRACK_TOKEN -ErrorAction SilentlyContinue } else { $env:YOUTRACK_TOKEN = $oldProcToken }
-            if ($null -eq $oldProcUrl) { Remove-Item Env:YOUTRACK_URL -ErrorAction SilentlyContinue } else { $env:YOUTRACK_URL = $oldProcUrl }
+            if ($null -eq $oldProcToken) { Remove-Item Env:YOUTRACK_API_KEY -ErrorAction SilentlyContinue } else { $env:YOUTRACK_API_KEY = $oldProcToken }
+            if ($null -eq $oldProcUrl) { Remove-Item Env:YOUTRACK_API_URL -ErrorAction SilentlyContinue } else { $env:YOUTRACK_API_URL = $oldProcUrl }
         }
     }
     elseif ($IsWindows) {
@@ -644,10 +644,10 @@ try {
     elseif (-not $IsWindows) {
         # No DpapiFileReader: process env is the only source, so a missing
         # process token must fail. That is AC6 (DPAPI path skipped).
-        $oldSkipToken = $env:YOUTRACK_TOKEN
-        $oldSkipUrl = $env:YOUTRACK_URL
-        $env:YOUTRACK_TOKEN = $null
-        $env:YOUTRACK_URL = 'https://example.invalid'
+        $oldSkipToken = $env:YOUTRACK_API_KEY
+        $oldSkipUrl = $env:YOUTRACK_API_URL
+        $env:YOUTRACK_API_KEY = $null
+        $env:YOUTRACK_API_URL = 'https://example.invalid'
         try {
             $skipError = ''
             try {
@@ -656,11 +656,11 @@ try {
             }
             catch { $skipError = $_.Exception.Message }
             Assert-That 'non-Windows skips DPAPI file resolution' `
-                ($skipError -match 'YOUTRACK_TOKEN is not set') 'missing-token'
+                ($skipError -match 'YOUTRACK_API_KEY is not set') 'missing-token'
         }
         finally {
-            if ($null -eq $oldSkipToken) { Remove-Item Env:YOUTRACK_TOKEN -ErrorAction SilentlyContinue } else { $env:YOUTRACK_TOKEN = $oldSkipToken }
-            if ($null -eq $oldSkipUrl) { Remove-Item Env:YOUTRACK_URL -ErrorAction SilentlyContinue } else { $env:YOUTRACK_URL = $oldSkipUrl }
+            if ($null -eq $oldSkipToken) { Remove-Item Env:YOUTRACK_API_KEY -ErrorAction SilentlyContinue } else { $env:YOUTRACK_API_KEY = $oldSkipToken }
+            if ($null -eq $oldSkipUrl) { Remove-Item Env:YOUTRACK_API_URL -ErrorAction SilentlyContinue } else { $env:YOUTRACK_API_URL = $oldSkipUrl }
         }
     }
 

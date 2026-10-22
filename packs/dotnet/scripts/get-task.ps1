@@ -44,11 +44,11 @@ Reads the configured tracker and writes a JSON object with Id, Summary,
 Description, and Type. -Issue is a compatibility alias for -TaskId.
 
   github    numeric ids only; uses the gh CLI
-  youtrack  readable ids such as DAH-123; REST via YOUTRACK_URL / YOUTRACK_TOKEN.
-            YOUTRACK_TOKEN is resolved from process env, then (Windows) the
+  youtrack  readable ids such as DAH-123; REST via YOUTRACK_API_URL / YOUTRACK_API_KEY.
+            YOUTRACK_API_KEY is resolved from process env, then (Windows) the
             DPAPI file $env:USERPROFILE\.dotnet-agent-harness\youtrack-token,
             then (Windows) User-scope env. The file holds only the token.
-            YOUTRACK_URL stays in the environment (process env, then (Windows) User-scope env).
+            YOUTRACK_API_URL stays in the environment (process env, then (Windows) User-scope env).
   none      description-only; supplying -TaskId / -Issue is an error
 
 OPTIONS:
@@ -98,8 +98,8 @@ function Get-TrackerEnvironmentVariable {
 
     $dpapiPath = if (-not [string]::IsNullOrWhiteSpace($env:USERPROFILE)) { Join-Path $env:USERPROFILE (Join-Path '.dotnet-agent-harness' 'youtrack-token') } else { $null }
 
-    # File lookup is token-only. Resolving YOUTRACK_URL must never decrypt the file.
-    if ($Name -eq 'YOUTRACK_TOKEN') {
+    # File lookup is token-only. Resolving YOUTRACK_API_URL must never decrypt the file.
+    if ($Name -eq 'YOUTRACK_API_KEY') {
         $fileReader = $DpapiFileReader
         if (-not $fileReader -and $onWindows) {
             $fileReader = {
@@ -299,17 +299,17 @@ function Get-YouTrackTask {
         throw "YouTrack task ids must be a readable id such as DAH-123 (got '$Id')."
     }
 
-    $url = Get-TrackerEnvironmentVariable -Name 'YOUTRACK_URL'
-    $token = Get-TrackerEnvironmentVariable -Name 'YOUTRACK_TOKEN'
+    $url = Get-TrackerEnvironmentVariable -Name 'YOUTRACK_API_URL'
+    $token = Get-TrackerEnvironmentVariable -Name 'YOUTRACK_API_KEY'
 
     if ([string]::IsNullOrWhiteSpace($url)) {
-        throw 'YOUTRACK_URL is not set. Set it in the process environment, or on Windows as a User-scope variable. The file holds only the token. YOUTRACK_URL stays in the environment.'
+        throw 'YOUTRACK_API_URL is not set. Set it in the process environment, or on Windows as a User-scope variable. The file holds only the token. YOUTRACK_API_URL stays in the environment.'
     }
     if ([string]::IsNullOrWhiteSpace($token)) {
-        throw 'YOUTRACK_TOKEN is not set. Set a permanent token (perm:... or perm-...) in the process environment, or on Windows in the DPAPI file ($env:USERPROFILE\.dotnet-agent-harness\youtrack-token) or as a User-scope variable. The file holds only the token. YOUTRACK_URL stays in the environment.'
+        throw 'YOUTRACK_API_KEY is not set. Set a permanent token (perm:... or perm-...) in the process environment, or on Windows in the DPAPI file ($env:USERPROFILE\.dotnet-agent-harness\youtrack-token) or as a User-scope variable. The file holds only the token. YOUTRACK_API_URL stays in the environment.'
     }
     if (-not ($token.StartsWith('perm:', [StringComparison]::Ordinal) -or $token.StartsWith('perm-', [StringComparison]::Ordinal))) {
-        throw "YOUTRACK_TOKEN must be a YouTrack permanent token beginning with 'perm:' or 'perm-'."
+        throw "YOUTRACK_API_KEY must be a YouTrack permanent token beginning with 'perm:' or 'perm-'."
     }
 
     $base = $url.Trim().TrimEnd('/')
@@ -336,7 +336,7 @@ function Get-YouTrackTask {
         try { $status = [int]$_.Exception.Response.StatusCode } catch { $status = $null }
         $public = Protect-SecretText -Text $_.Exception.Message -Secret $token
         switch ($status) {
-            401 { throw 'YouTrack authentication failed (HTTP 401). Check YOUTRACK_TOKEN is a permanent token with permission to read the task.' }
+            401 { throw 'YouTrack authentication failed (HTTP 401). Check YOUTRACK_API_KEY is a permanent token with permission to read the task.' }
             403 { throw "YouTrack refused access to task '$Id' (HTTP 403)." }
             404 { throw "YouTrack task '$Id' was not found (HTTP 404)." }
             default { throw "YouTrack request for '$Id' failed: $public" }

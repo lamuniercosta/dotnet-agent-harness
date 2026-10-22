@@ -25,7 +25,7 @@ Typical invocation: `/task 142 feature`, `/task DAH-123`, or just `/task 142`.
 Depends on `harness.yml` `tracker`:
 
 - **`github`** (default) — the [`gh` CLI](https://cli.github.com), authenticated (`gh auth login`). No tokens, config files, or environment variables of your own — `gh` owns the credential.
-- **`youtrack`** — `YOUTRACK_URL` and `YOUTRACK_TOKEN`. Token resolution checks process env, then on Windows the DPAPI file (`$env:USERPROFILE\.dotnet-agent-harness\youtrack-token`) and User-scope env in that order. The DPAPI file holds only the token; `YOUTRACK_URL` stays in the environment. The token must be a permanent token beginning with `perm:`. It is sent only as `Authorization: Bearer` — never in a URL, query string, error, log, or generated file. **Never print a live token.**
+- **`youtrack`** — `YOUTRACK_API_URL` and `YOUTRACK_API_KEY`. Token resolution checks process env, then on Windows the DPAPI file (`$env:USERPROFILE\.dotnet-agent-harness\youtrack-token`) and User-scope env in that order. The DPAPI file holds only the token; `YOUTRACK_API_URL` stays in the environment. The token must be a permanent token beginning with `perm:`. It is sent only as `Authorization: Bearer` — never in a URL, query string, error, log, or generated file. **Never print a live token.**
 - **`none`** — no tracker contact. Description-only intake. Supplying a task id fails before any git mutation.
 
 The tracker is **optional**. With no id to work from, pass a description straight through and everything below still applies:
@@ -46,7 +46,7 @@ The tracker is **optional**. With no id to work from, pass a description straigh
 
 `get-task.ps1` returns `Id`, `Summary`, `Description`, and `Type`. Use the summary and description as the source of truth. If the user also supplied a description, prefer theirs only when they say so; otherwise use the tracker summary. This text seeds `specs/<feature>/brief.md` when the change goes through the Spec Kit pipeline.
 
-Do not call `gh` or YouTrack REST yourself — the script owns provider dispatch. Do not echo `YOUTRACK_TOKEN`.
+Do not call `gh` or YouTrack REST yourself — the script owns provider dispatch. Do not echo `YOUTRACK_API_KEY`.
 
 ## 2. Resolve the branch type
 
@@ -145,11 +145,11 @@ try {
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     $secureToken | ConvertFrom-SecureString | Set-Content -Path "$dir\youtrack-token" -Encoding UTF8
 
-    [Environment]::SetEnvironmentVariable('YOUTRACK_URL', $youTrackUrl, 'User')
-    [Environment]::SetEnvironmentVariable('YOUTRACK_TOKEN', $null, 'User')
-    Remove-Item Env:\YOUTRACK_TOKEN -ErrorAction SilentlyContinue
+    [Environment]::SetEnvironmentVariable('YOUTRACK_API_URL', $youTrackUrl, 'User')
+    [Environment]::SetEnvironmentVariable('YOUTRACK_API_KEY', $null, 'User')
+    Remove-Item Env:\YOUTRACK_API_KEY -ErrorAction SilentlyContinue
 
-    Write-Host 'YouTrack token saved to DPAPI-encrypted file and user-scope YOUTRACK_URL was set.'
+    Write-Host 'YouTrack token saved to DPAPI-encrypted file and user-scope YOUTRACK_API_URL was set.'
 }
 finally {
     if ($tokenHandle -ne [IntPtr]::Zero) {
@@ -177,11 +177,11 @@ try {
         throw "Expected a YouTrack permanent token beginning with 'perm:'."
     }
 
-    [Environment]::SetEnvironmentVariable('YOUTRACK_URL', $youTrackUrl, 'User')
-    [Environment]::SetEnvironmentVariable('YOUTRACK_TOKEN', $plainToken, 'User')
+    [Environment]::SetEnvironmentVariable('YOUTRACK_API_URL', $youTrackUrl, 'User')
+    [Environment]::SetEnvironmentVariable('YOUTRACK_API_KEY', $plainToken, 'User')
 
-    $env:YOUTRACK_URL = $youTrackUrl
-    $env:YOUTRACK_TOKEN = $plainToken
+    $env:YOUTRACK_API_URL = $youTrackUrl
+    $env:YOUTRACK_API_KEY = $plainToken
 
     Write-Host 'YouTrack environment variables were set for this shell and the current Windows user.'
 }
@@ -196,9 +196,9 @@ finally {
 
 ### Rotating the token
 
-To rotate, revoke the old token in YouTrack, run Hardened setup to save the new token, and execute `[Environment]::SetEnvironmentVariable('YOUTRACK_TOKEN', $null, 'User')` to remove any lingering HKCU plaintext token. Close open shells or execute `Remove-Item Env:\YOUTRACK_TOKEN` to clear any stale process environment variables.
+To rotate, revoke the old token in YouTrack, run Hardened setup to save the new token, and execute `[Environment]::SetEnvironmentVariable('YOUTRACK_API_KEY', $null, 'User')` to remove any lingering HKCU plaintext token. Close open shells or execute `Remove-Item Env:\YOUTRACK_API_KEY` to clear any stale process environment variables.
 
-Never print `$env:YOUTRACK_TOKEN` or `$plainToken` to confirm the setup.
+Never print `$env:YOUTRACK_API_KEY` or `$plainToken` to confirm the setup.
 
 ## Rules
 
@@ -209,7 +209,7 @@ Never print `$env:YOUTRACK_TOKEN` or `$plainToken` to confirm the setup.
 - Never open a PR without rebasing first.
 - Preserve the task reference in both the branch name and every commit subject.
 - Never open or push a PR automatically — that is a human decision at gate 3.
-- Never echo, log, or commit `YOUTRACK_TOKEN`.
+- Never echo, log, or commit `YOUTRACK_API_KEY`.
 
 ## Related
 
