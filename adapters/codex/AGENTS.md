@@ -21,8 +21,10 @@ session. Project hooks must be reviewed before their safety nets run.
 - A surviving mutant is a missing test. Fix the test, never the threshold.
 - Match the repo's existing architecture, assertion library, and mocking library.
   Introducing a second one is a defect.
-- No explanatory comments. In tests, `// arrange` / `// act` / `// assert` are the
-  one exception.
+- No explanatory comments. Only three exemptions are permitted: AAA test headers
+  (`// arrange` / `// act` / `// assert`), a stated reason on an intentionally empty
+  block, and narrowly scoped warning suppressions (`#pragma warning disable`/`restore`
+  pairs, `// ReSharper disable once …`) with a brief justification on the same line.
 - Never mock the data-access driver for behaviour that depends on real query
   translation or serialisation — use Testcontainers.
 - Never hardcode a threshold, and never edit a generated file — the next install

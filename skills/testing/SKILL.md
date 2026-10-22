@@ -33,7 +33,7 @@ The examples below use EF Core + Postgres illustratively. **Detect what the repo
 Two rules that hold regardless of stack:
 
 - **Never mock the data-access driver for behaviour that depends on real query translation or serialisation.** A mocked collection or `DbSet` will happily lie about ID handling, type mapping, and what the query engine actually does. Use a real engine via Testcontainers.
-- Section comments `// arrange` `// act` `// assert` are the one exception to the no-comments rule in `coding-conventions`.
+- Section comments `// arrange` `// act` `// assert` are one of the three exceptions to the no-comments rule in `coding-conventions`; the other two are a stated reason on an intentionally empty block and narrowly scoped warning suppressions.
 
 Acceptance scenarios, when the repo uses them, come from `/gherkin`.
 
