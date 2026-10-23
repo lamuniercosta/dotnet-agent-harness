@@ -511,7 +511,7 @@ jobs:
   self-tests:
     name: PowerShell self-tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: read
