@@ -1045,14 +1045,26 @@ $killedInChangedFile,
     Write-Host ''
     Write-Host 'Whole-project mode cases:'
 
-    Assert-MutationCase -Name '10 whole-project mode mutates the single non-excluded candidate on a zero diff' -Setup {
+    Assert-MutationCase -Name '10 whole-project mutate paths are project-relative for nested project files' -Setup {
         Set-FixtureHarnessConfig -Exclusions @{ 'Contoso.Infrastructure' = $infraReason; 'Contoso.Web' = $webReason }
+        Write-FixtureFile 'src/Contoso.Core/Domain/NestedFixture.cs' 'namespace Contoso.Core.Domain; public sealed class NestedFixture { }'
     } -Arguments @('-WholeProject', '-DryRun') -ExpectedExit 0 -MustContain @(
         'Whole-project mode: Contoso.Core.csproj',
         'tests/Contoso.UnitTests/Contoso.UnitTests.csproj',
+        '    - ScopeGuard.cs',
+        '    - Domain/NestedFixture.cs',
+        '"Domain/NestedFixture.cs"',
+        '"ScopeGuard.cs"',
+        '"Unchanged.cs"',
         '"additional-timeout": 30000',
         '"concurrency":'
-    ) -MustNotContain @('SKIPPED', 'Contoso.Infrastructure.csproj')
+    ) -MustNotContain @(
+        'SKIPPED',
+        'Contoso.Infrastructure.csproj',
+        '"src/Contoso.Core/Domain/NestedFixture.cs"',
+        '"src/Contoso.Core/ScopeGuard.cs"',
+        '"src/Contoso.Core/Unchanged.cs"'
+    )
 
     Assert-MutationCase -Name '10b whole-project mode with two candidates names them and exits 1' -Setup {
         Set-FixtureHarnessConfig -Exclusions @{ 'Contoso.Web' = $webReason }
@@ -1104,10 +1116,16 @@ $killedInChangedFile,
       "mutants": [
         { "id": "1", "status": "Killed", "killedBy": ["t1"], "mutatorName": "Statement", "location": { "start": { "line": 1 } } }
       ]
+    },
+    "src/Contoso.Core/Domain/NestedFixture.cs": {
+      "mutants": [
+        { "id": "2", "status": "Killed", "killedBy": ["t1"], "mutatorName": "Statement", "location": { "start": { "line": 1 } } }
+      ]
     }
 "@
     Assert-MutationCase -Name '11 whole-project invocation via the stub dotnet writes the report and passes' -Setup {
         Set-FixtureHarnessConfig -Exclusions @{ 'Contoso.Infrastructure' = $infraReason; 'Contoso.Web' = $webReason }
+        Write-FixtureFile 'src/Contoso.Core/Domain/NestedFixture.cs' 'namespace Contoso.Core.Domain; public sealed class NestedFixture { }'
     } -Arguments @('-WholeProject', '-OutputRoot', $wpPassOut) -ExpectedExit 0 -MustContain @('PASSED', 'Mutation timing:', 'Stryker native exit for Contoso.Core.csproj: 0') `
         -Environment (New-StrykerStubEnvironment -OutputRoot $wpPassOut -ReportSource $wpPassReport)
 
@@ -1120,8 +1138,8 @@ $killedInChangedFile,
     else {
         $timing = Get-Content -LiteralPath $timingPath -Raw | ConvertFrom-Json
         if ($timing.projects.Count -ne 1) { $timingProblems.Add("expected 1 timed project, got $($timing.projects.Count)") }
-        if ($timing.projects[0].totalMutants -ne 1) { $timingProblems.Add("expected 1 total mutant, got $($timing.projects[0].totalMutants)") }
-        if ($timing.projects[0].tested -ne 1) { $timingProblems.Add("expected 1 tested mutant, got $($timing.projects[0].tested)") }
+        if ($timing.projects[0].totalMutants -ne 2) { $timingProblems.Add("expected 2 total mutants, got $($timing.projects[0].totalMutants)") }
+        if ($timing.projects[0].tested -ne 2) { $timingProblems.Add("expected 2 tested mutants, got $($timing.projects[0].tested)") }
         if ([double]$timing.durationSeconds -lt 0) { $timingProblems.Add('total durationSeconds must not be negative') }
         if ([double]$timing.projects[0].durationSeconds -lt 0) { $timingProblems.Add('project durationSeconds must not be negative') }
         if ([int]$timing.concurrency -lt 1) { $timingProblems.Add('concurrency must be at least 1') }

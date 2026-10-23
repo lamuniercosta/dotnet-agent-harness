@@ -701,7 +701,7 @@ $allTestProjects = $null
 
 function Get-ProjectSourceFiles {
     <#
-      A project's own C# files, as repo-relative mutate paths. Mirrors the diff
+      A project's own C# files, as repo-relative paths. Mirrors the diff
       scope: build output, nested checkouts and migrations are not mutated.
     #>
     param(
@@ -801,7 +801,11 @@ if ($WholeProject) {
         $projectDirs[$projName] = Split-Path $targetPath -Parent
         $projectPaths[$projName] = $targetPath
         $groupFiles = [System.Collections.Generic.List[string]]::new()
-        $groupFiles.AddRange([string[]]$files)
+        $projectDir = Split-Path $targetPath -Parent
+        foreach ($file in $files) {
+            $fullPath = Join-Path $repoRoot ($file.Replace('/', [System.IO.Path]::DirectorySeparatorChar))
+            $groupFiles.Add([System.IO.Path]::GetRelativePath($projectDir, $fullPath).Replace('\', '/'))
+        }
         $projectGroups[$projName] = $groupFiles
         $changedFiles += $files
         Write-Host "Whole-project mode: $projName ($($files.Count) source file(s)); diff scope not consulted, since disabled."
