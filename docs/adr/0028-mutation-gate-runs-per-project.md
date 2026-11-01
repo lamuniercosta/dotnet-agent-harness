@@ -49,7 +49,9 @@ scenarios, not C#).
 4. **A test may not carry the run.** `gates.mutation.maxKillShare` (default 50,
    not applied below 20 tested mutants) fails the gate when one test kills more
    than that share of tested mutants, and `gates.mutation.maxKillFileSpan`
-   (default 15) when one test kills mutants across more files than that. Kills
+   (default 15) when one test kills mutants across more files than that, except a
+   test in a class listed in `gates.mutation.killFileSpanExempt`, which still answers
+   to the share rule. Kills
    attributed to `*.ArchitectureTests` fail outright: those tests break on the
    `Stryker.*` types injected into the assembled mutant, which is an artifact kill,
    not a signal about the code.

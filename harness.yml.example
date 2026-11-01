@@ -89,6 +89,17 @@ gates:
     # contamination that stays under the share limit.
     maxKillFileSpan: 15
 
+    # Test classes exempt from maxKillFileSpan, as a map from the class's full name
+    # to the reason it needs the exemption. Empty by default: the span limit applies
+    # to every test. A test is exempt when its name starts with the class name and a
+    # dot. An exempt test skips only the span rule; maxKillShare still applies to it.
+    # A blank reason is a configuration error. Add an entry only for a test whose
+    # real call path reaches more files than the limit, and say why in the reason.
+    # Shape, shown commented out so the example ships with no exemptions:
+    #   killFileSpanExempt:
+    #     Contoso.UnitTests.Features.Orders.SomeHandlerTests: "drives the handler end to end"
+    killFileSpanExempt:
+
     # Test-runner parallelism. `null` means half the runner's logical cores,
     # which is Stryker's own ceiling and recommendation. Raise it only if you
     # have measured that it does not turn survivors into timeouts: a timeout

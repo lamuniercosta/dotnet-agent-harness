@@ -263,7 +263,9 @@ function Set-FixtureHarnessConfig {
         # $null (the default) leaves concurrency out, so the gate reads its default of half the runner core count.
         [AllowNull()][string]$Concurrency = $null,
         # $null (the default) leaves wholeProject out, so -WholeProject auto-detects.
-        [AllowNull()][string]$WholeProject = $null
+        [AllowNull()][string]$WholeProject = $null,
+        # $null (the default) leaves killFileSpanExempt out, so no test class is exempt.
+        [AllowNull()][hashtable]$KillFileSpanExempt = $null
     )
 
     $lines = [System.Collections.Generic.List[string]]::new()
@@ -287,6 +289,12 @@ function Set-FixtureHarnessConfig {
         $lines.Add('    exclusions:')
         foreach ($name in @($Exclusions.Keys | Sort-Object)) {
             $lines.Add("      ${name}: `"$($Exclusions[$name])`"")
+        }
+    }
+    if ($null -ne $KillFileSpanExempt) {
+        $lines.Add('    killFileSpanExempt:')
+        foreach ($name in @($KillFileSpanExempt.Keys | Sort-Object)) {
+            $lines.Add("      ${name}: `"$($KillFileSpanExempt[$name])`"")
         }
     }
 
@@ -559,6 +567,8 @@ function Assert-FixtureWiring {
     if ([long]$baseStryker.'additional-timeout' -lt 30000) {
         throw 'the stryker-config.json under test does not set additional-timeout to at least 30000'
     }
+    # The generated config must carry the repo's own allowance, whatever it is above the floor.
+    $script:baseAdditionalTimeout = [long]$baseStryker.'additional-timeout'
 
     if (-not (Test-Path -LiteralPath (Join-Path $script:checkout 'Contoso.sln'))) {
         throw 'the fixture checkout carries no Contoso.sln, so no test project can be resolved'
@@ -957,6 +967,40 @@ $killedInChangedFile,
         'Kill share: not applied (18 tested is below the 20-mutant minimum)'
     )
 
+    # killFileSpanExempt: tests in a listed class skip the span rule, matched on the class
+    # name plus a dot, and still answer to the share rule.
+    Assert-MutationCase -Name '26a a test in a killFileSpanExempt class passes a 16-file span and is reported' -Setup {
+        Set-FixtureHarnessConfig -Exclusions $null -KillFileSpanExempt @{ 'Contoso.UnitTests.ScopeGuardTests' = 'drives the whole pipeline' }
+        Write-KillSpanReport -Path $spanReport -FileCount 16
+    } -Arguments $spanArgs -ExpectedExit 0 -MustContain @(
+        'PASSED',
+        '17 exempt test(s) in 1 exempt class(es), widest exempt span 16 file(s)'
+    ) -MustNotContain @('Suspected artifact kill')
+
+    Assert-MutationCase -Name '26b an exempt entry that is only a name prefix of the class does not exempt it' -Setup {
+        Set-FixtureHarnessConfig -Exclusions $null -KillFileSpanExempt @{ 'Contoso.UnitTests.ScopeGuard' = 'prefix only' }
+        Write-KillSpanReport -Path $spanReport -FileCount 16
+    } -Arguments $spanArgs -ExpectedExit 1 -MustContain @(
+        'Contoso.UnitTests.ScopeGuardTests.wide killed mutants in 16 files, above the 15-file limit',
+        '0 exempt test(s) in 1 exempt class(es)'
+    )
+
+    Assert-MutationCase -Name '26c a killFileSpanExempt entry with a blank reason is a configuration error' -Setup {
+        Set-FixtureHarnessConfig -Exclusions $null -KillFileSpanExempt @{ 'Contoso.UnitTests.ScopeGuardTests' = ' ' }
+        Write-KillSpanReport -Path $spanReport -FileCount 2
+    } -Arguments $spanArgs -ExpectedExit 1 -MustContain @(
+        'invalid mutation configuration in harness.yml gates.mutation.killFileSpanExempt',
+        'has an empty reason'
+    ) -MustNotContain @('PASSED')
+
+    Assert-MutationCase -Name '26d an exempt test is still failed by the share rule' -Setup {
+        Set-FixtureHarnessConfig -Exclusions $null -KillFileSpanExempt @{ 'Contoso.UnitTests.ScopeGuardTests' = 'drives the whole pipeline' }
+        Write-KillShareReport -Path $shareReport -FileKey $scopeChanged -KillerSets ((@('t1') * 60) + (@('t2') * 40))
+    } -Arguments $shareArgs -ExpectedExit 1 -MustContain @(
+        'Suspected artifact kill',
+        'above the 50% limit'
+    )
+
     Assert-MutationCase -Name '27 concurrency 0 is a configuration error that exits 1 before evaluation' -Setup {
         Set-FixtureHarnessConfig -Exclusions $null -Concurrency '0'
         Write-KillSpanReport -Path $spanReport -FileCount 2
@@ -1028,7 +1072,7 @@ $killedInChangedFile,
     } -Arguments @('-DryRun', '-BaseRef', $script:fixtureBase) -ExpectedExit 0 -MustContain @(
         '"ignore-methods"',
         '"log-level": "debug"',
-        '"additional-timeout": 30000',
+        "`"additional-timeout`": $script:baseAdditionalTimeout",
         '"concurrency":',
         '"enabled": false'
     )
@@ -1056,7 +1100,7 @@ $killedInChangedFile,
         '"Domain/NestedFixture.cs"',
         '"ScopeGuard.cs"',
         '"Unchanged.cs"',
-        '"additional-timeout": 30000',
+        "`"additional-timeout`": $script:baseAdditionalTimeout",
         '"concurrency":'
     ) -MustNotContain @(
         'SKIPPED',

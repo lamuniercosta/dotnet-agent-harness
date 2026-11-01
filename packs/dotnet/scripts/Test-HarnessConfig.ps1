@@ -61,6 +61,9 @@ Assert-Throws 'map entry without a reason' "gates:`n  mutation:`n    exclusions:
 Assert-Throws 'map entry reason of null' "gates:`n  mutation:`n    exclusions:`n      Contoso.Api: null"
 Assert-Throws 'scalar on the map key' "gates:`n  mutation:`n    exclusions: Contoso.Api"
 Assert-Throws 'dotted key outside the map prefix' "gates:`n  mutation:`n    threshold: 80`n    extra.thing: 1"
+# A map takes entries, never a scalar. `{}` reads as a flow-style empty map in YAML, but this
+# subset has no flow syntax, so an empty map is written as a bare key with no entries.
+Assert-Throws 'brace value on a map key' "gates:`n  mutation:`n    killFileSpanExempt: {}"
 try {
     Assert-HarnessTracker -Tracker 'jira'
     Write-Host "  FAIL  unsupported tracker - expected an error, got none" -ForegroundColor Red
@@ -94,6 +97,11 @@ Assert-Equal 'map entry reason'        'host proof lives elsewhere'         $map
 Assert-Equal 'quoted map entry reason' 'persistence proof lives elsewhere'  $map['gates.mutation.exclusions.Contoso.Infrastructure.cs']
 Assert-Equal 'map key is not itself stored' $false $map.ContainsKey('gates.mutation.exclusions')
 Assert-Equal 'map leaves other keys alone'  80      $map['gates.mutation.threshold']
+
+$exempt = ConvertFrom-HarnessYaml -Lines (
+    "gates:`n  mutation:`n    killFileSpanExempt:`n      Contoso.UnitTests.ScopeGuardTests: drives the whole pipeline" -split "`n"
+) -Path 'test.yml'
+Assert-Equal 'killFileSpanExempt entry reason' 'drives the whole pipeline' $exempt['gates.mutation.killFileSpanExempt.Contoso.UnitTests.ScopeGuardTests']
 
 $defaults = Get-HarnessDefaults
 Assert-Equal 'fast Claude default model'  'claude-haiku-4-5-20251001' $defaults['agents.tiers.fast.claude.model']
@@ -195,15 +203,25 @@ else {
     $example = ConvertFrom-HarnessYaml -Lines (Get-Content -LiteralPath $examplePath) -Path 'harness.yml.example'
     # Every documented key must be present, or the example has drifted from the schema.
     # A map key is never a key of the parsed result - only its entries are - so it is
-    # covered when at least one child is documented.
+    # covered when at least one child is documented. The exception is a map that is empty
+    # by default: the example shows its bare block line instead, because a placeholder child
+    # would be copied into every fresh install and would exempt a test nobody named.
+    $emptyByDefaultMaps = @('gates.mutation.killFileSpanExempt')
     $missing = @($script:HarnessSchema.Keys | Where-Object {
             if ($script:HarnessSchema[$_] -eq 'map') {
                 $prefix = "$_."
-                -not @($example.Keys | Where-Object { $_.StartsWith($prefix, [System.StringComparison]::Ordinal) }).Count
+                if (@($example.Keys | Where-Object { $_.StartsWith($prefix, [System.StringComparison]::Ordinal) }).Count -gt 0) { return $false }
+                if ($emptyByDefaultMaps -notcontains $_) { return $true }
+                $leaf = ($_ -split '\.')[-1]
+                -not @(Get-Content -LiteralPath $examplePath | Where-Object { $_ -match "^\s*$([regex]::Escape($leaf)):\s*$" }).Count
             }
             else { -not $example.ContainsKey($_) }
         })
     Assert-Equal 'example covers every schema key' 0 $missing.Count
+    foreach ($emptyMap in $emptyByDefaultMaps) {
+        $shipped = @($example.Keys | Where-Object { $_.StartsWith("$emptyMap.", [System.StringComparison]::Ordinal) })
+        Assert-Equal "example ships $emptyMap empty" 0 $shipped.Count
+    }
     if ($missing.Count -gt 0) {
         Write-Host "        missing: $($missing -join ', ')" -ForegroundColor Red
     }
