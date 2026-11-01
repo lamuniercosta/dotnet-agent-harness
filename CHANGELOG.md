@@ -16,6 +16,7 @@ means a consuming repo's gates may start failing on code that previously passed.
 - **`scripts/new-mutation-receipt.ps1`**: measures one pushed commit and writes a committable receipt per project, including whether the test process actually loaded the mutated assembly.
 - **`scripts/run-web-gates.ps1`**: the repo-owned frontend gate (`gates.web.enabled`), lint, `tsc --noEmit`, tests and build, `-All` to ignore the diff.
 - **Four `harness.yml` keys under `gates.mutation`**: `maxKillShare` (50), `maxKillFileSpan` (15), `concurrency` (unset: half the runner's cores), and `exclusions`, the first map-typed key: project name to the reason printed with its `NOT APPLICABLE` verdict. `gates.mutation.runner` (`vstest`/`mtp`, unset by default) is what `install.ps1` renders into `stryker-config.json`.
+- **`gates.mutation.killFileSpanExempt`**: a map from a test class's full name to the reason it is exempt from `maxKillFileSpan`, empty by default. An exempt test skips only the span rule; `maxKillShare` still applies to it. The gate output lists the exempt tests and the widest exempt span, and a blank reason is a configuration error.
 - **`Test-RunMutation.ps1`**: a synthesised-fixture suite (47 cases) for the mutation gate, covering classification, scope, the artifact-kill rules, runner wiring and whole-project mode. It builds its own git repository and a stub `dotnet`, so it runs in this repo, which has no C# solution of its own.
 
 ### Changed

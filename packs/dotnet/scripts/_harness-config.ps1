@@ -10,9 +10,10 @@
 # threshold to its default and let a gate report a pass the repo never earned -
 # the exact failure mode the gates exist to prevent.
 #
-# One value type is a map rather than a scalar: gates.mutation.exclusions, whose
-# direct children are project names that carry dots (LamuFlix.Api). The key
-# grammar below widens for exactly that parent path, and nowhere else - nesting
+# Two value types are maps rather than scalars: gates.mutation.exclusions, whose
+# direct children are project names that carry dots (LamuFlix.Api), and
+# gates.mutation.killFileSpanExempt, whose children are test class names. The key
+# grammar below widens for exactly those parent paths, and nowhere else - nesting
 # under an entry, a scalar on the map key itself, and near-miss spellings such as
 # gates.mutation.exclusion or gates.mutations.exclusions stay hard errors.
 #
@@ -20,9 +21,9 @@
 
 Set-StrictMode -Version Latest
 
-# The one map-typed key. Anchoring the widened key grammar on this exact path
+# The map-typed keys. Anchoring the widened key grammar on these exact paths
 # is what keeps a near-miss spelling of any segment a hard error.
-$script:HarnessMapPrefix = 'gates.mutation.exclusions'
+$script:HarnessMapPrefixes = @('gates.mutation.exclusions', 'gates.mutation.killFileSpanExempt')
 
 # Dotted key -> value type. This doubles as the allow-list: anything not here
 # is rejected by the parser.
@@ -42,6 +43,7 @@ $script:HarnessSchema = @{
     'gates.mutation.concurrency'                 = 'int'
     'gates.mutation.wholeProject'                = 'scalar'
     'gates.mutation.exclusions'                  = 'map'
+    'gates.mutation.killFileSpanExempt'          = 'map'
     'gates.mutation.runner'                      = 'scalar'
     'gates.analyzers.mode'                       = 'scalar'
     'gates.analyzers.warningsAsErrors'           = 'bool'
@@ -89,6 +91,7 @@ function Get-HarnessDefaults {
         'gates.mutation.concurrency'                 = $null   # resolved from the runner core count in run-mutation.ps1
         'gates.mutation.wholeProject'                = $null   # unset: -WholeProject auto-detects, or names the project on the command line
         'gates.mutation.exclusions'                  = @{}
+        'gates.mutation.killFileSpanExempt'          = @{}
         'gates.mutation.runner'                      = $null   # unset: stryker-config.json owns the runner choice
         'gates.analyzers.mode'                       = 'All'
         'gates.analyzers.warningsAsErrors'           = $false
@@ -156,7 +159,7 @@ function ConvertFrom-HarnessYaml {
         if ($line -match "`t") {
             throw "${Path}:${lineNo}: tabs are not supported; use 2 spaces per level."
         }
-        # Project names carry dots, so a child of the one map prefix also matches a
+        # Project names carry dots, so a child of a map prefix also matches a
         # dotted grammar. Which grammar is legal is decided after the parent path
         # is known, below; $Matches is captured eagerly because the second -match
         # overwrites it.
@@ -190,16 +193,17 @@ function ConvertFrom-HarnessYaml {
         }
 
         $parentPath = @($stack.ToArray()) -join '.'
+        $parentIsMap = $script:HarnessMapPrefixes -contains $parentPath
 
         # Anchored on the whole path, so a near-miss spelling of any segment is
         # rejected here rather than silently collecting entries of its own.
-        if ($widened -and $parentPath -ne $script:HarnessMapPrefix) {
-            throw "${Path}:${lineNo}: dotted key '$key' is only a direct child of '$script:HarnessMapPrefix'; under '$parentPath' it is an unknown key."
+        if ($widened -and -not $parentIsMap) {
+            throw "${Path}:${lineNo}: dotted key '$key' is only a direct child of $($script:HarnessMapPrefixes -join ' or '); under '$parentPath' it is an unknown key."
         }
 
         if ($value -eq '') {
-            if ($parentPath -eq $script:HarnessMapPrefix) {
-                throw "${Path}:${lineNo}: '$key' under '$script:HarnessMapPrefix' needs a reason on the same line; nesting below an entry is not supported."
+            if ($parentIsMap) {
+                throw "${Path}:${lineNo}: '$key' under '$parentPath' needs a reason on the same line; nesting below an entry is not supported."
             }
             [void]$stack.Add($key)
             [void]$indents.Add($indent)
@@ -215,7 +219,7 @@ function ConvertFrom-HarnessYaml {
         $schemaType = if ($script:HarnessSchema.ContainsKey($dottedKey)) {
             $script:HarnessSchema[$dottedKey]
         }
-        elseif ($dottedKey.StartsWith($script:HarnessMapPrefix + '.', [System.StringComparison]::Ordinal)) {
+        elseif ($parentIsMap) {
             'map:entry'
         }
         else {
@@ -341,13 +345,14 @@ function Get-HarnessValue {
 function Get-HarnessMap {
     <#
       Reads one map-typed key and returns its entries as
-      [PSCustomObject]@{ Project; Reason }, ordered by project name.
+      [PSCustomObject]@{ Name; Project; Reason }, ordered by name. Project is the
+      same value as Name, kept for the exclusions map, whose keys are projects.
 
-      Every entry is validated as it is read, including entries that match no
-      project in the diff, so a policy typo is a configuration error at read
-      time instead of a silently ignored line. Throws on a blank reason and on a
-      key that names a .csproj file, because -Project and the policy map address
-      the same projects by name alone.
+      Every entry is validated as it is read, including entries that match
+      nothing in the diff or report, so a policy typo is a configuration error at
+      read time instead of a silently ignored line. Throws on a blank reason, and
+      on an exclusions key that names a .csproj file, because -Project and the
+      policy map address the same projects by name alone.
     #>
     param(
         [Parameter(Mandatory)][string]$Key,
@@ -364,17 +369,17 @@ function Get-HarnessMap {
 
     $keys = @($config.Keys | Where-Object { $_.StartsWith($prefix, [System.StringComparison]::Ordinal) } | Sort-Object)
     foreach ($dottedKey in $keys) {
-        $project = $dottedKey.Substring($prefix.Length)
+        $name = $dottedKey.Substring($prefix.Length)
         $reason = ([string]$config[$dottedKey]).Trim()
 
-        if ($project.EndsWith('.csproj', [System.StringComparison]::OrdinalIgnoreCase)) {
-            throw "harness.yml $Key entry '$project' names a .csproj file; use the project name alone, the form -Project takes."
+        if ($Key -eq 'gates.mutation.exclusions' -and $name.EndsWith('.csproj', [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "harness.yml $Key entry '$name' names a .csproj file; use the project name alone, the form -Project takes."
         }
         if ([string]::IsNullOrWhiteSpace($reason)) {
-            throw "harness.yml $Key entry '$project' has an empty reason; every excluded project must say why it is not mutated."
+            throw "harness.yml $Key entry '$name' has an empty reason; every entry must say why it is there."
         }
 
-        $entries.Add([PSCustomObject]@{ Project = $project; Reason = $reason })
+        $entries.Add([PSCustomObject]@{ Name = $name; Project = $name; Reason = $reason })
     }
 
     return $entries.ToArray()

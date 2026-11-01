@@ -107,6 +107,13 @@ CONFIGURATION:
   files, which can stay under the share limit. A value below 1, or a non-integer, is a
   configuration error that exits 1 before any Stryker run.
 
+  gates.mutation.killFileSpanExempt is a map from a test class's full name to the reason
+  it is exempt from maxKillFileSpan, for a test whose real call path reaches more files
+  than the limit. A test is exempt when its name starts with the class name and a dot.
+  The share limit still applies to exempt tests, and the output reports how many tests
+  were exempt and the widest span among them. A blank reason is a configuration error
+  that exits 1 before any Stryker run.
+
   stryker-config.json must name its test-runner (vstest or mtp), and - when it names
   mtp - set coverage-analysis=off and an integer additional-timeout of at least 30000
   (milliseconds); the gate copies all of them into the config it generates. A smaller
@@ -181,7 +188,8 @@ function Test-ArchitectureTestKiller {
 function Get-EligibleTestProjects {
     # Test projects that directly reference the mutated project, minus ArchitectureTests and IntegrationTests.
     # Stryker's project mode needs a direct reference; listing them explicitly keeps
-    # ArchitectureTests (artifact kills) and IntegrationTests (real-database tests) out of the run.
+    # ArchitectureTests (artifact kills) and IntegrationTests (real-database or out-of-process tests,
+    # which cannot see a mutant) out of the run.
     param(
         [string[]]$TestProjects,
         [string]$MutatedProjectPath
@@ -213,7 +221,8 @@ function Evaluate-MutationReport {
         [int]$Threshold,
         [string]$RepoRoot,
         [int]$MaxKillShare = 50,
-        [int]$MaxKillFileSpan = 15
+        [int]$MaxKillFileSpan = 15,
+        [string[]]$KillFileSpanExempt = @()
     )
 
     $failureReasons = [System.Collections.Generic.List[string]]::new()
@@ -471,19 +480,32 @@ function Evaluate-MutationReport {
     # stride of consecutive mutant runs spread across unrelated files (measured on a real
     # repo: clean whole-project runs peaked at 9 files per test, a contaminated run at 26).
     # Unlike the share rule it needs no sample minimum, because a small run cannot reach
-    # the span limit.
+    # the span limit. Tests in a KillFileSpanExempt class skip this rule (their real call
+    # path is wider than the limit) but still count toward the share rule above.
+    $exemptPrefixes = @($KillFileSpanExempt | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { "$($_.Trim())." })
     $topSpan = 0
+    $exemptCount = 0
+    $topExemptSpan = 0
     $overSpan = [System.Collections.Generic.List[PSCustomObject]]::new()
     foreach ($testId in $killFilesByTest.Keys) {
         $span = $killFilesByTest[$testId].Count
+        $killer = $testIndex[[string]$testId]
+        $killerName = if ($null -ne $killer) { $killer.Name } else { [string]$testId }
+        $exempt = @($exemptPrefixes | Where-Object { $killerName.StartsWith($_, [System.StringComparison]::Ordinal) }).Count -gt 0
+        if ($exempt) {
+            $exemptCount++
+            if ($span -gt $topExemptSpan) { $topExemptSpan = $span }
+            continue
+        }
         if ($span -gt $topSpan) { $topSpan = $span }
         if ($span -gt $MaxKillFileSpan) {
-            $killer = $testIndex[[string]$testId]
-            $killerName = if ($null -ne $killer) { $killer.Name } else { [string]$testId }
             $overSpan.Add([PSCustomObject]@{ Name = $killerName; Span = $span })
         }
     }
     $killFileSpanNote = "largest single-test file span $topSpan file(s) (limit $MaxKillFileSpan)"
+    if ($exemptPrefixes.Count -gt 0) {
+        $killFileSpanNote += "; $exemptCount exempt test(s) in $($exemptPrefixes.Count) exempt class(es), widest exempt span $topExemptSpan file(s)"
+    }
     if ($overSpan.Count -gt 0) {
         $ranked = @($overSpan | Sort-Object -Property @{ Expression = { $_.Span }; Descending = $true }, Name)
         $shown = @($ranked | Select-Object -First 3 | ForEach-Object {
@@ -602,6 +624,16 @@ catch {
     exit 1
 }
 
+# Test classes exempt from the file-span limit, by full class name. Read with the others,
+# above the scope-empty check, so a blank reason fails the same way on every diff.
+try {
+    $killFileSpanExempt = @(Get-HarnessMap -Key 'gates.mutation.killFileSpanExempt' -RepoRoot $repoRoot | ForEach-Object { [string]$_.Name })
+}
+catch {
+    Write-Host "Mutation testing: FAILED - invalid mutation configuration in harness.yml gates.mutation.killFileSpanExempt: $($_.Exception.Message)"
+    exit 1
+}
+
 # Test-runner parallelism. Defaults to half the runner's logical cores, Stryker's
 # own default and recommended ceiling: full-core parallelism was measured to turn
 # surviving mutants into timeouts and flip gate verdicts, and Stryker itself warns
@@ -648,7 +680,8 @@ if (-not [string]::IsNullOrWhiteSpace($EvaluateReport)) {
         -Threshold $threshold `
         -RepoRoot $repoRoot `
         -MaxKillShare $maxKillShare `
-        -MaxKillFileSpan $maxKillFileSpan
+        -MaxKillFileSpan $maxKillFileSpan `
+        -KillFileSpanExempt $killFileSpanExempt
 
     Write-Host "`nProject: $($eval.ProjectName)"
     Write-Host "  Report: $($eval.ReportPath)"
@@ -1174,7 +1207,8 @@ try {
             -Threshold $threshold `
             -RepoRoot $repoRoot `
             -MaxKillShare $maxKillShare `
-            -MaxKillFileSpan $maxKillFileSpan
+            -MaxKillFileSpan $maxKillFileSpan `
+            -KillFileSpanExempt $killFileSpanExempt
 
         $results.Add($projEval)
     }
