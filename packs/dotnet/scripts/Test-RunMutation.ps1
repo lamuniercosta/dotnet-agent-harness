@@ -1288,10 +1288,6 @@ $killedInChangedFile,
     Write-Host ''
     Write-Host 'Diff-scoped file selection cases:'
 
-    # The diff touches one production .cs file (ScopeGuard.cs) while its sibling
-    # (Unchanged.cs) in the same project stays untouched. Diff scope must therefore
-    # generate a mutate list of exactly the changed file, with since disabled.
-    # Everything happens inside the fixture checkout; frozen replay inputs are untouched.
     $diffScopedCoreChange = {
         Set-FixtureHarnessConfig -Exclusions $null
         Write-FixtureFile 'src/Contoso.Core/ScopeGuard.cs' @'
