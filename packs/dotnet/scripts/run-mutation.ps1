@@ -38,11 +38,13 @@ param(
     [string[]]$ScopeFile = @(),
     [string[]]$Project = @(),
     [string]$OutputRoot = '',
+    [string]$CoverageAnalysis = 'perTestInIsolation',
     [switch]$Help
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
+$script:RequestedCoverageAnalysis = $CoverageAnalysis
 
 . (Join-Path $PSScriptRoot '_gate-common.ps1')
 
@@ -81,6 +83,7 @@ OPTIONS:
   -Project <name[]>       Only run these projects (e.g. Contoso.Api or Contoso.Api.csproj); a name with no changed files is an error
   -WholeProject           Mutate whole projects on every run, ignoring the diff scope (never scope-empty; since never enabled): the -Project names, else gates.mutation.wholeProject, else the one production project that has an eligible test project and is not excluded
   -OutputRoot <dir>       Where Stryker output goes, one <Project> folder each (default: <system temp>/stryker/<UTC yyyyMMdd-HHmmss>-<6 hex>, or <system temp>/stryker-whole in -WholeProject mode; must be outside the repo)
+  -CoverageAnalysis <mode>  Generated coverage-analysis mode: perTestInIsolation (default) or off (matched control); anything else exits 1
   -Help                   Show this help
 
 CONFIGURATION:
@@ -652,6 +655,14 @@ catch {
     exit 1
 }
 
+$effectiveCoverageAnalysis = $script:RequestedCoverageAnalysis
+if ([string]::IsNullOrWhiteSpace($effectiveCoverageAnalysis)) { $effectiveCoverageAnalysis = 'perTestInIsolation' }
+if ($effectiveCoverageAnalysis -ne 'perTestInIsolation' -and $effectiveCoverageAnalysis -ne 'off') {
+    Write-Host "Mutation testing: FAILED - invalid -CoverageAnalysis value '$script:RequestedCoverageAnalysis'; accepted values are 'perTestInIsolation' or 'off'."
+    exit 1
+}
+Write-Host "Effective coverage-analysis: $effectiveCoverageAnalysis"
+
 # Direct report evaluation mode (e.g. fail-safe verification / regression check)
 if (-not [string]::IsNullOrWhiteSpace($EvaluateReport)) {
     $evalPath = if ([System.IO.Path]::IsPathRooted($EvaluateReport)) {
@@ -1111,6 +1122,7 @@ try {
         $generated['test-runner'] = $declaredRunner
         $generated['additional-timeout'] = [long]$additionalTimeoutValue
         $generated['concurrency'] = $concurrency
+        $generated['coverage-analysis'] = $effectiveCoverageAnalysis
         $generated['test-projects'] = @($testProjectsByProject[$proj])
         # Since stays disabled: the diff scope is applied through `mutate` instead,
         # because Stryker's since filter resolves linked worktrees to the main
@@ -1278,6 +1290,7 @@ try {
         durationSeconds = [math]::Round(($gateEndUtc - $gateStartUtc).TotalSeconds, 1)
         concurrency     = $concurrency
         threshold       = $threshold
+        coverageAnalysis = $effectiveCoverageAnalysis
         projects        = $timingProjects
     }
     $timingPath = Join-Path $outputRootPath 'mutation-timing.json'
