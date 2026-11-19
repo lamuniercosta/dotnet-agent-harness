@@ -93,7 +93,7 @@ When the PR merges, clean up: `git worktree remove <path>`.
 
 Once the worktree exists — working inside it from here on — **immediately run `/grill-with-docs`** — do not jump to a spec or code first. This is the essential "question the development" step: it interrogates the task (using the fetched title and body as raw input), settles vocabulary in `CONTEXT.md`, records any ADRs, and produces `specs/<feature>/brief.md`. The spec (`/speckit-specify`) is written from that settled output.
 
-Do not proceed past this step until the grill concludes with shared understanding. For a tiny bug fix the grill is short — but it still happens.
+Do not proceed past this step until the grill concludes with shared understanding. For a tiny bug fix on an M or L ticket the grill is short — but it still happens. A `size:S` ticket skips the grill and writes the short `brief.md` instead (see the `pipeline` skill, Size S path).
 
 ## 5. Commit convention
 
@@ -202,7 +202,7 @@ Never print `$env:YOUTRACK_API_KEY` or `$plainToken` to confirm the setup.
 
 ## Rules
 
-- After the branch is created, `/grill-with-docs` is **mandatory** before any spec or code — never skip straight to `/speckit-specify` or implementation.
+- After the branch is created, `/grill-with-docs` is **mandatory** on M and L tickets before any spec or code — never skip straight to `/speckit-specify` or implementation. A `size:S` ticket skips the grill and the spec stages: write the short `brief.md` (the `pipeline` skill, Size S path) and build.
 - Work in the worktree the script created, not the main checkout. Editing the main checkout puts the change on whatever branch that checkout happens to hold.
 - Never create worktrees inside the repo. Git keeps them out of `git status`, but `dotnet build`, InspectCode, and every recursive glob still walk them, so one task's checkout lands in another task's gate results.
 - Never branch from a stale local default branch — always from `origin/<default>` (the script fetches first).

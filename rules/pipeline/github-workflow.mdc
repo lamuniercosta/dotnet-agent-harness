@@ -50,7 +50,7 @@ A worktree does not inherit gitignored files. The script copies `harness.yml` (w
 
 ## After branching (mandatory)
 
-Immediately run `/grill-with-docs` — question the development, settle vocabulary in `CONTEXT.md` and ADRs, and write `specs/<feature>/brief.md`. Do this **before** `/speckit-specify` or any code; it is never skipped, though it scales down for a small change.
+Immediately run `/grill-with-docs` — question the development, settle vocabulary in `CONTEXT.md` and ADRs, and write `specs/<feature>/brief.md`. Do this **before** `/speckit-specify` or any code; on M and L tickets it is never skipped, though it scales down for a small change. A `size:S` ticket skips the grill and writes a short `brief.md` instead (see the `agent-pipeline` rule, Size tiers).
 
 ## Commit messages
 
