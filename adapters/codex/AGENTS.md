@@ -180,7 +180,8 @@ the phase directly — see [Limitations](#limitations-under-codex).
 
 0. **Task intake** — tracker-neutral `$task <id>`: read the configured tracker task (`github`, `youtrack`, or `none`) and create the branch
 1. **Alignment (MANDATORY)** (`/grill-with-docs`) — settle vocabulary and assumptions in `CONTEXT.md` + ADRs before any
-   spec. Non-negotiable; a spec written before the grill encodes the wrong nouns
+   spec. Non-negotiable on M and L tickets; a spec written before the grill encodes the wrong nouns. A `size:S` ticket
+   skips stages 2 to 5 and the grill: it gets a short `specs/<feature>/brief.md` (at most 40 lines) and the PR description only
 2. **Formal spec** — `/speckit-specify` through `/speckit-analyze`
 3. **Human gate 1** — approve spec, plan, tasks
 4. **Gherkin** *(OPTIONAL — opt-in)* — `/gherkin` → `acceptance/*.feature`. Skip Gherkin and Human gate 2 unless the user asks for them or `specs/<feature>/acceptance/*.feature` already exists; unit and integration tests remain required regardless
@@ -193,7 +194,7 @@ the phase directly — see [Limitations](#limitations-under-codex).
 11. **Address PR review** *(conditional)* — `/address-pr-review` when external feedback arrives
 12. **Merge** — *human gate 3*
 
-Never skip the grill, and never route a failing gate to lowering its threshold.
+Never skip the grill on an M or L ticket, and never route a failing gate to lowering its threshold.
 
 `/code-review` is C#-evidence only. A diff with no `.cs` files is **out of scope for this skill** — a normal outcome, not a failed review — and does not fall back to a generic reviewer. Prose, markdown, scripts, and config use this repo's deterministic gates (`./scripts/run-*.ps1`) plus human reading. Axis reviewers **Report findings meeting the evidence threshold, up to 15** and say so if any evidence-backed findings were cut.
 

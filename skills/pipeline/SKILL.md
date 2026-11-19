@@ -39,6 +39,21 @@ with `gh pr view` on the current branch.
 | `gh pr view`: open PR with unaddressed external feedback | 11 | `/address-pr-review` |
 | `gh pr view`: open PR with no blocking external feedback | 12 | human gate 3 — merge |
 
+### Size S path
+
+A ticket tagged `size:S` (mechanical, at most 5 files) skips stages 2 to 5. It gets no `spec.md`, `plan.md`, `tasks.md`, `checklists/`, `DRAFTING_RECEIPT.md`, Gherkin, plan challenge or Gate 1, and no `/grill-with-docs` session. Its only artifacts are:
+
+- a short `specs/<feature>/brief.md` of at most 40 lines (what changes, closing bar, test plan), written from the ticket text before the build; and
+- the PR description.
+
+| Condition (S ticket) | Stage | Next command |
+|---|---|---|
+| No `brief.md` | 1 | write the short `brief.md` from the ticket text |
+| `brief.md` exists, no code | 6 | `/implement` directly; do not run `/speckit-specify`, `/speckit-plan`, `/speckit-tasks` or `/speckit-analyze` |
+| Code exists | 7 onward | same rows as the main table, from stage 7 |
+
+Do not run `check-prerequisites.ps1 -RequireTasks` or `setup-tasks.ps1` on an S ticket: both exit 1 without `plan.md`. M and L tickets keep the full table above, unchanged. Size comes from the ticket's `size:` tag; with no tag, get it settled before choosing a path.
+
 Use `$ARGUMENTS` to force a stage check on a specific feature path.
 
 ## Output Format

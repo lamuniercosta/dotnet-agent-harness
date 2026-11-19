@@ -149,7 +149,9 @@ is generated from `globs:`, because the two have different semantics (`*.cs` mea
 12 merge             ── human gate 3 ──
 ```
 
-Stage 1 is never skipped. An assumption backed by a documentation URL is settled; one
+Stage 1 is never skipped on an M or L ticket. A `size:S` ticket (mechanical, at most 5 files)
+skips stages 2 to 5: it gets a short `specs/<feature>/brief.md` and the PR description, nothing else.
+An assumption backed by a documentation URL is settled; one
 backed by recall is not.
 
 ## Skills and agents

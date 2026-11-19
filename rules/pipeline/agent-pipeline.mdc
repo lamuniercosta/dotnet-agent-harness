@@ -8,7 +8,7 @@ alwaysApply: true
 ## Stage Order
 
 0. **Task intake** — `/task <id>` (the entry step): tracker-neutral read of the configured tracker task (`github`, `youtrack`, or `none`) and create the `{feature|bug|hotfix}/{id}-{slug}` branch off the remote's default branch in a worktree
-1. **Alignment (MANDATORY)** — `/grill-with-docs`: question the development, settle vocabulary in `CONTEXT.md` + ADRs, and write `specs/<feature>/brief.md`. Runs before any spec or code — never skipped
+1. **Alignment (MANDATORY)** — `/grill-with-docs`: question the development, settle vocabulary in `CONTEXT.md` + ADRs, and write `specs/<feature>/brief.md`. Runs before any spec or code on M and L tickets — never skipped there; an S ticket writes the short brief instead (see Size tiers)
 2. **Formal spec** — `/speckit-specify`, `/speckit-clarify`, `/speckit-checklist`, `/speckit-plan`, `/speckit-tasks`, `/speckit-analyze`
 3. **Human gate 1** *(5–10 min)* — approve spec, plan, tasks
 4. **Gherkin** *(OPTIONAL — opt-in)* — `/gherkin` → `acceptance/*.feature`. Skipped unless the repo has adopted acceptance tests (see the policy below)
@@ -23,13 +23,17 @@ alwaysApply: true
 
 Thresholds come from `harness.yml`. Never hardcode one in a prompt or a script.
 
+## Size tiers
+
+Ticket size comes from the `size:S|M|L` tag. **M and L** follow the stage order above in full. **S** (mechanical, at most 5 files) skips stages 2 to 5: no `spec.md`, `plan.md`, `tasks.md`, checklist, `DRAFTING_RECEIPT.md`, plan challenge or Gate 1. An S ticket produces a short `brief.md` (at most 40 lines: what changes, closing bar, test plan) at `specs/<feature>/brief.md` and the PR description, then builds directly (stage 6) and continues from stage 7. Gherkin stays opt-in as before.
+
 ## Acceptance-tests policy
 
 Acceptance tests (Gherkin + Reqnroll) are **opt-in**. Skip Stage 4, Human gate 2, and the Gherkin-mutation check unless the user asks for them or `specs/<feature>/acceptance/*.feature` already exists. **Unit and integration tests remain required** — the opt-in applies only to the acceptance layer.
 
 ## Handoff Rules
 
-- Every task starts with `/task <id>`; intake is tracker-neutral (`harness.yml` `tracker`). `/grill-with-docs` is **mandatory** immediately after and before `/speckit-specify` — never skip straight to spec or code
+- Every task starts with `/task <id>`; intake is tracker-neutral (`harness.yml` `tracker`). `/grill-with-docs` is **mandatory** immediately after and before `/speckit-specify` — never skip straight to spec or code. This applies to M and L tickets; an S ticket writes the short brief and builds directly (see Size tiers)
 - Do not skip human gates unless the user explicitly approves (gate 2 applies only when acceptance scenarios exist)
 - Do not block progress on missing `.feature` files; unit + integration coverage is the required bar
 - When present, Gherkin lives in `specs/<feature>/acceptance/` — the source of truth for acceptance scenarios
